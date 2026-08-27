@@ -213,8 +213,8 @@ async function handleQueueMessage(body, env) {
 // ==================== BOT COMMANDS ====================
 
 const DEFAULT_COMMANDS = {
-  '/start': '👋 Welcome! Send me any file and I\'ll save it to R2 cloud storage.\n\nCommands:\n/help - Show this message\n/stats - Show statistics\n/file <id> - Get file by ID\n/search <keyword> - Search files',
-  '/help': '📖 Available commands:\n\n/start - Welcome message\n/stats - Storage statistics\n/file <id> - Get file by ID\n/search <keyword> - Search files\n\nJust send me any file (photo, video, document, audio) and I\'ll save it permanently!',
+  '/start': '👋 欢迎！发送任意文件即可自动入库并转存到云端存储。\n\n常用命令:\n/count - 查询现有数量\n/pending - 查询未转存数量\n/retry - 继续完成未转存入库\n/health - 查询服务状态\n/stats - 完整统计\n/file <id> - 按 ID 获取文件\n/search <关键词> - 搜索文件',
+  '/help': '📖 可用命令:\n\n/count - 查询现有数量\n/pending - 查询未转存数量\n/retry - 继续完成未转存入库\n/health - 查询服务状态\n/stats - 完整统计\n/file <id> - 按 ID 获取文件\n/search <关键词> - 搜索文件\n\n直接发送文件（图片/视频/文档/音频）即可自动保存！',
   '/stats': '__STATS__',
   '/file': 'Usage: /file <id>\nExample: /file 123',
   '/search': 'Usage: /search <keyword>\nExample: /search cat',
@@ -266,7 +266,104 @@ async function handleBotCommand(chatId, msgId, text, env) {
     return await handleSearchCommand(chatId, msgId, args, env);
   }
 
+  if (cmd === '/count') {
+    return await handleCountCommand(chatId, env);
+  }
+
+  if (cmd === '/pending') {
+    return await handlePendingCommand(chatId, env);
+  }
+
+  if (cmd === '/retry') {
+    return await handleRetryCommand(chatId, env);
+  }
+
+  if (cmd === '/health') {
+    return await handleHealthCommand(chatId, env);
+  }
+
   return null; // Not a command
+}
+
+// 命令：查询现有数量（中文版）
+async function handleCountCommand(chatId, env) {
+  if (!env.D1_DB) { await replyText(chatId, 0, '❌ D1 未配置', env); return { ok: true }; }
+  try {
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
+    const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
+    const td = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first();
+    const byType = await env.D1_DB.prepare('SELECT file_type, COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY file_type').all();
+    let text = '📊 **现有数量**\n\n文件总数: **' + (t?.c || 0) + '**\n总大小: ' + fmtSize(s?.s || 0) + '\n今日新增: ' + (td?.c || 0) + '\n';
+    if (byType.results && byType.results.length) {
+      const names = { photo: '图片', video: '视频', document: '文档', audio: '音频', voice: '语音' };
+      text += '\n类型分布:\n';
+      for (const r of byType.results) text += '· ' + (names[r.file_type] || r.file_type) + ': ' + r.c + '\n';
+    }
+    await replyText(chatId, 0, text, env);
+    return { ok: true };
+  } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); return { ok: true }; }
+}
+
+// 命令：查询未转存数量
+async function handlePendingCommand(chatId, env) {
+  if (!env.D1_DB) { await replyText(chatId, 0, '❌ D1 未配置', env); return { ok: true }; }
+  try {
+    const t = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed'").first();
+    const byState = await env.D1_DB.prepare("SELECT processing_state, COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed' GROUP BY processing_state").all();
+    let text = '⏳ **未转存统计**\n\n未完成总数: **' + (t?.c || 0) + '**\n';
+    if (byState.results && byState.results.length) {
+      const names = { pending: '待转存', downloading: '下载中', uploading: '上传中', failed: '失败' };
+      for (const r of byState.results) text += '· ' + (names[r.processing_state] || r.processing_state) + ': ' + r.c + '\n';
+    }
+    if ((t?.c || 0) > 0) text += '\n发送 /retry 可继续完成转存';
+    await replyText(chatId, 0, text, env);
+    return { ok: true };
+  } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); return { ok: true }; }
+}
+
+// 命令：继续完成未转存入库（批 5 条，限频 60s）
+var lastRetryCmdTs = 0;
+async function handleRetryCommand(chatId, env) {
+  const now = Date.now();
+  if (now - lastRetryCmdTs < 60000) {
+    await replyText(chatId, 0, '⏳ 60 秒内已执行过，请稍后再试（' + Math.ceil((60000 - (now - lastRetryCmdTs)) / 1000) + 's）', env);
+    return { ok: true };
+  }
+  lastRetryCmdTs = now;
+  if (!env.D1_DB) { await replyText(chatId, 0, '❌ D1 未配置', env); return { ok: true }; }
+  try {
+    const fakeReq = { json: function() { return Promise.resolve({ all: true }); } };
+    const r = await handleUnsavedRetry(fakeReq, env);
+    if (r && r.ok) {
+      await replyText(chatId, 0, '🚀 已开始转存 ' + (r.started || 0) + ' 条。剩余可稍后再发 /retry（60s 后）或在后台「未转存」页手动处理。', env);
+    } else {
+      await replyText(chatId, 0, '❌ 触发失败: ' + ((r && r.error) || 'unknown'), env);
+    }
+  } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); }
+  return { ok: true };
+}
+
+// 命令：服务状态
+async function handleHealthCommand(chatId, env) {
+  let lines = ['🛰 **服务状态**'];
+  lines.push('· Worker 版本: v6');
+  if (env.D1_DB) {
+    try { const c = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files').first(); lines.push('· 数据库 D1: ✅ 正常（' + (c?.c || 0) + ' 条）'); }
+    catch (e) { lines.push('· 数据库 D1: ❌ ' + e.message); }
+  } else lines.push('· 数据库 D1: ⚠️ 未绑定');
+  lines.push('· 存储 R2: ' + (env.R2_BUCKET ? '✅ 已绑定' : '⚠️ 未绑定'));
+  if (env.TG_BOT_TOKEN) {
+    try {
+      const w = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getWebhookInfo', { method: 'POST' });
+      const j = await w.json();
+      const r = (j && j.result) || {};
+      lines.push('· Webhook: ' + (r.url ? '✅ ' + r.url : '⚠️ 未设置') + '（积压 ' + (r.pending_update_count || 0) + ' 条）');
+      if (r.last_error_message) lines.push('· 最近错误: ' + String(r.last_error_message).slice(0, 80));
+    } catch (e) { lines.push('· Webhook: ❌ ' + e.message); }
+  } else lines.push('· Webhook: ⚠️ 无 token');
+  lines.push('· 大文件支持: ' + ((env.TG_API_BASE || env.TG_API_BASE_2) ? '✅ 本地 Bot API（无 20MB 限制）' : '⚠️ 官方 API（>20MB 无法转存）'));
+  await replyText(chatId, 0, lines.join('\n'), env);
+  return { ok: true };
 }
 
 async function handleStatsCommand(chatId, env) {
