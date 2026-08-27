@@ -28,18 +28,16 @@ jobs:
 
       # 一劳永逸：每次部署前，把 2 个 Secret 写入 Worker（wrangler secret put）。
       # 这样 TG_BOT_TOKEN 不会因部署而丢失，Dashboard 里也无需再手动配置这些机密。
+      # 用 shell 方式直写，避免 wrangler-action 的 secrets 输入语法兼容问题。
       - name: Set worker secrets
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: secret put
-          secrets: |
-            TG_BOT_TOKEN
-            API_KEY
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           API_KEY: ${{ secrets.API_KEY }}
+        run: |
+          echo "$TG_BOT_TOKEN" | npx --yes wrangler secret put TG_BOT_TOKEN
+          echo "$API_KEY" | npx --yes wrangler secret put API_KEY
 
       - name: Deploy Worker to Cloudflare
         uses: cloudflare/wrangler-action@v3
