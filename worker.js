@@ -242,7 +242,7 @@ async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   // Built-in commands
   if (cmd === '/start' || cmd === '/help') {
     const helpText = cmd === '/start' ? DEFAULT_COMMANDS['/start'] : DEFAULT_COMMANDS['/help'];
-    await replyText(chatId, msgId, helpText, env);
+    await replyTextWithKeyboard(chatId, helpText, MAIN_BUTTONS, env);
     return { ok: true };
   }
 
@@ -299,7 +299,7 @@ async function handleCountCommand(chatId, env) {
       text += '\n类型分布:\n';
       for (const r of byType.results) text += '· ' + (names[r.file_type] || r.file_type) + ': ' + r.c + '\n';
     }
-    await replyText(chatId, 0, text, env);
+    await replyTextWithKeyboard(chatId, text, MAIN_BUTTONS, env);
     return { ok: true };
   } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); return { ok: true }; }
 }
@@ -316,7 +316,7 @@ async function handlePendingCommand(chatId, env) {
       for (const r of byState.results) text += '· ' + (names[r.processing_state] || r.processing_state) + ': ' + r.c + '\n';
     }
     if ((t?.c || 0) > 0) text += '\n发送 /retry 可继续完成转存';
-    await replyText(chatId, 0, text, env);
+    await replyTextWithKeyboard(chatId, text, MAIN_BUTTONS, env);
     return { ok: true };
   } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); return { ok: true }; }
 }
@@ -335,11 +335,11 @@ async function handleRetryCommand(chatId, env, waitFn) {
     const fakeReq = { json: function() { return Promise.resolve({ all: true }); } };
     const r = await handleUnsavedRetry(fakeReq, env, { waitUntil: waitFn });
     if (r && r.ok) {
-      await replyText(chatId, 0, '🚀 已开始转存 ' + (r.started || 0) + ' 条。剩余可稍后再发 /retry（60s 后）或在后台「未转存」页手动处理。', env);
+      await replyTextWithKeyboard(chatId, '🚀 已开始转存 ' + (r.started || 0) + ' 条。剩余可稍后再点「继续转存」（60s 后）或在后台「未转存」页手动处理。', MAIN_BUTTONS, env);
     } else {
-      await replyText(chatId, 0, '❌ 触发失败: ' + ((r && r.error) || 'unknown'), env);
+      await replyTextWithKeyboard(chatId, '❌ 触发失败: ' + ((r && r.error) || 'unknown'), MAIN_BUTTONS, env);
     }
-  } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); }
+  } catch (e) { await replyTextWithKeyboard(chatId, '❌ ' + e.message, MAIN_BUTTONS, env); }
   return { ok: true };
 }
 
@@ -362,7 +362,7 @@ async function handleHealthCommand(chatId, env) {
     } catch (e) { lines.push('· Webhook: ❌ ' + e.message); }
   } else lines.push('· Webhook: ⚠️ 无 token');
   lines.push('· 大文件支持: ' + ((env.TG_API_BASE || env.TG_API_BASE_2) ? '✅ 本地 Bot API（无 20MB 限制）' : '⚠️ 官方 API（>20MB 无法转存）'));
-  await replyText(chatId, 0, lines.join('\n'), env);
+  await replyTextWithKeyboard(chatId, lines.join('\n'), MAIN_BUTTONS, env);
   return { ok: true };
 }
 
@@ -388,7 +388,7 @@ async function handleStatsCommand(chatId, env) {
       text += '\n**Top groups:**\n';
       for (const r of topChat.results) text += `  ${r.chat_title}: ${r.c}\n`;
     }
-    await replyText(chatId, 0, text, env);
+    await replyTextWithKeyboard(chatId, text, MAIN_BUTTONS, env);
     return { ok: true };
   } catch (e) {
     await replyText(chatId, 0, '�?Stats error: ' + e.message, env);
@@ -480,6 +480,10 @@ async function ensureWebhook(env, ctx) {
 
 // Shared: handle one update from webhook or getUpdates polling
 async function processUpdateCore(update, env, waitFn) {
+  // 点击按钮回调（inline keyboard）
+  if (update.callback_query) {
+    return await handleCallbackQuery(update.callback_query, env);
+  }
   const msg = update.message || update.channel_post;
   if (msg && !msg.text?.startsWith('/')) {
     const fi = extractFileInfo(msg);
@@ -1387,6 +1391,43 @@ async function replyText(chatId, replyId, text, env) {
       body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' })
     });
   } catch (e) { console.log('replyText error:', e.message); }
+}
+
+// 主菜单按钮（inline keyboard），点按钮代替手动输命令
+var MAIN_BUTTONS = [
+  [{ text: '📊 现有数量', callback_data: 'cmd:count' }, { text: '⏳ 未转存', callback_data: 'cmd:pending' }],
+  [{ text: '🚀 继续转存', callback_data: 'cmd:retry' }, { text: '🛰 服务状态', callback_data: 'cmd:health' }]
+];
+
+async function replyTextWithKeyboard(chatId, text, buttons, env) {
+  try {
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown', reply_markup: { inline_keyboard: buttons || MAIN_BUTTONS } })
+    });
+  } catch (e) { console.log('replyTextKeyboard error:', e.message); }
+}
+
+// 点击按钮回调：转发到对应命令
+async function handleCallbackQuery(cq, env) {
+  const msg = cq.message || {};
+  const chatId = String(msg.chat ? msg.chat.id : '');
+  const data = cq.data || '';
+  function answerCb(text) {
+    if (!env.TG_BOT_TOKEN) return Promise.resolve();
+    return fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/answerCallbackQuery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: cq.id, text: text || '' })
+    }).catch(function(){});
+  }
+  if (data === 'cmd:count') { await answerCb('正在查询数量...'); return await handleCountCommand(chatId, env); }
+  if (data === 'cmd:pending') { await answerCb('正在查询未转存...'); return await handlePendingCommand(chatId, env); }
+  if (data === 'cmd:retry') { await answerCb('正在触发转存...'); return await handleRetryCommand(chatId, env); }
+  if (data === 'cmd:health') { await answerCb('正在检查服务...'); return await handleHealthCommand(chatId, env); }
+  await answerCb('未知操作');
+  return { ok: true, handled: 'callback' };
 }
 
 // ==================== BOT API PROXY ====================
