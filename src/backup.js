@@ -2,11 +2,17 @@
 import { json } from './util.js';
 
 export async function dumpAllTables(env) {
-  const tables = await env.D1_DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+  const tables = await env.D1_DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all();
   const dump = { exported_at: new Date().toISOString(), version: 'v6', tables: {} };
   for (const t of tables.results || []) {
-    const rows = await env.D1_DB.prepare('SELECT * FROM "' + t.name + '"').all();
-    dump.tables[t.name] = rows.results || [];
+    try {
+      const rows = await env.D1_DB.prepare('SELECT * FROM "' + t.name + '"').all();
+      dump.tables[t.name] = rows.results || [];
+    } catch (e) {
+      // D1 内部表（如 _cf_KV）禁止读取，跳过该表
+      console.log('dump skip ' + t.name + ':', e.message);
+      dump.tables[t.name] = { _error: e.message };
+    }
   }
   return dump;
 }
