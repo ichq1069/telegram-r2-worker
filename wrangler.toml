@@ -24,18 +24,6 @@ binding = "D1_DB"
 database_name = "telegram-url"
 database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
 
-# Queue：批量转存时 webhook 只做「秒回记录 + 入队」，下载/上传交给后台队列。
-# 每条消息有 15 分钟宽限 + 自动重试，避免 waitUntil 30 秒墙钟限制导致批量转发丢文件。
-[[queues.producers]]
-binding = "FILE_QUEUE"
-queue = "file-processing"
-
-[[queues.consumers]]
-queue = "file-processing"
-max_batch_size = 5
-max_batch_timeout = 30
-max_retries = 3
-
 # Cron 触发器：scheduled() 兜底轮询。
 # handlePollUpdates 只轮询 TG_API_BASES（本地 Bot API），未配置时直接返回、不影响 webhook；
 # 若以后配置本地 Bot API，即可用 Local file_id 支持 >20MB 大文件转存。
