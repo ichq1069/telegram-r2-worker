@@ -77,6 +77,8 @@ export default {
     // Postimages API key stored in D1 settings (shared across browsers/devices)
     if (m === 'GET' && p === '/admin/api/settings/pi-key') return isAdmin ? handleAdminGetPiKey(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/pi-key') return isAdmin ? handleAdminSavePiKey(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminGetPoolTags(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminSavePoolTags(request, env) : json({ok:false,error:'Unauthorized'},401);
 
     // Bot API routes (no auth needed, verified by Telegram)
     if (m === 'POST' && p === '/bot/sendMessage') return handleBotSendMessage(request, env);
@@ -2189,6 +2191,30 @@ async function handleAdminSavePiKey(request, env) {
     const key = b && b.key ? String(b.key).trim().slice(0, 200) : '';
     await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('postimages_key', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key).run();
     return json({ ok: true, data: { saved: !!key } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 预设标签库（后台自定义，上传时点选，保证标签统一）
+async function handleAdminGetPoolTags(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'pool_tags_preset'").first();
+    let tags = [];
+    if (s && s.value) {
+      try { tags = JSON.parse(s.value); } catch (e) { tags = String(s.value).split(',').map(function(t){ return t.trim(); }).filter(Boolean); }
+    }
+    return json({ ok: true, data: { tags: Array.isArray(tags) ? tags : [] } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminSavePoolTags(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const tags = Array.isArray(b && b.tags)
+      ? b.tags.map(String).map(function(t){ return t.trim(); }).filter(Boolean)
+      : [];
+    const uniq = Array.from(new Set(tags)).slice(0, 200);
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('pool_tags_preset', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(uniq)).run();
+    return json({ ok: true, data: { tags: uniq } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

@@ -360,6 +360,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
               <input class="inp" type="file" id="poolLocalFiles" accept="image/*" multiple>
             </div>
             <div style="flex:1;min-width:160px"><label>标签（逗号分隔，可选）</label><input class="inp" id="poolLocalTags" placeholder="风景,美女"></div>
+            <div style="flex:1;min-width:160px"><label>预设标签（点选即加入上方）</label><div id="presetTagsLocal" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:28px"></div></div>
             <button class="btn btn-primary" id="poolLocalUploadBtn">上传并加入随机库</button>
             <span id="poolLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
           </div>
@@ -400,6 +401,11 @@ https://example.com/b.jpg"></textarea></div>
           <div class="fb" style="margin-bottom:12px">
             <div class="fr" style="flex:1;margin:0"><label>标签（逗号分隔，可选）</label><input class="inp" id="poolTags" placeholder="风景,美女"></div>
             <div class="fr" style="flex:1;margin:0"><label>标题（可选）</label><input class="inp" id="poolTitle" placeholder="示例图"></div>
+          </div>
+          <div style="margin:0 0 12px;display:flex;align-items:center;flex-wrap:wrap;gap:6px">
+            <span style="font-size:12px;color:var(--text-secondary)">预设标签：</span>
+            <div id="presetTagsLink" style="display:flex;flex-wrap:wrap;gap:6px;min-height:26px"></div>
+            <button class="btn btn-ghost btn-sm" id="btnManageTags" title="后台维护预设标签，上传时一键点选，保证标签统一">管理标签库</button>
           </div>
           <button class="btn btn-primary" id="poolImportBtn">导入随机库</button>
         </div>
@@ -711,7 +717,7 @@ function init() {
     if (name === "stats") loadStats();
     if (name === "files") loadFiles(1);
     if (name === "trash") loadTrash(1);
-    if (name === "pool") loadPool();
+    if (name === "pool") { loadPool(); initPresetTags(); }
     if (name === "gen") loadGen();
     if (name === "keys") loadKeys();
     if (name === "users") loadUsers();
@@ -1542,6 +1548,120 @@ async function loadTagCloud() {
   }
   el.innerHTML = h;
 }
+
+// ==================== 预设标签库（后台自定义，上传时点选，保证统一） ====================
+var presetTags = [];
+
+function renderPresetChips(containerId, inputId) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  if (!presetTags.length) {
+    el.innerHTML = '<span style="font-size:11px;color:var(--text-secondary)">（空，点「管理标签库」添加）</span>';
+    return;
+  }
+  var inp = document.getElementById(inputId);
+  var cur = inp ? inp.value.split(",").map(function(s){ return s.trim(); }).filter(Boolean) : [];
+  var h = "";
+  for (var i = 0; i < presetTags.length; i++) {
+    var on = cur.indexOf(presetTags[i]) !== -1;
+    h += '<span class="preset-tag" data-tag="' + escStr(presetTags[i]) + '" data-input="' + inputId + '" style="padding:2px 10px;border:1px solid ' + (on ? 'var(--primary)' : 'var(--border)') + ';border-radius:20px;cursor:pointer;font-size:12px;background:' + (on ? 'var(--primary)' : 'var(--card)') + ';color:' + (on ? '#fff' : 'var(--text-secondary)') + '">#' + escStr(presetTags[i]) + '</span>';
+  }
+  el.innerHTML = h;
+}
+
+function renderPresetChipsAll() {
+  renderPresetChips("presetTagsLink", "poolTags");
+  renderPresetChips("presetTagsLocal", "poolLocalTags");
+}
+
+function initPresetTags() {
+  api("GET", "/admin/api/settings/pool-tags").then(function(r) {
+    if (r && r.ok) { presetTags = (r.data && r.data.tags) || []; renderPresetChipsAll(); }
+  });
+}
+
+// 标签库管理弹窗
+function showPresetTagsModal() {
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:560px">' +
+    '<h3>标签库管理</h3>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">这里维护的预设标签会显示在上传区，点选即可加入标签输入框（可多选）。删除某项只影响预设列表，不影响已打标签的图片。</div>' +
+    '<div class="fr"><label>当前预设标签（点 ✕ 删除）</label><div id="presetTagsList" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div></div>' +
+    '<div class="fb" style="margin-top:10px"><input class="inp" id="presetTagsAdd" placeholder="新标签名，可输入多个用逗号分隔，如：风景,美女"><button class="btn btn-primary" id="presetTagsAddBtn">添加</button></div>' +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-ghost" id="presetTagsCancel">取消</button>' +
+    '<button class="btn btn-primary" id="presetTagsSave">保存</button>' +
+    '</div></div></div>';
+  renderPresetTagsList();
+  document.getElementById("presetTagsAddBtn").onclick = addPresetTagInput;
+  document.getElementById("presetTagsCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("presetTagsSave").onclick = savePresetTags;
+  document.getElementById("presetTagsAdd").focus();
+}
+
+function renderPresetTagsList() {
+  var el = document.getElementById("presetTagsList");
+  if (!el) return;
+  if (!presetTags.length) { el.innerHTML = '<span style="font-size:12px;color:var(--text-secondary)">暂无标签</span>'; return; }
+  var h = "";
+  for (var i = 0; i < presetTags.length; i++) {
+    h += '<span style="padding:3px 10px;border:1px solid var(--border);border-radius:20px;font-size:12px;background:var(--card);color:var(--text)">#' + escStr(presetTags[i]) + ' <a href="javascript:void(0)" class="preset-del" data-tag="' + escStr(presetTags[i]) + '" style="color:#e5484d;margin-left:4px;font-weight:700">✕</a></span>';
+  }
+  el.innerHTML = h;
+  var dels = el.querySelectorAll(".preset-del");
+  for (var j = 0; j < dels.length; j++) {
+    dels[j].onclick = (function(a) {
+      return function(ev) {
+        ev.preventDefault();
+        var t = a.getAttribute("data-tag");
+        var idx = presetTags.indexOf(t);
+        if (idx !== -1) presetTags.splice(idx, 1);
+        renderPresetTagsList();
+      };
+    })(dels[j]);
+  }
+}
+
+function addPresetTagInput() {
+  var v = document.getElementById("presetTagsAdd").value.trim();
+  if (!v) return;
+  v.split(",").map(function(s){ return s.trim(); }).filter(Boolean).forEach(function(t) {
+    if (presetTags.indexOf(t) === -1) presetTags.push(t);
+  });
+  document.getElementById("presetTagsAdd").value = "";
+  renderPresetTagsList();
+}
+
+function savePresetTags() {
+  api("POST", "/admin/api/settings/pool-tags", { tags: presetTags }).then(function(r) {
+    if (r && r.ok) {
+      presetTags = (r.data && r.data.tags) || [];
+      document.getElementById("modalArea").innerHTML = "";
+      renderPresetChipsAll();
+      toast("标签库已保存", 1);
+    } else toast((r && r.error) || "保存失败", 0);
+  });
+}
+
+// 预设标签点选（加到对应标签输入框）
+document.addEventListener("click", function(ev) {
+  var t = ev.target;
+  var chip = t.closest ? t.closest(".preset-tag") : null;
+  if (!chip) return;
+  var tag = chip.getAttribute("data-tag");
+  var inputId = chip.getAttribute("data-input");
+  var inp = document.getElementById(inputId);
+  if (!inp) return;
+  var cur = inp.value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
+  var idx = cur.indexOf(tag);
+  if (idx !== -1) { cur.splice(idx, 1); } else { cur.push(tag); }
+  inp.value = cur.join(",");
+  renderPresetChips(chip.parentNode.id, inputId);
+});
+
+// 管理标签库按钮
+document.getElementById("btnManageTags").addEventListener("click", function() { showPresetTagsModal(); });
+
 // 打标签弹窗
 var tagTargetIds = [];
 var tagTargetKind = "files";
