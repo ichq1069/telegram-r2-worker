@@ -1468,19 +1468,32 @@ async function loadTrash(page) {
   var d = r.data;
   var items = d.items || [];
   if (!items.length) { el.innerHTML = '<div class="empty">回收站为空</div>'; document.getElementById("trashPager").innerHTML = ""; return; }
-  var h = '<table><thead><tr><th>ID</th><th>文件</th><th>类型</th><th>大小</th><th>群组</th><th>删除时间</th><th>操作</th></tr></thead><tbody>';
+  var h = '<div class="file-grid">';
   for (var i = 0; i < items.length; i++) {
     var f = items[i];
-    h += '<tr><td>' + f.id + '</td>';
-    h += '<td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escStr(f.file_name || "") + '</td>';
-    h += '<td>' + escStr(f.file_type || "") + '</td>';
-    h += '<td>' + fmtSize(f.file_size) + '</td>';
-    h += '<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escStr(f.chat_title || "") + '</td>';
-    h += '<td>' + escStr((f.deleted_at || "").replace("T", " ").slice(0, 19)) + '</td>';
-    h += '<td><button class="btn btn-ghost btn-sm" data-action="trash-restore" data-id="' + f.id + '">恢复</button> ';
-    h += '<button class="btn btn-danger btn-sm" data-action="trash-purge" data-id="' + f.id + '">彻底删除</button></td></tr>';
+    var isPhoto = f.file_type === "photo";
+    var isVideo = f.file_type === "video";
+    // 回收站文件软删除后 /file/tg/<id> 代理返回 404，直接走 R2 公共 URL 预览（R2 对象仍在）
+    var pv = f.r2_url || imgUrl(f);
+    var nm = escStr(f.file_name || "");
+    var thumb = "";
+    if (isPhoto) {
+      thumb = '<img class="thumb" src="' + pv + '" data-preview="' + pv + '" data-type="photo" data-name="' + nm + '">';
+    } else if (isVideo) {
+      thumb = '<div class="thumb-video" data-preview="' + pv + '" data-type="video" data-name="' + nm + '"></div>';
+    } else {
+      thumb = '<div class="thumb-placeholder">' + (f.file_type === "audio" ? "\uD83C\uDFB5" : "\uD83D\uDCC4") + '</div>';
+    }
+    h += '<div class="file-card"' + ((isPhoto || isVideo) ? ' data-preview="' + pv + '" data-type="' + f.file_type + '" data-name="' + nm + '"' : '') + '>';
+    h += thumb;
+    h += '<div class="info"><div class="name" title="' + nm + '">' + nm + '</div>';
+    h += '<div style="font-size:10px;color:var(--text-secondary);margin:2px 0">' + escStr(f.chat_title || "") + '</div>';
+    h += '<div class="meta"><span>' + fmtSize(f.file_size) + '</span><span>' + escStr((f.deleted_at || "").replace("T", " ").slice(0, 16)) + '</span></div></div>';
+    h += '<div class="actions"><button class="btn btn-ghost btn-sm" data-action="trash-restore" data-id="' + f.id + '">恢复</button> ';
+    h += '<button class="btn btn-danger btn-sm" data-action="trash-purge" data-id="' + f.id + '">彻底删除</button></div>';
+    h += '</div>';
   }
-  h += '</tbody></table>';
+  h += '</div>';
   el.innerHTML = h;
   var tp = d.total_pages || 1;
   var pg = '';
