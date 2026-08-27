@@ -26,6 +26,14 @@ jobs:
           node --check worker.js
           for f in src/*.js; do node --check "$f"; done
 
+      # 确保队列存在（首次部署/新账号时创建；已存在则跳过）。
+      # 注意：若 API Token 缺 Account.Workers Queues:Edit 权限，此步会失败——去 Dashboard 给 token 加权限。
+      - name: Ensure queue exists
+        run: npx --yes wrangler queues create file-processing || echo "queue already exists"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       # Cloudflare 版本管理限制：最新版本未部署时不允许 wrangler secret put。
       # 所以顺序必须：先 deploy 部署版本，再 secret put 写入机密。
       - name: Deploy Worker to Cloudflare
