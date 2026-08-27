@@ -24,8 +24,6 @@ binding = "D1_DB"
 database_name = "telegram-url"
 database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
 
-# Cron 触发器：scheduled() 兜底轮询。
-# handlePollUpdates 只轮询 TG_API_BASES（本地 Bot API），未配置时直接返回、不影响 webhook；
-# 若以后配置本地 Bot API，即可用 Local file_id 支持 >20MB 大文件转存。
+# Cron 触发器：scheduled() 兜底轮询 + 未转存自动补齐 + 查重后台化 + webhook 自愈
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/2 * * * *"]

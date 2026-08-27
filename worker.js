@@ -2935,11 +2935,11 @@ async function handleUnsavedRetry(request, env, ctx) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
-// Cron 兜底转存：每次最多 1 条 pending/failed（scheduled 与 webhook 自愈、查重叠加，子请求预算有限）
+// Cron 兜底转存：每次最多 2 条 pending/failed（scheduled 与 webhook 自愈、查重叠加，子请求预算 ~30）
 async function retryUnsavedCron(env, ctx) {
   if (!env.D1_DB) return;
   try {
-    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 1").all();
+    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 2").all();
     for (const row of d.results || []) {
       const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=?').bind(row.id).first();
       if (!f) continue;
