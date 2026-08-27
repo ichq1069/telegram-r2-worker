@@ -16,9 +16,16 @@ R2_PUBLIC_URL = "https://telegramup.wo58.cn"
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "bot-telegram"
+smart_tiered_cache = true   # 智能分层缓存：热数据 CDN 缓存、冷数据按需回源，读性能更好且省钱
 
 # D1 数据库绑定（telegram-url，含 files/random_pool/settings/api_keys 等表）
 [[d1_databases]]
 binding = "D1_DB"
 database_name = "telegram-url"
 database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
+
+# Cron 触发器：scheduled() 兜底轮询。
+# handlePollUpdates 只轮询 TG_API_BASES（本地 Bot API），未配置时直接返回、不影响 webhook；
+# 若以后配置本地 Bot API，即可用 Local file_id 支持 >20MB 大文件转存。
+[triggers]
+crons = ["*/5 * * * *"]
