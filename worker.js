@@ -164,6 +164,12 @@ export default {
 
   // Cron trigger: poll getUpdates from Local Bot API (Local file_id, bypasses 20MB limit)
   async scheduled(event, env, ctx) {
+    // webhook 自愈：每 5 分钟确认 webhook 还在，丢了自动恢复
+    try {
+      await ensureWebhook(env, ctx);
+    } catch (e) {
+      console.error('scheduled ensureWebhook:', e.message);
+    }
     try {
       await handlePollUpdates(env, ctx);
     } catch (e) {
@@ -357,6 +363,22 @@ async function handleWebhook(request, env) {
     const r = await processUpdateCore(update, env, function(p) { return request.waitUntil(p); });
     return json(r);
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 防止 webhook 丢失（曾发生 webhook 被清空导致 164 条消息积压）：cron 每次检查并自动恢复
+async function ensureWebhook(env, ctx) {
+  if (!env.TG_BOT_TOKEN) return;
+  const url = 'https://telegram-r2-bot.wo58.cn/webhook';
+  try {
+    const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getWebhookInfo', { method: 'POST' });
+    const j = await r.json();
+    if (j && j.ok && j.result && j.result.url === url) return;
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/setWebhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url })
+    });
+  } catch (e) { console.error('ensureWebhook:', e.message); }
 }
 
 // Shared: handle one update from webhook or getUpdates polling
