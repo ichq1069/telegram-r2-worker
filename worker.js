@@ -10,7 +10,7 @@ import { dumpAllTables, handleAdminBackup, handleAdminBackupSave, handleAdminBac
 import { applyRateLimit } from './src/ratelimit.js';
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return cors(null, 204);
     // Ensure tables exist (only once per isolate, avoiding per-request D1 overhead)
     if (env.D1_DB) { try { await ensureTablesOnce(env.D1_DB); } catch (e) {} }
@@ -42,10 +42,10 @@ export default {
     if (m === 'GET' && p === '/admin/api/dedup/stats') return isAdmin ? handleDedupStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/dedup/groups') return isAdmin ? handleDedupGroups(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/processing') return isAdmin ? handleProcessingStatus(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/retry') return isAdmin ? handleRetry(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/retry') return isAdmin ? handleRetry(request, env, ctx) : json({ok:false,error:'Unauthorized'},401);
     // 未转存列表（已入库但未完成）+ 批量重试
     if (m === 'GET' && p === '/admin/api/unsaved') return isAdmin ? handleUnsavedList(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/unsaved/retry') return isAdmin ? handleUnsavedRetry(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/unsaved/retry') return isAdmin ? handleUnsavedRetry(request, env, ctx) : json({ok:false,error:'Unauthorized'},401);
     // Trash (soft-deleted files) + R2 storage maintenance
     if (m === 'GET' && p === '/admin/api/trash') return isAdmin ? handleTrashList(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/trash/restore') return isAdmin ? handleTrashRestore(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -220,7 +220,7 @@ const DEFAULT_COMMANDS = {
   '/search': 'Usage: /search <keyword>\nExample: /search cat',
 };
 
-async function handleBotCommand(chatId, msgId, text, env) {
+async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   const parts = text.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
   const args = parts.slice(1).join(' ');
@@ -323,7 +323,7 @@ async function handlePendingCommand(chatId, env) {
 
 // 命令：继续完成未转存入库（批 5 条，限频 60s）
 var lastRetryCmdTs = 0;
-async function handleRetryCommand(chatId, env) {
+async function handleRetryCommand(chatId, env, waitFn) {
   const now = Date.now();
   if (now - lastRetryCmdTs < 60000) {
     await replyText(chatId, 0, '⏳ 60 秒内已执行过，请稍后再试（' + Math.ceil((60000 - (now - lastRetryCmdTs)) / 1000) + 's）', env);
@@ -333,7 +333,7 @@ async function handleRetryCommand(chatId, env) {
   if (!env.D1_DB) { await replyText(chatId, 0, '❌ D1 未配置', env); return { ok: true }; }
   try {
     const fakeReq = { json: function() { return Promise.resolve({ all: true }); } };
-    const r = await handleUnsavedRetry(fakeReq, env);
+    const r = await handleUnsavedRetry(fakeReq, env, { waitUntil: waitFn });
     if (r && r.ok) {
       await replyText(chatId, 0, '🚀 已开始转存 ' + (r.started || 0) + ' 条。剩余可稍后再发 /retry（60s 后）或在后台「未转存」页手动处理。', env);
     } else {
@@ -600,7 +600,7 @@ async function processUpdateCore(update, env, waitFn) {
   }
 
   // Non-file messages: process synchronously
-  return await processUpdate(update, env);
+  return await processUpdate(update, env, waitFn);
 }
 
 // Poll getUpdates from the configured Bot API (must be Local Bot API to get Local file_ids)
@@ -1106,7 +1106,7 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env) 
   }
 }
 
-async function processUpdate(update, env) {
+async function processUpdate(update, env, waitFn) {
   const msg = update.message || update.channel_post;
   if (!msg) return { ok: true, skip: true };
 
@@ -1119,7 +1119,7 @@ async function processUpdate(update, env) {
 
   // Handle bot commands
   if (text.startsWith('/')) {
-    return await handleBotCommand(parseInt(chatId), parseInt(msgId), text, env);
+    return await handleBotCommand(parseInt(chatId), parseInt(msgId), text, env, waitFn);
   }
 
   // Handle file messages
@@ -2857,7 +2857,7 @@ async function handleBotGetMeApi(env) {
 // ==================== ADMIN API ====================
 
 // Retry a failed/stuck file record
-async function handleRetry(request, env) {
+async function handleRetry(request, env, ctx) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
     const u = new URL(request.url);
@@ -2880,7 +2880,8 @@ async function handleRetry(request, env) {
       return json({ ok: true, queued: true, id: parseInt(id) });
     }
     // No queue: run inline (best effort)
-    processFileAsync(parseInt(id), fi, f.chat_id || '', f.message_id || '', task.chat, task.from, date, env).catch(e => console.error('retry async:', e.message));
+    const p = processFileAsync(parseInt(id), fi, f.chat_id || '', f.message_id || '', task.chat, task.from, date, env).catch(e => console.error('retry async:', e.message));
+    if (ctx && ctx.waitUntil) ctx.waitUntil(p);
     return json({ ok: true, id: parseInt(id) });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
@@ -2901,8 +2902,8 @@ async function handleUnsavedList(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
-// 批量重试未转存：body { ids:[...] } 或 { all:true }（默认最多 50 条 pending/failed）
-async function handleUnsavedRetry(request, env) {
+// 批量重试未转存：body { ids:[...] } 或 { all:true }（默认最多 5 条 pending/failed）
+async function handleUnsavedRetry(request, env, ctx) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
     const b = await request.json().catch(function(){ return null; });
@@ -2925,7 +2926,8 @@ async function handleUnsavedRetry(request, env) {
       if (env.FILE_QUEUE) {
         try { await env.FILE_QUEUE.send(task); started++; } catch (e) {}
       } else {
-        processFileAsync(f.id, fi, f.chat_id || '', f.message_id || '', task.chat, task.from, date, env).catch(function(e){ console.error('unsaved retry:', e.message); });
+        const p = processFileAsync(f.id, fi, f.chat_id || '', f.message_id || '', task.chat, task.from, date, env).catch(function(e){ console.error('unsaved retry:', e.message); });
+        if (ctx && ctx.waitUntil) ctx.waitUntil(p);
         started++;
       }
     }
