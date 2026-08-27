@@ -349,6 +349,20 @@ async function processUpdateCore(update, env, waitFn) {
   if (msg && !msg.text?.startsWith('/')) {
     const fi = extractFileInfo(msg);
     if (fi) {
+      // 20MB limit: official Bot API cannot download files >20MB.
+      // Without a Local Bot API (TG_API_BASE/TG_API_BASE_2), reply with a notice and skip.
+      if (!(env.TG_API_BASE || env.TG_API_BASE_2) && (fi.fileSize || 0) > OFFICIAL_MAX) {
+        if (env.TG_BOT_TOKEN) {
+          try {
+            await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: String(msg.chat.id), text: '❌ 文件超过 20MB（Telegram 官方 Bot API 限制），超出大小未存入' })
+            });
+          } catch (e) {}
+        }
+        return { ok: true, skipped: true };
+      }
       // Create pending record immediately (dedup by chat_id + message_id)
       const chatId = String(msg.chat.id);
       const msgId = String(msg.message_id);
@@ -554,7 +568,7 @@ async function processShareLinkAsync(dbId, link, chatId, msgId, chat, from, date
         await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(msgId) || undefined, text: replyTextP, disable_web_page_preview: false })
+          body: JSON.stringify({ chat_id: chatId, text: replyTextP, disable_web_page_preview: false })
         });
       } catch (e) { console.error('share reply:', e.message); }
       return;
@@ -601,7 +615,7 @@ async function processShareLinkAsync(dbId, link, chatId, msgId, chat, from, date
       await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(msgId) || undefined, text: replyText, disable_web_page_preview: false })
+        body: JSON.stringify({ chat_id: chatId, text: replyText, disable_web_page_preview: false })
       });
     } catch (e) { console.error('share reply:', e.message); }
   } catch (e) {
@@ -1108,7 +1122,7 @@ async function replyMsg(chatId, replyId, fi, url, env) {
   const ic = { photo: '🖼', document: '📄', video: '🎬', audio: '🎵', voice: '🎤' };
   const lb = { photo: 'Photo', document: 'File', video: 'Video', audio: 'Audio', voice: 'Voice' };
   const t = fi.type === 'photo' ? ic.photo + ' Saved\n' + url : ic[fi.type] + ' ' + lb[fi.type] + ' Saved\n' + fi.fileName + ' (' + fmtSize(fi.fileSize) + ')\n' + url;
-  try { await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, reply_to_message_id: replyId, text: t }) }); } catch (e) { }
+  try { await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text: t }) }); } catch (e) { }
 }
 
 async function replyText(chatId, replyId, text, env) {
@@ -1116,7 +1130,7 @@ async function replyText(chatId, replyId, text, env) {
     await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, reply_to_message_id: replyId || undefined, text: text, parse_mode: 'Markdown' })
+      body: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' })
     });
   } catch (e) { console.log('replyText error:', e.message); }
 }
