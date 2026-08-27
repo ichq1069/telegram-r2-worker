@@ -1473,18 +1473,22 @@ async function loadTrash(page) {
     var f = items[i];
     var isPhoto = f.file_type === "photo";
     var isVideo = f.file_type === "video";
-    // 回收站文件软删除后 /file/tg/<id> 代理返回 404，直接走 R2 公共 URL 预览（R2 对象仍在）
+    // 回收站文件软删除后 /file/tg/<id> 代理返回 404，直接走 R2 公共 URL 预览（R2 对象仍在）。
+    // 无 r2_url 的记录（历史失败/从未上传成功）显示占位符，避免破图。
     var pv = f.r2_url || imgUrl(f);
     var nm = escStr(f.file_name || "");
     var thumb = "";
-    if (isPhoto) {
+    if (!pv) {
+      thumb = '<div class="thumb-placeholder">' + (f.file_type === "audio" ? "\uD83C\uDFB5" : "\uD83D\uDCC4") + '</div>';
+    } else if (isPhoto) {
       thumb = '<img class="thumb" src="' + pv + '" data-preview="' + pv + '" data-type="photo" data-name="' + nm + '">';
     } else if (isVideo) {
       thumb = '<div class="thumb-video" data-preview="' + pv + '" data-type="video" data-name="' + nm + '"></div>';
     } else {
       thumb = '<div class="thumb-placeholder">' + (f.file_type === "audio" ? "\uD83C\uDFB5" : "\uD83D\uDCC4") + '</div>';
     }
-    h += '<div class="file-card"' + ((isPhoto || isVideo) ? ' data-preview="' + pv + '" data-type="' + f.file_type + '" data-name="' + nm + '"' : '') + '>';
+    var prevAttr = pv && (isPhoto || isVideo) ? ' data-preview="' + pv + '" data-type="' + f.file_type + '" data-name="' + nm + '"' : '';
+    h += '<div class="file-card"' + prevAttr + '>';
     h += thumb;
     h += '<div class="info"><div class="name" title="' + nm + '">' + nm + '</div>';
     h += '<div style="font-size:10px;color:var(--text-secondary);margin:2px 0">' + escStr(f.chat_title || "") + '</div>';
