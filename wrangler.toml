@@ -12,13 +12,13 @@ compatibility_date = "2026-08-01"   # 若线上运行正常，可从 Dashboard �
 [vars]
 R2_PUBLIC_URL = "https://telegramup.wo58.cn"
 
-# R2 存储桶绑定 —— bucket_name 需替换为你的实际桶名（Dashboard → R2 → 复制名称）
+# R2 存储桶绑定
 [[r2_buckets]]
 binding = "R2_BUCKET"
-bucket_name = "PASTE_R2_BUCKET_NAME_HERE"
+bucket_name = "bot-telegram"
 
-# D1 数据库绑定 —— database_id 必须替换（Dashboard → D1 → 你的数据库 → 概览 → 复制 ID）
+# D1 数据库绑定（telegram-url，含 files/random_pool/settings/api_keys 等表）
 [[d1_databases]]
 binding = "D1_DB"
-database_name = "telegram-files"
-database_id = "PASTE_D1_DATABASE_ID_HERE"
+database_name = "telegram-url"
+database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
