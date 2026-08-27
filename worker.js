@@ -292,8 +292,9 @@ async function handleCountCommand(chatId, env) {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
     const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
     const td = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first();
+    const comp = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state='completed'").first();
     const byType = await env.D1_DB.prepare('SELECT file_type, COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY file_type').all();
-    let text = '📊 **现有数量**\n\n文件总数: **' + (t?.c || 0) + '**\n总大小: ' + fmtSize(s?.s || 0) + '\n今日新增: ' + (td?.c || 0) + '\n';
+    let text = '📊 **现有数量**\n\n文件总数: **' + (t?.c || 0) + '**（含未转存）\n已转存: **' + (comp?.c || 0) + '** / ' + (t?.c || 0) + '\n未转存: ' + ((t?.c || 0) - (comp?.c || 0)) + '\n总大小: ' + fmtSize(s?.s || 0) + '\n今日新增: ' + (td?.c || 0) + '\n';
     if (byType.results && byType.results.length) {
       const names = { photo: '图片', video: '视频', document: '文档', audio: '音频', voice: '语音' };
       text += '\n类型分布:\n';
@@ -1538,7 +1539,7 @@ async function handleFile(request, env) {
 
 async function handleStats(env) {
   try {
-    const [t, ts, td, mo, bt, bc, pt, pe, pm, ptg] = await Promise.all([
+    const [t, ts, td, mo, bt, bc, pt, pe, pm, ptg, comp] = await Promise.all([
       env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first(),
       env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first(),
       env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first(),
@@ -1549,9 +1550,10 @@ async function handleStats(env) {
       env.D1_DB.prepare('SELECT COUNT(*) as c FROM random_pool').first(),
       env.D1_DB.prepare('SELECT COUNT(*) as c FROM random_pool WHERE enabled=1').first(),
       env.D1_DB.prepare("SELECT COUNT(*) as c FROM random_pool WHERE source='manual'").first(),
-      env.D1_DB.prepare("SELECT COUNT(*) as c FROM random_pool WHERE source='tg'").first()
+      env.D1_DB.prepare("SELECT COUNT(*) as c FROM random_pool WHERE source='tg'").first(),
+      env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state='completed'").first()
     ]);
-    return json({ ok: true, data: { total_files: t?.c || 0, total_size: ts?.s || 0, total_size_formatted: fmtSize(ts?.s || 0), today_uploads: td?.c || 0, month_uploads: mo?.c || 0, by_type: bt.results || [], by_chat: bc.results || [], pool_total: pt?.c || 0, pool_enabled: pe?.c || 0, pool_manual: pm?.c || 0, pool_tg: ptg?.c || 0 } });
+    return json({ ok: true, data: { total_files: t?.c || 0, completed_files: comp?.c || 0, unsaved_files: (t?.c || 0) - (comp?.c || 0), total_size: ts?.s || 0, total_size_formatted: fmtSize(ts?.s || 0), today_uploads: td?.c || 0, month_uploads: mo?.c || 0, by_type: bt.results || [], by_chat: bc.results || [], pool_total: pt?.c || 0, pool_enabled: pe?.c || 0, pool_manual: pm?.c || 0, pool_tg: ptg?.c || 0 } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

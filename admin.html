@@ -1670,7 +1670,9 @@ async function loadStats() {
   if (!r.ok) return;
   var d = r.data;
   document.getElementById("statsGrid").innerHTML =
-    '<div class="stat-card"><div class="value">' + d.total_files + '</div><div class="label">文件总数 (TG)</div></div>' +
+    '<div class="stat-card"><div class="value">' + d.total_files + '</div><div class="label">入库总数 (含未转存)</div></div>' +
+    '<div class="stat-card" style="border-color:#dcfce7;background:#f0fdf4"><div class="value">' + (d.completed_files||0) + ' / ' + d.total_files + '</div><div class="label">已转存 / 总数</div></div>' +
+    '<div class="stat-card"><div class="value">' + (d.unsaved_files||0) + '</div><div class="label">未转存</div></div>' +
     '<div class="stat-card"><div class="value">' + d.total_size_formatted + '</div><div class="label">存储空间</div></div>' +
     '<div class="stat-card"><div class="value">' + d.today_uploads + '</div><div class="label">今日上传</div></div>' +
     '<div class="stat-card"><div class="value">' + d.month_uploads + '</div><div class="label">本月上传</div></div>' +
