@@ -26,9 +26,16 @@ jobs:
           node --check worker.js
           for f in src/*.js; do node --check "$f"; done
 
-      # 一劳永逸：每次部署前，把 2 个 Secret 写入 Worker（wrangler secret put）。
-      # 这样 TG_BOT_TOKEN 不会因部署而丢失，Dashboard 里也无需再手动配置这些机密。
-      # 用 shell 方式直写，避免 wrangler-action 的 secrets 输入语法兼容问题。
+      # Cloudflare 版本管理限制：最新版本未部署时不允许 wrangler secret put。
+      # 所以顺序必须：先 deploy 部署版本，再 secret put 写入机密。
+      - name: Deploy Worker to Cloudflare
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
+
+      # 部署后写入 2 个 Secret，一劳永逸避免部署丢 token。
       - name: Set worker secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -39,12 +46,12 @@ jobs:
           echo "$TG_BOT_TOKEN" | npx --yes wrangler secret put TG_BOT_TOKEN
           echo "$API_KEY" | npx --yes wrangler secret put API_KEY
 
-      - name: Deploy Worker to Cloudflare
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: deploy
+      # secrets 写入后再次部署，确保机密随最新版本一起上线
+      - name: Redeploy with secrets
+        run: npx --yes wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Upload admin.html to R2 (bot-telegram bucket)
         uses: cloudflare/wrangler-action@v3
