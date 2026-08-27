@@ -424,6 +424,19 @@ async function processUpdateCore(update, env, waitFn) {
     }
   }
 
+  // X (Twitter) status links: parse via public syndication API, download media from twimg CDN
+  if (msg.text && isXLink(msg.text)) {
+    const xlink = extractXStatus(msg.text);
+    if (xlink) {
+      const chatId = String(msg.chat.id);
+      const msgId = String(msg.message_id);
+      const date = msg.date ? new Date(msg.date * 1000) : new Date();
+      const p = handleXStatusAsync(xlink, chatId, msgId, date, env).catch(e => console.error('x async:', e.message));
+      if (waitFn) waitFn(p); else p;
+      return { ok: true, queued: true, xlink: true };
+    }
+  }
+
   // Short-video share links (douyin/kuaishou/redbook/bilibili...): parse via parse-video service, then download & store
   if (msg.text && isShareLink(msg.text)) {
     const shareLink = extractShareLink(msg.text);
@@ -537,6 +550,92 @@ function isShareLink(text) {
 function extractShareLink(text) {
   var m = SHARE_DOMAIN_RE.exec(text || '');
   return m ? m[1] : '';
+}
+
+// ---- X (Twitter) status link support ----
+// Parses via Twitter's public syndication endpoint (no auth, CORS-friendly), then downloads
+// media straight from twimg CDN. Unlike Telegram's Bot API there is NO 20MB limit here.
+var X_STATUS_RE = /(?:^|[^a-z0-9])(https?:\/\/(?:x\.com|twitter\.com)\/[^\s'"<>]*?\/status\/\d+[^\s'"<>]*)/i;
+
+function isXLink(text) {
+  return X_STATUS_RE.test(text || '');
+}
+
+function extractXStatus(text) {
+  var m = X_STATUS_RE.exec(text || '');
+  return m ? m[1] : '';
+}
+
+function xTweetId(link) {
+  var m = /status\/(\d+)/.exec(link || '');
+  return m ? m[1] : '';
+}
+
+async function handleXStatusAsync(link, chatId, msgId, date, env) {
+  var tid = xTweetId(link);
+  if (!tid) return;
+  function xreply(t) {
+    if (!env.TG_BOT_TOKEN) return Promise.resolve();
+    return fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: t })
+    }).catch(function(){});
+  }
+  try {
+    var r = await fetch('https://cdn.syndication.twimg.com/tweet-result?id=' + tid + '&lang=zh');
+    if (!r.ok) { await xreply('❌ X 解析失败（HTTP ' + r.status + '）'); return; }
+    var j = await r.json();
+    var media = [];
+    // Video: pick the highest-bitrate mp4 variant
+    if (j && j.video && j.video.variants && j.video.variants.length) {
+      var best = null;
+      for (var i = 0; i < j.video.variants.length; i++) {
+        var v = j.video.variants[i];
+        if (v.content_type === 'video/mp4' && (!best || (v.bitrate || 0) > (best.bitrate || 0))) best = v;
+      }
+      if (best && best.url) media.push({ type: 'video', url: best.url, name: 'xvideo_' + tid + '.mp4' });
+    }
+    // Photos
+    if (j && j.photos && j.photos.length) {
+      for (var p = 0; p < j.photos.length; p++) {
+        var pu = j.photos[p].url;
+        if (pu) media.push({ type: 'photo', url: pu, name: 'ximg_' + tid + '_' + (p + 1) + '.jpg' });
+      }
+    }
+    if (!media.length) { await xreply('❌ 该 X 推文没有可下载的媒体（可能已删除或受限）'); return; }
+    var saved = [];
+    var ts = new Date().toISOString();
+    var dp = ts.slice(0, 7).replace('-', '/');
+    for (var m = 0; m < media.length; m++) {
+      var item = media[m];
+      try {
+        var dl = await fetch(item.url);
+        if (!dl.ok) continue;
+        var ct = item.type === 'video' ? 'video/mp4' : (dl.headers.get('content-type') || 'image/jpeg');
+        var ext = guessExt(ct, item.name);
+        var key = dp + '/' + genHash() + '.' + ext;
+        var url = await putR2Stream(key, dl.body, ct, env, '');
+        if (!url) continue;
+        saved.push(url);
+        // 入库（direct completed，不经 Telegram 下载）
+        if (env.D1_DB) {
+          try {
+            await env.D1_DB.prepare(
+              'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            ).bind(key, url, '', 'completed', chatId, 'X', 'private', '', 0, '', '', '', item.name, 0, item.type, ct, 0, 0, '', msgId, ts).run();
+          } catch (e) { console.log('x d1 insert fail:', e.message); }
+        }
+      } catch (e) { console.log('x media save fail:', e.message); }
+    }
+    if (saved.length) {
+      await xreply('✅ X 内容已保存（' + saved.length + ' 个）\n' + saved.join('\n'));
+    } else {
+      await xreply('❌ X 内容下载失败');
+    }
+  } catch (e) {
+    console.error('handleXStatusAsync:', e.message);
+    try { await xreply('❌ X 解析失败：' + String(e.message).slice(0, 100)); } catch (e2) {}
+  }
 }
 
 // Parse a share link via the self-hosted parse-video service, download the watermarked-off video to R2
