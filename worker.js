@@ -174,6 +174,12 @@ export default {
     } catch (e) {
       console.error('scheduled retryUnsaved:', e.message);
     }
+    // 查重后台化：每 5 分钟算 5 个缺失 MD5 + 清理 1 个重复组（免费版子请求/墙钟限制内，限时 12s）
+    try {
+      await runDedupBatch(env, 5, 1, 12000, false);
+    } catch (e) {
+      console.error('scheduled dedup:', e.message);
+    }
   },
 };
 
@@ -2890,37 +2896,36 @@ async function handleDedupGroups(env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
-// Dedup existing files: compute missing MD5s, then clean duplicates.
-// Default: soft-delete (move to trash, restorable). ?purge=1: hard-delete
-// (remove the row AND the R2 object when it is the last reference).
-async function handleDedup(request, env) {
-  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
-  try {
-    await ensureTablesOnce(env.D1_DB);
-    const purge = new URL(request.url).searchParams.get('purge') === '1';
-    // Get all files without md5_hash
-    // 分批处理避免 30s 墙钟超时：每次最多 15 个 MD5 计算
-    const missing = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE deleted_at IS NULL AND (md5_hash='' OR md5_hash IS NULL) LIMIT 15").all();
-    let computed = 0;
-    for (const f of (missing.results || [])) {
-      try {
-        const obj = await env.R2_BUCKET.get(f.storage_key);
-        if (!obj) continue;
-        const buf = await obj.arrayBuffer();
-        const md5 = await computeMd5(buf);
-        await env.D1_DB.prepare('UPDATE files SET md5_hash=? WHERE id=?').bind(md5, f.id).run();
-        computed++;
-      } catch (e) { console.log('dedup compute error:', e.message); }
-    }
-
-    // Find duplicate groups (same content, still visible)
-    const dups = await env.D1_DB.prepare(
-      'SELECT md5_hash, COUNT(*) as cnt FROM files WHERE deleted_at IS NULL AND md5_hash!="" GROUP BY md5_hash HAVING COUNT(*)>1'
-    ).all();
-    let cleaned = 0;
-    const now = new Date().toISOString();
-    for (const d of (dups.results || [])) {
-      // Keep the most valuable row per group (pool-imported > tagged > completed > oldest).
+// 查重分批执行（手动/定时共用）：算 N 个缺失 MD5，再清理 G 个重复组。
+// 免费版单调用 50 子请求 + 30s 墙钟：手动 N=15/G=3/限时25s，定时 N=5/G=1/限时12s。
+async function runDedupBatch(env, computeN, cleanGroups, timeLimitMs, purge) {
+  if (!env.D1_DB) return { computed: 0, cleaned: 0, groups: 0 };
+  const startT = Date.now();
+  const deadline = timeLimitMs || 25000;
+  function timedOut() { return Date.now() - startT > deadline; }
+  // 1) 算缺失 MD5（每个 R2 读取限时，避免大文件拖垮整批）
+  let computed = 0;
+  const missing = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE deleted_at IS NULL AND (md5_hash='' OR md5_hash IS NULL) LIMIT ?").bind(computeN).all();
+  for (const f of (missing.results || [])) {
+    if (timedOut()) break;
+    try {
+      const obj = await Promise.race([env.R2_BUCKET.get(f.storage_key), new Promise(function(res){ setTimeout(function(){ res(null); }, 4000); })]);
+      if (!obj) continue;
+      const buf = await Promise.race([obj.arrayBuffer(), new Promise(function(res){ setTimeout(function(){ res(null); }, 8000); })]);
+      if (!buf) continue;
+      const md5 = await computeMd5(buf);
+      await env.D1_DB.prepare('UPDATE files SET md5_hash=? WHERE id=?').bind(md5, f.id).run();
+      computed++;
+    } catch (e) { console.log('dedup compute error:', e.message); }
+  }
+  // 2) 清理 G 个重复组（每组 1 个查询 + poolRefs + 逐行软删/硬删）
+  let cleaned = 0, groups = 0;
+  const dups = await env.D1_DB.prepare('SELECT md5_hash FROM files WHERE deleted_at IS NULL AND md5_hash!="" GROUP BY md5_hash HAVING COUNT(*)>1 LIMIT ?').bind(cleanGroups).all();
+  const now = new Date().toISOString();
+  for (const d of (dups.results || [])) {
+    if (timedOut()) break;
+    groups++;
+    try {
       const rows = await env.D1_DB.prepare(
         "SELECT id, storage_key FROM files WHERE md5_hash=? AND deleted_at IS NULL ORDER BY CASE WHEN pool_status='imported' THEN 0 WHEN tags!='' THEN 1 WHEN processing_state='completed' THEN 2 ELSE 3 END, id ASC LIMIT 200"
       ).bind(d.md5_hash).all();
@@ -2933,6 +2938,7 @@ async function handleDedup(request, env) {
         (pr.results || []).forEach(function(x){ poolRefs.add(String(x.tg_file_id)); });
       } catch (e) {}
       for (let i = 1; i < res.length; i++) {
+        if (timedOut()) break;
         const f = res[i];
         if (poolRefs.has(String(f.id))) continue;
         try {
@@ -2950,10 +2956,21 @@ async function handleDedup(request, env) {
           }
         } catch (e) {}
       }
-    }
+    } catch (e) {}
+  }
+  return { computed, cleaned, groups };
+}
 
-    const mode = purge ? 'Hard-deleted' : 'Moved to trash';
-    return json({ ok: true, data: { computed, duplicate_groups: dups.results?.length || 0, cleaned, purge, message: 'MD5 computed for ' + computed + ' files. ' + mode + ' ' + cleaned + ' duplicate(s)' + (purge ? '.' : ' (restorable).') } });
+// Dedup existing files: compute missing MD5s, then clean duplicates.
+// 已后台化：手动点击只跑一批（15 MD5 + 3 组），剩余由 cron 每 5 分钟自动分批完成。
+async function handleDedup(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    await ensureTablesOnce(env.D1_DB);
+    const purge = new URL(request.url).searchParams.get('purge') === '1';
+    const r = await runDedupBatch(env, 15, 3, 25000, purge);
+    const mode = purge ? '硬删除' : '移入回收站';
+    return json({ ok: true, data: { computed: r.computed, duplicate_groups: r.groups, cleaned: r.cleaned, purge, message: '本轮计算 MD5 ' + r.computed + ' 个、清理重复 ' + r.cleaned + ' 个（' + mode + '）。剩余由定时任务每 5 分钟自动分批完成，可再次点击加速。' } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
