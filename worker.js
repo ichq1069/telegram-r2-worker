@@ -2784,7 +2784,8 @@ async function handleUnsavedRetry(request, env) {
       const marks = b.ids.map(function(){ return '?'; }).join(',');
       rows = (await env.D1_DB.prepare('SELECT * FROM files WHERE id IN (' + marks + ') AND deleted_at IS NULL').bind.apply(null, b.ids).all()).results || [];
     } else {
-      rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 50").all()).results || [];
+      // 免费版单调用最多 50 个子请求（每条转存约占 8-12 个），默认批 5 条最安全
+      rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 5").all()).results || [];
     }
     let started = 0;
     for (const f of rows) {
@@ -2803,11 +2804,11 @@ async function handleUnsavedRetry(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
-// Cron 兜底转存：每次最多 4 条 pending/failed，每条限时 ~6s（scheduled 免费版墙钟 30s）
+// Cron 兜底转存：每次最多 2 条 pending/failed（免费版单调用 50 子请求限制），每条限时 ~10s（scheduled 免费版墙钟 30s）
 async function retryUnsavedCron(env, ctx) {
   if (!env.D1_DB) return;
   try {
-    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 4").all();
+    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 2").all();
     for (const row of d.results || []) {
       const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=?').bind(row.id).first();
       if (!f) continue;
@@ -2820,8 +2821,8 @@ async function retryUnsavedCron(env, ctx) {
       } else {
         const p = processFileAsync(f.id, fi, f.chat_id || '', f.message_id || '', task.chat, task.from, date, env).catch(function(e){ console.error('cron retry:', e.message); });
         if (ctx && ctx.waitUntil) ctx.waitUntil(p);
-        // 每条最多等 6s，避免整批超 scheduled 30s 限制
-        await Promise.race([p, new Promise(function(res){ setTimeout(res, 6000); })]);
+        // 每条最多等 10s，避免整批超 scheduled 30s 限制
+        await Promise.race([p, new Promise(function(res){ setTimeout(res, 10000); })]);
       }
     }
   } catch (e) { console.error('retryUnsavedCron:', e.message); }
