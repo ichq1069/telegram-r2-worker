@@ -46,5 +46,6 @@ Dashboard → Workers → `telegram-r2-bot` → 编辑代码 → 粘贴 `worker.
 
 ## 注意
 
-- `index.js`、`handlers/`、`services/`、`utils/` 是**废弃的实验版**，实际运行的是单文件 `worker.js`，忽略它们。
+- `index.js`、`handlers/`、`services/`、`utils/` 是**废弃的实验版**，实际运行的是 `worker.js` + 正式模块目录 `src/`（util.js/db.js/notify.js/backup.js/ratelimit.js），忽略废弃目录。
+- 手动部署时**必须**同时粘贴 `worker.js` 和 `src/` 下所有文件（Worker 代码编辑器支持多文件）或在编辑器新建对应文件。
 - `TG_BOT_TOKEN`、`API_KEY`、`TG_SECRET` 是机密，**禁止**写进代码或提交到仓库。

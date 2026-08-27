@@ -1,7 +1,13 @@
 /**
- * Telegram Bot �?R2 + D1 Worker v6
+ * Telegram Bot → R2 + D1 Worker v6
  * Features: Bot commands, Custom API, Webhook, Dashboard, Large file support
+ * 拆模块：工具/db/告警/备份/限流在 src/ 目录，主体逻辑仍在本文件
  */
+import { json, cors, fmtSize, genHash } from './src/util.js';
+import { ensureTablesOnce } from './src/db.js';
+import { notifyAdmin, genThumb } from './src/notify.js';
+import { dumpAllTables, handleAdminBackup, handleAdminBackupSave, handleAdminBackupList, handleAdminBackupDelete } from './src/backup.js';
+import { applyRateLimit } from './src/ratelimit.js';
 
 export default {
   async fetch(request, env) {
@@ -180,74 +186,7 @@ async function handleQueueMessage(body, env) {
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
-let _tablesEnsured = false;
-async function ensureTablesOnce(db) {
-  if (_tablesEnsured) return true;
-  await ensureTables(db);
-  _tablesEnsured = true;
-  return true;
-}
-
-async function ensureTables(db) {
-  // Single exec: all CREATE TABLE/INDEX in one round-trip (was 10+ sequential D1 calls,
-  // which added seconds to every cold-start request). Column migration below stays as fallback.
-  await db.exec(
-    "CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, storage_key TEXT NOT NULL, r2_url TEXT NOT NULL, chat_id TEXT, chat_title TEXT, chat_type TEXT, chat_username TEXT, user_id INTEGER, username TEXT, full_name TEXT, telegram_file_id TEXT, file_name TEXT, file_size INTEGER, file_type TEXT, mime_type TEXT, width INTEGER, height INTEGER, caption TEXT, message_id TEXT, md5_hash TEXT, processing_state TEXT DEFAULT 'completed', created_at TEXT, tg_file_url TEXT, error_msg TEXT, progress_bytes INTEGER DEFAULT 0, total_bytes INTEGER DEFAULT 0, thumb_url TEXT, quick_hash TEXT, tags TEXT DEFAULT '', pool_status TEXT DEFAULT '');" +
-    "CREATE INDEX IF NOT EXISTS idx_files_chat ON files(chat_id);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_type ON files(file_type);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_user ON files(user_id);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_created ON files(created_at);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_md5 ON files(md5_hash);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_state ON files(processing_state);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_quickhash ON files(quick_hash);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_deleted ON files(deleted_at);" +
-    "CREATE INDEX IF NOT EXISTS idx_files_tgfileid ON files(telegram_file_id);" +
-    "CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);" +
-    "CREATE TABLE IF NOT EXISTS bot_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT UNIQUE, response TEXT, description TEXT, enabled INTEGER, created_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);" +
-    "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0);" +
-    "CREATE TABLE IF NOT EXISTS random_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, thumb_url TEXT, title TEXT, tags TEXT DEFAULT '', file_type TEXT DEFAULT 'photo', width INTEGER, height INTEGER, file_size INTEGER, source TEXT DEFAULT 'manual', tg_file_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT);" +
-    "CREATE INDEX IF NOT EXISTS idx_pool_url ON random_pool(url);" +
-    "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, window TEXT NOT NULL, count INTEGER DEFAULT 0, UNIQUE(key, window));"
-  );
-
-  // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
-  const wantCols = [
-    ["md5_hash", "ALTER TABLE files ADD COLUMN md5_hash TEXT DEFAULT ''"],
-    ["processing_state", "ALTER TABLE files ADD COLUMN processing_state TEXT DEFAULT 'completed'"],
-    ["tg_file_url", 'ALTER TABLE files ADD COLUMN tg_file_url TEXT'],
-    ["error_msg", 'ALTER TABLE files ADD COLUMN error_msg TEXT'],
-    ["progress_bytes", 'ALTER TABLE files ADD COLUMN progress_bytes INTEGER DEFAULT 0'],
-    ["total_bytes", 'ALTER TABLE files ADD COLUMN total_bytes INTEGER DEFAULT 0'],
-    ["thumb_url", 'ALTER TABLE files ADD COLUMN thumb_url TEXT'],
-    ["quick_hash", 'ALTER TABLE files ADD COLUMN quick_hash TEXT'],
-    ["tags", "ALTER TABLE files ADD COLUMN tags TEXT DEFAULT ''"],
-    ["pool_status", "ALTER TABLE files ADD COLUMN pool_status TEXT DEFAULT ''"],
-    ["deleted_at", 'ALTER TABLE files ADD COLUMN deleted_at TEXT']
-  ];
-  try {
-    const cols = await db.prepare("PRAGMA table_info(files)").all();
-    const names = (cols.results || []).map(function(c) { return c.name; });
-    for (const wc of wantCols) {
-      if (names.indexOf(wc[0]) !== -1) continue;
-      try {
-        await db.exec(wc[1]);
-        console.log('migrated: added ' + wc[0] + ' column');
-      } catch (e2) {
-        console.error('column migration failed for ' + wc[0] + ':', e2.message);
-      }
-    }
-    // Verify columns actually exist. If a critical one is still missing, fail
-    // (instead of silently setting the once-flag) so it is retried next request.
-    const cols2 = await db.prepare("PRAGMA table_info(files)").all();
-    const names2 = (cols2.results || []).map(function(c) { return c.name; });
-    for (const wc of wantCols) {
-      if (names2.indexOf(wc[0]) === -1) throw new Error('column still missing after migration: ' + wc[0]);
-    }
-  } catch(e) { console.error('column migration:', e.message); throw e; }
-  return true;
-}
+// （表结构与迁移逻辑已移入 src/db.js，由顶部 import 引入）
 
 // ==================== BOT COMMANDS ====================
 
@@ -1768,19 +1707,7 @@ async function checkApiKey(request, env) {
   } catch (e) { console.error('checkApiKey:', e.message); return null; }
 }
 
-// 公开 API 限流：按 api_key + 分钟窗口计数（D1），超限返回 true
-async function applyRateLimit(env, key) {
-  try {
-    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'api_rate_limit'").first();
-    let cfg = { enabled: false, limit_per_min: 60 };
-    if (s && s.value) { try { cfg = Object.assign(cfg, JSON.parse(s.value)); } catch (e) {} }
-    if (!cfg.enabled || !cfg.limit_per_min) return false;
-    const win = String(Math.floor(Date.now() / 60000));
-    await env.D1_DB.prepare("INSERT INTO rate_limits (key, window, count) VALUES (?, ?, 1) ON CONFLICT(key, window) DO UPDATE SET count=count+1").bind(key, win).run();
-    const r = await env.D1_DB.prepare("SELECT count FROM rate_limits WHERE key=? AND window=?").bind(key, win).first();
-    return !!(r && r.count > cfg.limit_per_min);
-  } catch (e) { console.error('applyRateLimit:', e.message); return false; }
-}
+// 公开 API 限流逻辑已移入 src/ratelimit.js（applyRateLimit），由顶部 import 引入
 
 function appendTagFilter(tagsParam, w, p, prefix) {
   const q = prefix || '';
@@ -2269,93 +2196,7 @@ async function handleAdminPoolToggle(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
-// ==================== D1 备份 / 失败告警 / 限流配置 / 缩略图 ====================
-
-// 转存失败时通过 bot 发消息给管理员（settings.admin_chat_id 或 env.ADMIN_CHAT_ID，5 分钟节流防刷屏）
-async function notifyAdmin(env, text) {
-  try {
-    let chatId = '';
-    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'admin_chat_id'").first();
-    if (s && s.value) chatId = String(s.value).trim();
-    if (!chatId && env.ADMIN_CHAT_ID) chatId = String(env.ADMIN_CHAT_ID).trim();
-    if (!chatId || !env.TG_BOT_TOKEN) return;
-    const ns = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'admin_notify_last'").first();
-    const last = ns && ns.value ? (parseInt(ns.value, 10) || 0) : 0;
-    if (Date.now() - last < 5 * 60 * 1000) return;
-    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('admin_notify_last', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run();
-    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: '\u26A0\uFE0F ' + String(text).slice(0, 1500), disable_web_page_preview: true })
-    });
-  } catch (e) { console.log('notifyAdmin error:', e.message); }
-}
-
-// 生成 WebP 缩略图（Cloudflare Image Resizing，需账号启用；失败静默跳过）
-async function genThumb(env, r2Url, key) {
-  try {
-    if (!r2Url || !key || !env.R2_BUCKET) return '';
-    const res = await fetch(r2Url, { cf: { image: { width: 480, format: 'webp', quality: 80, fit: 'scale-down' } } });
-    if (!res.ok || !res.body) return '';
-    const thumbKey = 'thumbs/' + key.replace(/^files\//, '').replace(/\.[^.]+$/, '') + '.webp';
-    await env.R2_BUCKET.put(thumbKey, res.body, { httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=31536000' } });
-    return (env.R2_PUBLIC_URL || '') + '/' + thumbKey;
-  } catch (e) { console.log('genThumb error:', e.message); return ''; }
-}
-
-async function dumpAllTables(env) {
-  const tables = await env.D1_DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
-  const dump = { exported_at: new Date().toISOString(), version: 'v6', tables: {} };
-  for (const t of tables.results || []) {
-    const rows = await env.D1_DB.prepare('SELECT * FROM "' + t.name + '"').all();
-    dump.tables[t.name] = rows.results || [];
-  }
-  return dump;
-}
-
-async function handleAdminBackup(env) {
-  try {
-    const dump = await dumpAllTables(env);
-    return json({ ok: true, data: dump });
-  } catch (e) { return json({ ok: false, error: e.message }, 500); }
-}
-
-async function handleAdminBackupSave(env) {
-  try {
-    const dump = await dumpAllTables(env);
-    const name = 'backups/db-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19).replace('T', '_') + '.json';
-    await env.R2_BUCKET.put(name, JSON.stringify(dump), { httpMetadata: { contentType: 'application/json' } });
-    // 保留最近 20 份，删除更旧的
-    try {
-      const listed = await env.R2_BUCKET.list({ prefix: 'backups/db-' });
-      const keys = (listed.objects || []).map(function(o){ return o.key; }).sort();
-      while (keys.length > 20) {
-        await env.R2_BUCKET.delete(keys.shift());
-      }
-    } catch (e) {}
-    return json({ ok: true, data: { name: name, tables: Object.keys(dump.tables).length } });
-  } catch (e) { return json({ ok: false, error: e.message }, 500); }
-}
-
-async function handleAdminBackupList(env) {
-  try {
-    const listed = await env.R2_BUCKET.list({ prefix: 'backups/db-' });
-    const items = (listed.objects || []).map(function(o) {
-      return { key: o.key, size: o.size, uploaded: o.uploaded };
-    }).sort(function(a, b){ return a.uploaded < b.uploaded ? 1 : -1; });
-    return json({ ok: true, data: { backups: items } });
-  } catch (e) { return json({ ok: false, error: e.message }, 500); }
-}
-
-async function handleAdminBackupDelete(request, env) {
-  try {
-    const u = new URL(request.url);
-    const name = u.searchParams.get('name') || '';
-    if (!name || name.indexOf('backups/db-') !== 0 || name.indexOf('..') !== -1) return json({ ok: false, error: 'invalid name' }, 400);
-    await env.R2_BUCKET.delete(name);
-    return json({ ok: true });
-  } catch (e) { return json({ ok: false, error: e.message }, 500); }
-}
+// ==================== 告警 / 限流 配置接口（notifyAdmin/genThumb/备份逻辑已移入 src/） ====================
 
 async function handleAdminGetNotify(env) {
   try {
@@ -3045,9 +2886,6 @@ async function handleDashboard(env) {
 }
 
 // ==================== UTILS ====================
+// json/cors/fmtSize/genHash 已移入 src/util.js（顶部 import）
 
-function json(d, s) { return new Response(JSON.stringify(d), { status: s || 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type,X-API-Key' } }); }
-function cors(d, s) { return new Response(d ? JSON.stringify(d) : null, { status: s || 200, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type,X-API-Key' } }); }
-function fmtSize(b) { if (!b) return '0 B'; const k = 1024, s = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.floor(Math.log(b) / Math.log(k)); return (b / Math.pow(k, i)).toFixed(1) + ' ' + s[i]; }
-function genHash() { const c = 'abcdef0123456789'; const b = new Uint8Array(16); crypto.getRandomValues(b); let r = ''; for (let i = 0; i < b.length; i++) r += c[b[i] & 15]; return r; }
 function guessExt(ct, fn) { const e = fn.split('.').pop().toLowerCase(); if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mp3', 'ogg', 'pdf', 'zip', 'txt'].includes(e)) return e; if (ct?.includes('jpeg')) return 'jpg'; if (ct?.includes('png')) return 'png'; if (ct?.includes('gif')) return 'gif'; if (ct?.includes('webp')) return 'webp'; if (ct?.includes('video')) return 'mp4'; if (ct?.includes('audio')) return 'mp3'; if (ct?.includes('pdf')) return 'pdf'; return 'bin'; }
