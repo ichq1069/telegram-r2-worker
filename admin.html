@@ -343,6 +343,22 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
       </div>
     </div>
 
+    <!-- 未转存 -->
+    <div class="panel" id="panel-unsaved">
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>未转存（已入库待转存）<span id="unsavedCount" style="font-size:11px;color:var(--text-secondary);font-weight:400"></span></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" data-action="unsaved-retry-all">全部重试</button>
+            <button class="btn btn-ghost btn-sm" data-action="unsaved-refresh">刷新</button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">消息先入库（秒回 #id），文件下载/上传异步进行。此处列出所有已入库但未完成的记录，可手动重试；定时任务每 5 分钟也会自动重试 pending/failed 记录。超过 20MB 且未配置本地 Bot API 的会直接失败。</div>
+        <div id="unsavedList" style="font-size:13px;color:var(--text-secondary)">加载中...</div>
+        <div class="pagination" id="unsavedPager"></div>
+      </div>
+    </div>
+
     <!-- 随机库 -->
     <div class="panel" id="panel-pool">
       <div class="card">
@@ -739,7 +755,7 @@ function toast(msg, ok) {
 // 初始化
 function init() {
   // Tab 栏
-  var tabData = [["stats","概览"],["files","Tele文件"],["trash","回收站"],["pool","随机库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
+  var tabData = [["stats","概览"],["files","Tele文件"],["trash","回收站"],["unsaved","未转存"],["pool","随机库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
   var tabBar = document.getElementById("tabBar");
   var html = "";
   for (var i = 0; i < tabData.length; i++) {
@@ -753,7 +769,7 @@ function init() {
     var name = tab.getAttribute("data-tab");
     var panels = document.querySelectorAll(".panel");
     var tabs = tabBar.querySelectorAll(".tab");
-    var allNames = ["stats","files","trash","pool","tags","gen","keys","users","show","cmds","api","ops"];
+    var allNames = ["stats","files","trash","unsaved","pool","tags","gen","keys","users","show","cmds","api","ops"];
     for (var i = 0; i < allNames.length; i++) {
       panels[i].className = "panel";
       tabs[i].className = "tab";
@@ -765,6 +781,7 @@ function init() {
     if (name === "stats") loadStats();
     if (name === "files") loadFiles(1);
     if (name === "trash") loadTrash(1);
+    if (name === "unsaved") loadUnsaved(1);
     if (name === "pool") { loadPool(); initPresetTags(); }
     if (name === "tags") loadTagsPage();
     if (name === "gen") loadGen();
@@ -1187,6 +1204,26 @@ function init() {
     }
     var trPage = t.closest("[data-action='trash-page']");
     if (trPage) { loadTrash(parseInt(trPage.getAttribute("data-p"))); return; }
+    // 未转存：转存/删除/分页/全部重试/刷新
+    var usRetry = t.closest("[data-action='unsaved-retry']");
+    if (usRetry) { retryUnsavedIds([parseInt(usRetry.getAttribute("data-id"))]); return; }
+    var usPage = t.closest("[data-action='unsaved-page']");
+    if (usPage) { loadUnsaved(parseInt(usPage.getAttribute("data-p"))); return; }
+    var usDel = t.closest("[data-action='unsaved-delete']");
+    if (usDel) {
+      var uid = usDel.getAttribute("data-id");
+      if (confirm("删除该未转存记录？将移入回收站。")) {
+        api("DELETE", "/admin/api/files?id=" + uid).then(function(r) {
+          if (r.ok) { toast("已移入回收站", 1); loadUnsaved(unsavedPage); } else toast(r.error || "删除失败", 0);
+        });
+      }
+      return;
+    }
+    if (t.closest("[data-action='unsaved-retry-all']")) {
+      if (confirm("确定重试全部未转存记录？")) retryUnsavedIds([]);
+      return;
+    }
+    if (t.closest("[data-action='unsaved-refresh']")) { loadUnsaved(unsavedPage); return; }
     // R2 孤儿对象
     if (t.closest("[data-action='r2-inspect']")) { inspectR2(); return; }
     var r2Clean = t.closest("[data-action='r2-cleanup']");
@@ -1525,6 +1562,53 @@ async function purgeTrashAll() {
   var r = await api("DELETE", "/admin/api/files?purge=1&all=1");
   if (r.ok) { toast(r.message || "回收站已清空", 1); loadTrash(trashPage); }
   else toast(r.error || "清空失败", 0);
+}
+
+// ===== 未转存 =====
+var unsavedPage = 1;
+async function loadUnsaved(page) {
+  unsavedPage = page || 1;
+  var el = document.getElementById("unsavedList");
+  var cnt = document.getElementById("unsavedCount");
+  el.innerHTML = "加载中...";
+  var r = await api("GET", "/admin/api/unsaved?page=" + unsavedPage + "&page_size=20");
+  if (!r.ok) { el.innerHTML = '<div class="empty">' + escStr(r.error || "加载失败") + '</div>'; return; }
+  var d = r.data;
+  var items = d.items || [];
+  if (cnt) cnt.innerHTML = "（共 " + (d.total || 0) + " 条）";
+  if (!items.length) { el.innerHTML = '<div class="empty">暂无未转存记录，全部已入库完成 ✓</div>'; document.getElementById("unsavedPager").innerHTML = ""; return; }
+  var stBadge = { pending: ["badge", "待转存"], downloading: ["badge badge-blue", "下载中"], uploading: ["badge", "上传中"], failed: ["badge badge-red", "失败"] };
+  var h = '<table><thead><tr><th>ID</th><th>文件</th><th>类型</th><th>大小</th><th>群组</th><th>状态</th><th>错误</th><th>入库时间</th><th>操作</th></tr></thead><tbody>';
+  for (var i = 0; i < items.length; i++) {
+    var f = items[i];
+    var st = stBadge[f.processing_state] || ["badge", f.processing_state];
+    h += '<tr><td>#' + f.id + '</td>';
+    h += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escStr(f.file_name || "") + '</td>';
+    h += '<td>' + escStr(f.file_type || "") + '</td>';
+    h += '<td>' + fmtSize(f.file_size) + '</td>';
+    h += '<td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escStr(f.chat_title || "") + '</td>';
+    h += '<td><span class="' + st[0] + '">' + st[1] + '</span></td>';
+    h += '<td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#e0245e">' + escStr(f.error_msg || "") + '</td>';
+    h += '<td>' + escStr((f.created_at || "").replace("T", " ").slice(0, 16)) + '</td>';
+    h += '<td><button class="btn btn-ghost btn-sm" data-action="unsaved-retry" data-id="' + f.id + '">转存</button> ';
+    h += '<button class="btn btn-danger btn-sm" data-action="unsaved-delete" data-id="' + f.id + '">删除</button></td></tr>';
+  }
+  h += '</tbody></table>';
+  el.innerHTML = h;
+  var tp = d.total_pages || 1;
+  var pg = '';
+  if (tp > 1) {
+    pg += '<button class="btn btn-ghost btn-sm" data-action="unsaved-page" data-p="' + Math.max(1, unsavedPage - 1) + '"' + (unsavedPage <= 1 ? " disabled" : "") + '>上一页</button> ';
+    pg += '<span style="margin:0 8px;font-size:12px">' + unsavedPage + ' / ' + tp + '</span>';
+    pg += '<button class="btn btn-ghost btn-sm" data-action="unsaved-page" data-p="' + Math.min(tp, unsavedPage + 1) + '"' + (unsavedPage >= tp ? " disabled" : "") + '>下一页</button>';
+  }
+  document.getElementById("unsavedPager").innerHTML = pg;
+}
+
+async function retryUnsavedIds(ids) {
+  var r = await api("POST", "/admin/api/unsaved/retry", { ids: ids });
+  if (r.ok) { toast("已发起重试：" + (r.started || 0) + " / " + (r.total || 0), 1); setTimeout(function(){ loadUnsaved(unsavedPage); }, 2000); }
+  else toast(r.error || "重试失败", 0);
 }
 
 // ===== R2 孤儿对象 =====

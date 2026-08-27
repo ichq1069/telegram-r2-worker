@@ -43,6 +43,9 @@ export default {
     if (m === 'GET' && p === '/admin/api/dedup/groups') return isAdmin ? handleDedupGroups(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/processing') return isAdmin ? handleProcessingStatus(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/retry') return isAdmin ? handleRetry(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 未转存列表（已入库但未完成）+ 批量重试
+    if (m === 'GET' && p === '/admin/api/unsaved') return isAdmin ? handleUnsavedList(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/unsaved/retry') return isAdmin ? handleUnsavedRetry(request, env) : json({ok:false,error:'Unauthorized'},401);
     // Trash (soft-deleted files) + R2 storage maintenance
     if (m === 'GET' && p === '/admin/api/trash') return isAdmin ? handleTrashList(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/trash/restore') return isAdmin ? handleTrashRestore(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -164,6 +167,12 @@ export default {
       await handlePollUpdates(env, ctx);
     } catch (e) {
       console.error('scheduled:', e.message);
+    }
+    // 兜底转存：每 5 分钟重试几条未完成记录（先入库、异步转存策略的定时触发）
+    try {
+      await retryUnsavedCron(env, ctx);
+    } catch (e) {
+      console.error('scheduled retryUnsaved:', e.message);
     }
   },
 };
@@ -385,6 +394,16 @@ async function processUpdateCore(update, env, waitFn) {
           ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', msgId, date.toISOString()).run();
           rid = r.meta?.last_row_id;
         } catch (e) { console.error('D1 pending:', e.message); }
+      }
+      // 入库确认（秒回，不 @ 用户）：让用户知道编号与入库数；转存异步进行
+      if (rid && env.TG_BOT_TOKEN) {
+        try {
+          await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: '📥 已入库 #' + rid + (fi.fileName ? ' · ' + String(fi.fileName).slice(0, 40) : '') })
+          });
+        } catch (e) {}
       }
       // Process via Queue (reliable, 15min limit) or fallback to waitUntil
       const task = {
@@ -635,6 +654,16 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env) 
       var f = null;
       try { f = await env.D1_DB.prepare('SELECT file_name, chat_title FROM files WHERE id=?').bind(dbId).first(); } catch (e) {}
       notifyAdmin(env, '转存失败: ' + ((f && f.file_name) || dbId) + ((f && f.chat_title) ? ' | ' + f.chat_title : '') + '\n' + String(err).slice(0, 300));
+      // 通知原聊天：已入库但转存失败，可在后台「未转存」页手动重试，或等待定时任务自动重试
+      if (chatId && env.TG_BOT_TOKEN) {
+        try {
+          await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: '⚠️ #' + dbId + ' 已入库但转存失败：' + String(err).slice(0, 120) + '\n可在后台「未转存」页重试' })
+          });
+        } catch (e) {}
+      }
     }
   }
   async function updateProgress(state, bytes, total) {
@@ -2630,6 +2659,75 @@ async function handleRetry(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
+// 未转存列表：已入库但 processing_state 不是 completed 的记录（pending/downloading/uploading/failed）
+async function handleUnsavedList(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    const u = new URL(request.url);
+    const pg = clampInt(u.searchParams.get('page') || '1', 1, 1);
+    const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100);
+    const off = (pg - 1) * ps;
+    // 卡住超 30 分钟的记录标记为 failed（crashed waitUntil/queue 任务）
+    try { await env.D1_DB.prepare("UPDATE files SET processing_state='failed' WHERE processing_state IN ('downloading','hashing','uploading','saving') AND deleted_at IS NULL AND julianday(created_at) < julianday('now','-30 minutes')").run(); } catch (e) {}
+    const t = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed'").first();
+    const d = await env.D1_DB.prepare("SELECT id, file_name, file_type, file_size, chat_title, chat_id, message_id, telegram_file_id, processing_state, error_msg, created_at FROM files WHERE deleted_at IS NULL AND processing_state != 'completed' ORDER BY id DESC LIMIT ? OFFSET ?").bind(ps, off).all();
+    return json({ ok: true, data: { total: t?.c || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.c || 0) / ps), items: d.results || [] } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+
+// 批量重试未转存：body { ids:[...] } 或 { all:true }（默认最多 50 条 pending/failed）
+async function handleUnsavedRetry(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    const b = await request.json().catch(function(){ return null; });
+    let rows = [];
+    if (b && Array.isArray(b.ids) && b.ids.length) {
+      const marks = b.ids.map(function(){ return '?'; }).join(',');
+      rows = (await env.D1_DB.prepare('SELECT * FROM files WHERE id IN (' + marks + ') AND deleted_at IS NULL').bind.apply(null, b.ids).all()).results || [];
+    } else {
+      rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 50").all()).results || [];
+    }
+    let started = 0;
+    for (const f of rows) {
+      const fi = { type: f.file_type, fileId: f.telegram_file_id, fileName: f.file_name || 'file_' + f.id, fileSize: f.file_size || 0, width: f.width || 0, height: f.height || 0 };
+      const date = new Date(f.created_at || Date.now());
+      await env.D1_DB.prepare("UPDATE files SET processing_state='downloading', progress_bytes=0, total_bytes=?, error_msg='' WHERE id=?").bind(f.file_size || 0, f.id).run();
+      const task = { dbId: f.id, fi: fi, chatId: f.chat_id || '', msgId: f.message_id || '', chat: { title: f.chat_title, username: f.chat_username, type: f.chat_type }, from: { id: f.user_id, username: f.username, first_name: '', last_name: '' }, date: date.toISOString() };
+      if (env.FILE_QUEUE) {
+        try { await env.FILE_QUEUE.send(task); started++; } catch (e) {}
+      } else {
+        processFileAsync(f.id, fi, f.chat_id || '', f.message_id || '', task.chat, task.from, date, env).catch(function(e){ console.error('unsaved retry:', e.message); });
+        started++;
+      }
+    }
+    return json({ ok: true, started: started, total: rows.length });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+
+// Cron 兜底转存：每次最多 4 条 pending/failed，每条限时 ~6s（scheduled 免费版墙钟 30s）
+async function retryUnsavedCron(env, ctx) {
+  if (!env.D1_DB) return;
+  try {
+    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 4").all();
+    for (const row of d.results || []) {
+      const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=?').bind(row.id).first();
+      if (!f) continue;
+      const fi = { type: f.file_type, fileId: f.telegram_file_id, fileName: f.file_name || 'file_' + f.id, fileSize: f.file_size || 0, width: f.width || 0, height: f.height || 0 };
+      const date = new Date(f.created_at || Date.now());
+      const task = { dbId: f.id, fi: fi, chatId: f.chat_id || '', msgId: f.message_id || '', chat: { title: f.chat_title, username: f.chat_username, type: f.chat_type }, from: { id: f.user_id, username: f.username, first_name: '', last_name: '' }, date: date.toISOString() };
+      await env.D1_DB.prepare("UPDATE files SET processing_state='downloading', progress_bytes=0, total_bytes=?, error_msg='' WHERE id=?").bind(f.file_size || 0, f.id).run();
+      if (env.FILE_QUEUE) {
+        try { await env.FILE_QUEUE.send(task); } catch (e) {}
+      } else {
+        const p = processFileAsync(f.id, fi, f.chat_id || '', f.message_id || '', task.chat, task.from, date, env).catch(function(e){ console.error('cron retry:', e.message); });
+        if (ctx && ctx.waitUntil) ctx.waitUntil(p);
+        // 每条最多等 6s，避免整批超 scheduled 30s 限制
+        await Promise.race([p, new Promise(function(res){ setTimeout(res, 6000); })]);
+      }
+    }
+  } catch (e) { console.error('retryUnsavedCron:', e.message); }
+}
+
 // Processing status
 async function handleProcessingStatus(env) {
   if (!env.D1_DB) return json({ ok: true, data: [] });
@@ -2701,7 +2799,8 @@ async function handleDedup(request, env) {
     await ensureTablesOnce(env.D1_DB);
     const purge = new URL(request.url).searchParams.get('purge') === '1';
     // Get all files without md5_hash
-    const missing = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE deleted_at IS NULL AND (md5_hash='' OR md5_hash IS NULL) LIMIT 50").all();
+    // 分批处理避免 30s 墙钟超时：每次最多 15 个 MD5 计算
+    const missing = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE deleted_at IS NULL AND (md5_hash='' OR md5_hash IS NULL) LIMIT 15").all();
     let computed = 0;
     for (const f of (missing.results || [])) {
       try {
@@ -2723,7 +2822,7 @@ async function handleDedup(request, env) {
     for (const d of (dups.results || [])) {
       // Keep the most valuable row per group (pool-imported > tagged > completed > oldest).
       const rows = await env.D1_DB.prepare(
-        "SELECT id, storage_key FROM files WHERE md5_hash=? AND deleted_at IS NULL ORDER BY CASE WHEN pool_status='imported' THEN 0 WHEN tags!='' THEN 1 WHEN processing_state='completed' THEN 2 ELSE 3 END, id ASC LIMIT 1000"
+        "SELECT id, storage_key FROM files WHERE md5_hash=? AND deleted_at IS NULL ORDER BY CASE WHEN pool_status='imported' THEN 0 WHEN tags!='' THEN 1 WHEN processing_state='completed' THEN 2 ELSE 3 END, id ASC LIMIT 200"
       ).bind(d.md5_hash).all();
       const res = rows.results || [];
       if (res.length < 2) continue;
