@@ -433,6 +433,22 @@ https://example.com/b.jpg"></textarea></div>
       </div>
     </div>
 
+    <!-- 标签库 -->
+    <div class="panel" id="panel-tags">
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>标签库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">预设标签用于上传时一键点选；可把常用标签加入预设，保证命名统一</span></div>
+          <div style="display:flex;gap:8px">
+            <input class="inp" style="width:220px" id="tagsNew" placeholder="新标签名（可逗号分隔多个）">
+            <button class="btn btn-primary" id="tagsAddBtn">添加预设</button>
+          </div>
+        </div>
+        <div class="fr" style="margin-top:12px"><label>当前预设标签（点 ✕ 移除）</label><div id="tagsPresetList" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div></div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-top:16px">全部已用标签（点「+」加入预设；数字为该标签关联的图片数）</div>
+        <div id="tagsAllList" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
+      </div>
+    </div>
+
     <!-- 接口生成 -->
     <div class="panel" id="panel-gen">
       <div class="card">
@@ -475,6 +491,15 @@ https://example.com/b.jpg"></textarea></div>
           <code>GET /api/v1/random?api_key=密钥&tags=风景&count=1</code>（随机取图）
         </div>
         <div id="keyList"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>公开接口限流 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">防止密钥被滥用打爆 Worker 免费额度</span></div>
+        <div class="fb">
+          <div class="fr" style="flex:1;margin:0"><label>每分钟每个密钥最多请求数</label><input class="inp" type="number" id="rlLimit" value="60" min="1" style="max-width:160px"></div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap"><input type="checkbox" id="rlEnabled"> 启用限流</label>
+          <button class="btn btn-primary" id="rlSaveBtn">保存</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">超过限制的请求返回 429。关闭时所有密钥不限流。</div>
       </div>
     </div>
 
@@ -612,6 +637,29 @@ https://example.com/b.jpg"></textarea></div>
         <pre class="api-result" id="apiResult">等待发送...</pre>
       </div>
     </div>
+
+    <!-- 运维 -->
+    <div class="panel" id="panel-ops">
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>D1 数据备份 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">备份存到 R2 的 backups/ 目录，自动保留最近 20 份</span></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" id="backupBtn">立即备份到 R2</button>
+            <button class="btn btn-ghost" id="backupDownloadBtn">导出并下载</button>
+          </div>
+        </div>
+        <div id="backupList" style="margin-top:12px;font-size:12px"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>转存失败告警 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">转存失败时通过 bot 发消息提醒你（5 分钟最多 1 条，防刷屏）</span></div>
+        <div class="fb">
+          <div class="fr" style="flex:1;margin:0"><label>你的 Telegram 用户 ID</label><input class="inp" id="notifyChatId" placeholder="例如 123456789（向 bot 发一条消息后从 @userinfobot 获取）"></div>
+          <button class="btn btn-primary" id="notifySaveBtn">保存</button>
+          <button class="btn btn-ghost" id="notifyTestBtn">发送测试</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">告警消息由 bot 直接发给你。首次使用时：先给 @tkxin_bot 发一条消息，再用 @userinfobot 查出你的 ID 填到这里。</div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -691,7 +739,7 @@ function toast(msg, ok) {
 // 初始化
 function init() {
   // Tab 栏
-  var tabData = [["stats","概览"],["files","Tele文件"],["trash","回收站"],["pool","随机库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"]];
+  var tabData = [["stats","概览"],["files","Tele文件"],["trash","回收站"],["pool","随机库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
   var tabBar = document.getElementById("tabBar");
   var html = "";
   for (var i = 0; i < tabData.length; i++) {
@@ -705,7 +753,7 @@ function init() {
     var name = tab.getAttribute("data-tab");
     var panels = document.querySelectorAll(".panel");
     var tabs = tabBar.querySelectorAll(".tab");
-    var allNames = ["stats","files","trash","pool","gen","keys","users","show","cmds","api"];
+    var allNames = ["stats","files","trash","pool","tags","gen","keys","users","show","cmds","api","ops"];
     for (var i = 0; i < allNames.length; i++) {
       panels[i].className = "panel";
       tabs[i].className = "tab";
@@ -718,11 +766,13 @@ function init() {
     if (name === "files") loadFiles(1);
     if (name === "trash") loadTrash(1);
     if (name === "pool") { loadPool(); initPresetTags(); }
+    if (name === "tags") loadTagsPage();
     if (name === "gen") loadGen();
-    if (name === "keys") loadKeys();
+    if (name === "keys") { loadKeys(); loadRateLimitCfg(); }
     if (name === "users") loadUsers();
     if (name === "show") loadShowConfig();
     if (name === "cmds") loadCmds();
+    if (name === "ops") loadOpsPage();
   });
 
   // 随机库 · 存储源切换（本地上传 / Zupimages / Postimages / 外链链接）
@@ -1661,6 +1711,182 @@ document.addEventListener("click", function(ev) {
 
 // 管理标签库按钮
 document.getElementById("btnManageTags").addEventListener("click", function() { showPresetTagsModal(); });
+
+// ==================== 标签库独立页面 ====================
+async function loadTagsPage() {
+  renderTagsPreset();
+  try {
+    const r = await api("GET", "/admin/api/tags");
+    const el = document.getElementById("tagsAllList");
+    if (!el) return;
+    if (!r.ok || !r.data || !r.data.length) { el.innerHTML = '<span style="color:var(--text-secondary)">暂无标签，先给图片打标签</span>'; return; }
+    var h = "";
+    for (var i = 0; i < r.data.length; i++) {
+      var t = r.data[i];
+      var isPre = presetTags.indexOf(t.tag) !== -1;
+      h += '<span style="padding:3px 10px;border:1px solid ' + (isPre ? 'var(--primary)' : 'var(--border)') + ';border-radius:20px;font-size:12px;background:' + (isPre ? 'rgba(37,99,235,.08)' : 'var(--card)') + ';color:var(--text-secondary)">#' + escStr(t.tag) + ' (' + t.count + ')' + (isPre ? '' : ' <a href="javascript:void(0)" class="tags-add" data-tag="' + escStr(t.tag) + '" style="color:var(--primary);font-weight:700;margin-left:2px">＋</a>') + '</span>';
+    }
+    el.innerHTML = h;
+    var adds = el.querySelectorAll(".tags-add");
+    for (var j = 0; j < adds.length; j++) {
+      adds[j].onclick = (function(a) {
+        return function(ev) {
+          ev.preventDefault();
+          var t = a.getAttribute("data-tag");
+          if (presetTags.indexOf(t) === -1) presetTags.push(t);
+          savePresetTagsFromPage();
+          renderTagsPreset();
+          loadTagsPage();
+        };
+      })(adds[j]);
+    }
+  } catch (e) {}
+}
+
+function renderTagsPreset() {
+  var el = document.getElementById("tagsPresetList");
+  if (!el) return;
+  if (!presetTags.length) { el.innerHTML = '<span style="font-size:12px;color:var(--text-secondary)">暂无预设标签</span>'; return; }
+  var h = "";
+  for (var i = 0; i < presetTags.length; i++) {
+    h += '<span style="padding:3px 10px;border:1px solid var(--primary);border-radius:20px;font-size:12px;background:rgba(37,99,235,.08);color:var(--text)">#' + escStr(presetTags[i]) + ' <a href="javascript:void(0)" class="tags-del" data-tag="' + escStr(presetTags[i]) + '" style="color:#e5484d;margin-left:4px;font-weight:700">✕</a></span>';
+  }
+  el.innerHTML = h;
+  var dels = el.querySelectorAll(".tags-del");
+  for (var j = 0; j < dels.length; j++) {
+    dels[j].onclick = (function(a) {
+      return function(ev) {
+        ev.preventDefault();
+        var t = a.getAttribute("data-tag");
+        var idx = presetTags.indexOf(t);
+        if (idx !== -1) presetTags.splice(idx, 1);
+        renderTagsPreset();
+        savePresetTagsFromPage();
+      };
+    })(dels[j]);
+  }
+}
+
+function savePresetTagsFromPage() {
+  api("POST", "/admin/api/settings/pool-tags", { tags: presetTags }).then(function(r) {
+    if (r && r.ok) { presetTags = (r.data && r.data.tags) || []; renderPresetChipsAll(); }
+  });
+}
+
+document.getElementById("tagsAddBtn").addEventListener("click", function() {
+  var v = document.getElementById("tagsNew").value.trim();
+  if (!v) return;
+  v.split(",").map(function(s){ return s.trim(); }).filter(Boolean).forEach(function(t) {
+    if (presetTags.indexOf(t) === -1) presetTags.push(t);
+  });
+  document.getElementById("tagsNew").value = "";
+  renderTagsPreset();
+  savePresetTagsFromPage();
+  loadTagsPage();
+});
+
+// ==================== 运维页面（备份 + 告警） ====================
+async function loadOpsPage() {
+  loadBackupList();
+  try {
+    const r = await api("GET", "/admin/api/settings/notify");
+    if (r && r.ok) document.getElementById("notifyChatId").value = (r.data && r.data.chat_id) || "";
+  } catch (e) {}
+}
+
+async function loadBackupList() {
+  var el = document.getElementById("backupList");
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text-secondary)">加载中...</span>';
+  try {
+    const r = await api("GET", "/admin/api/backup/list");
+    if (!r.ok || !r.data || !r.data.backups || !r.data.backups.length) { el.innerHTML = '<span style="color:var(--text-secondary)">暂无备份。点「立即备份到 R2」生成第一份。</span>'; return; }
+    var h = '<table><thead><tr><th>备份时间</th><th>大小</th><th>操作</th></tr></thead><tbody>';
+    for (var i = 0; i < r.data.backups.length; i++) {
+      var b = r.data.backups[i];
+      var nm = b.key.replace("backups/db-", "").replace(".json", "");
+      h += '<tr><td style="font-size:12px">' + escStr(nm) + '</td><td style="font-size:12px">' + fmtSize(b.size) + '</td>'
+        + '<td><button class="btn btn-ghost btn-sm backup-dl" data-key="' + escStr(b.key) + '">下载</button> <button class="btn btn-danger btn-sm backup-del" data-key="' + escStr(b.key) + '">删除</button></td></tr>';
+    }
+    h += '</tbody></table>';
+    el.innerHTML = h;
+    var dls = el.querySelectorAll(".backup-dl");
+    for (var j = 0; j < dls.length; j++) dls[j].onclick = function() { downloadBackup(this.getAttribute("data-key")); };
+    var dels = el.querySelectorAll(".backup-del");
+    for (var k = 0; k < dels.length; k++) dels[k].onclick = function() { delBackup(this.getAttribute("data-key")); };
+  } catch (e) { el.innerHTML = '<span style="color:#e5484d">加载失败: ' + escStr(e.message) + '</span>'; }
+}
+
+document.getElementById("backupBtn").addEventListener("click", function() {
+  var btn = this;
+  btn.disabled = true; btn.textContent = "备份中...";
+  api("POST", "/admin/api/backup").then(function(r) {
+    btn.disabled = false; btn.textContent = "立即备份到 R2";
+    if (r && r.ok) { toast("备份完成：" + r.data.name.replace("backups/db-", "").replace(".json", ""), 1); loadBackupList(); }
+    else toast((r && r.error) || "备份失败", 0);
+  });
+});
+
+document.getElementById("backupDownloadBtn").addEventListener("click", function() {
+  var btn = this;
+  btn.disabled = true; btn.textContent = "导出中...";
+  api("GET", "/admin/api/backup").then(function(r) {
+    btn.disabled = false; btn.textContent = "导出并下载";
+    if (r && r.ok && r.data) {
+      var blob = new Blob([JSON.stringify(r.data, null, 2)], { type: "application/json" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "d1-backup-" + new Date().toISOString().replace(/[:.]/g, "-") + ".json";
+      a.click();
+      toast("已导出", 1);
+    } else toast((r && r.error) || "导出失败", 0);
+  });
+});
+
+function downloadBackup(key) {
+  window.open("https://telegramup.wo58.cn/" + key, "_blank");
+}
+
+function delBackup(key) {
+  if (!confirm("删除备份 " + key.replace("backups/db-", "") + "？")) return;
+  api("DELETE", "/admin/api/backup?name=" + encodeURIComponent(key)).then(function(r) {
+    if (r && r.ok) { toast("已删除", 1); loadBackupList(); } else toast((r && r.error) || "删除失败", 0);
+  });
+}
+
+document.getElementById("notifySaveBtn").addEventListener("click", function() {
+  var v = document.getElementById("notifyChatId").value.trim();
+  api("POST", "/admin/api/settings/notify", { chat_id: v }).then(function(r) {
+    if (r && r.ok) toast("告警设置已保存", 1); else toast((r && r.error) || "保存失败", 0);
+  });
+});
+
+document.getElementById("notifyTestBtn").addEventListener("click", function() {
+  var v = document.getElementById("notifyChatId").value.trim();
+  if (!v) { toast("请先填写用户 ID", 0); return; }
+  api("POST", "/admin/api/settings/notify-test", { chat_id: v }).then(function(r) {
+    if (r && r.ok) toast("测试消息已发送，请到 bot 查收", 1); else toast((r && r.error) || "发送失败", 0);
+  });
+});
+
+// ==================== API 限流配置 ====================
+async function loadRateLimitCfg() {
+  try {
+    const r = await api("GET", "/admin/api/settings/rate-limit");
+    if (r && r.ok && r.data) {
+      document.getElementById("rlEnabled").checked = !!r.data.enabled;
+      document.getElementById("rlLimit").value = r.data.limit_per_min || 60;
+    }
+  } catch (e) {}
+}
+
+document.getElementById("rlSaveBtn").addEventListener("click", function() {
+  var enabled = document.getElementById("rlEnabled").checked;
+  var limit = parseInt(document.getElementById("rlLimit").value, 10) || 60;
+  api("POST", "/admin/api/settings/rate-limit", { enabled: enabled, limit_per_min: limit }).then(function(r) {
+    if (r && r.ok) toast("限流设置已保存", 1); else toast((r && r.error) || "保存失败", 0);
+  });
+});
 
 // 打标签弹窗
 var tagTargetIds = [];

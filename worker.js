@@ -79,6 +79,16 @@ export default {
     if (m === 'POST' && p === '/admin/api/settings/pi-key') return isAdmin ? handleAdminSavePiKey(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminGetPoolTags(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminSavePoolTags(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // D1 备份 / 失败告警配置 / API 限流配置
+    if (m === 'GET' && p === '/admin/api/backup') return isAdmin ? handleAdminBackup(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/backup') return isAdmin ? handleAdminBackupSave(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/backup/list') return isAdmin ? handleAdminBackupList(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'DELETE' && p === '/admin/api/backup') return isAdmin ? handleAdminBackupDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/settings/notify') return isAdmin ? handleAdminGetNotify(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/notify') return isAdmin ? handleAdminSaveNotify(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/settings/rate-limit') return isAdmin ? handleAdminGetRateLimit(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/rate-limit') return isAdmin ? handleAdminSaveRateLimit(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/notify-test') return isAdmin ? handleAdminNotifyTest(request, env) : json({ok:false,error:'Unauthorized'},401);
 
     // Bot API routes (no auth needed, verified by Telegram)
     if (m === 'POST' && p === '/bot/sendMessage') return handleBotSendMessage(request, env);
@@ -101,6 +111,7 @@ export default {
     if (m === 'GET' && (p === '/api/v1/files' || p === '/api/v1/random')) {
       const k = await checkApiKey(request, env);
       if (!k) return json({ ok: false, error: 'Unauthorized or invalid API key' }, 401);
+      if (k.limited) return json({ ok: false, error: 'Rate limit exceeded' }, 429);
       if (p === '/api/v1/random') return handlePublicRandom(request, env);
       return handlePublicFiles(request, env);
     }
@@ -197,7 +208,8 @@ async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0);" +
     "CREATE TABLE IF NOT EXISTS random_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, thumb_url TEXT, title TEXT, tags TEXT DEFAULT '', file_type TEXT DEFAULT 'photo', width INTEGER, height INTEGER, file_size INTEGER, source TEXT DEFAULT 'manual', tg_file_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT);" +
     "CREATE INDEX IF NOT EXISTS idx_pool_url ON random_pool(url);" +
-    "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);"
+    "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, window TEXT NOT NULL, count INTEGER DEFAULT 0, UNIQUE(key, window));"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -561,6 +573,11 @@ async function processShareLinkAsync(dbId, link, chatId, msgId, chat, from, date
     if (env.D1_DB && dbId) {
       try { await env.D1_DB.prepare('UPDATE files SET processing_state=?, error_msg=? WHERE id=?').bind(state, err || '', dbId).run(); } catch (e) {}
     }
+    if (state === 'failed' && err) {
+      var f = null;
+      try { f = await env.D1_DB.prepare('SELECT file_name, chat_title FROM files WHERE id=?').bind(dbId).first(); } catch (e) {}
+      notifyAdmin(env, '转存失败: ' + ((f && f.file_name) || dbId) + ((f && f.chat_title) ? ' | ' + f.chat_title : '') + '\n' + String(err).slice(0, 300));
+    }
   }
   await acquireTransferSlot();
   try {
@@ -660,6 +677,11 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env) 
   async function updateState(state, err) {
     if (env.D1_DB && dbId) {
       try { await env.D1_DB.prepare('UPDATE files SET processing_state=?, error_msg=? WHERE id=?').bind(state, err || '', dbId).run(); } catch(e) {}
+    }
+    if (state === 'failed' && err) {
+      var f = null;
+      try { f = await env.D1_DB.prepare('SELECT file_name, chat_title FROM files WHERE id=?').bind(dbId).first(); } catch (e) {}
+      notifyAdmin(env, '转存失败: ' + ((f && f.file_name) || dbId) + ((f && f.chat_title) ? ' | ' + f.chat_title : '') + '\n' + String(err).slice(0, 300));
     }
   }
   async function updateProgress(state, bytes, total) {
@@ -843,16 +865,21 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env) 
       }
     }
 
-    // Generate thumbnail from Telegram-provided thumbnail (best effort, small file)
-    if (uploadedNew && fi.thumb && !thumbUrl) {
-      try {
-        const tfd = await dlFileLarger(fi.thumb, 0, env.TG_BOT_TOKEN, [OFFICIAL_API].concat(tgApiBases(env)));
-        if (tfd && !tfd.error && tfd.buf && tfd.buf.byteLength > 0) {
-          const tkey = key.replace(/\.[^.]+$/, '') + '_thumb.jpg';
-          const tu = await putR2(tkey, tfd.buf, 'image/jpeg', env);
-          if (tu) thumbUrl = tu;
-        }
-      } catch (e) { console.log('thumb gen fail dbId=' + dbId + ':', e.message); }
+    // Generate thumbnail (best effort): Telegram-provided thumbnail first, then Image Resizing WebP
+    if (uploadedNew && !thumbUrl) {
+      if (fi.thumb) {
+        try {
+          const tfd = await dlFileLarger(fi.thumb, 0, env.TG_BOT_TOKEN, [OFFICIAL_API].concat(tgApiBases(env)));
+          if (tfd && !tfd.error && tfd.buf && tfd.buf.byteLength > 0) {
+            const tkey = key.replace(/\.[^.]+$/, '') + '_thumb.jpg';
+            const tu = await putR2(tkey, tfd.buf, 'image/jpeg', env);
+            if (tu) thumbUrl = tu;
+          }
+        } catch (e) { console.log('thumb gen fail dbId=' + dbId + ':', e.message); }
+      }
+      if (!thumbUrl && fi.type === 'photo' && url) {
+        thumbUrl = await genThumb(env, url, key);
+      }
     }
 
     await updateState('saving');
@@ -1732,12 +1759,27 @@ async function checkApiKey(request, env) {
   if (!k) return null;
   try {
     const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 LIMIT 1').bind(k).first();
-    if (rec) {
-      // usage bump (fire and forget)
-      env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
-    }
-    return rec || null;
+    if (!rec) return null;
+    // usage bump (fire and forget)
+    env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
+    // 限流：settings.api_rate_limit = {enabled, limit_per_min}
+    const limited = await applyRateLimit(env, k);
+    return { rec: rec, limited: limited };
   } catch (e) { console.error('checkApiKey:', e.message); return null; }
+}
+
+// 公开 API 限流：按 api_key + 分钟窗口计数（D1），超限返回 true
+async function applyRateLimit(env, key) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'api_rate_limit'").first();
+    let cfg = { enabled: false, limit_per_min: 60 };
+    if (s && s.value) { try { cfg = Object.assign(cfg, JSON.parse(s.value)); } catch (e) {} }
+    if (!cfg.enabled || !cfg.limit_per_min) return false;
+    const win = String(Math.floor(Date.now() / 60000));
+    await env.D1_DB.prepare("INSERT INTO rate_limits (key, window, count) VALUES (?, ?, 1) ON CONFLICT(key, window) DO UPDATE SET count=count+1").bind(key, win).run();
+    const r = await env.D1_DB.prepare("SELECT count FROM rate_limits WHERE key=? AND window=?").bind(key, win).first();
+    return !!(r && r.count > cfg.limit_per_min);
+  } catch (e) { console.error('applyRateLimit:', e.message); return false; }
 }
 
 function appendTagFilter(tagsParam, w, p, prefix) {
@@ -2224,6 +2266,145 @@ async function handleAdminPoolToggle(request, env) {
     if (!b || !b.id) return json({ ok: false, error: 'id required' }, 400);
     await env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, b.id).run();
     return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== D1 备份 / 失败告警 / 限流配置 / 缩略图 ====================
+
+// 转存失败时通过 bot 发消息给管理员（settings.admin_chat_id 或 env.ADMIN_CHAT_ID，5 分钟节流防刷屏）
+async function notifyAdmin(env, text) {
+  try {
+    let chatId = '';
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'admin_chat_id'").first();
+    if (s && s.value) chatId = String(s.value).trim();
+    if (!chatId && env.ADMIN_CHAT_ID) chatId = String(env.ADMIN_CHAT_ID).trim();
+    if (!chatId || !env.TG_BOT_TOKEN) return;
+    const ns = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'admin_notify_last'").first();
+    const last = ns && ns.value ? (parseInt(ns.value, 10) || 0) : 0;
+    if (Date.now() - last < 5 * 60 * 1000) return;
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('admin_notify_last', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run();
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: '\u26A0\uFE0F ' + String(text).slice(0, 1500), disable_web_page_preview: true })
+    });
+  } catch (e) { console.log('notifyAdmin error:', e.message); }
+}
+
+// 生成 WebP 缩略图（Cloudflare Image Resizing，需账号启用；失败静默跳过）
+async function genThumb(env, r2Url, key) {
+  try {
+    if (!r2Url || !key || !env.R2_BUCKET) return '';
+    const res = await fetch(r2Url, { cf: { image: { width: 480, format: 'webp', quality: 80, fit: 'scale-down' } } });
+    if (!res.ok || !res.body) return '';
+    const thumbKey = 'thumbs/' + key.replace(/^files\//, '').replace(/\.[^.]+$/, '') + '.webp';
+    await env.R2_BUCKET.put(thumbKey, res.body, { httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=31536000' } });
+    return (env.R2_PUBLIC_URL || '') + '/' + thumbKey;
+  } catch (e) { console.log('genThumb error:', e.message); return ''; }
+}
+
+async function dumpAllTables(env) {
+  const tables = await env.D1_DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+  const dump = { exported_at: new Date().toISOString(), version: 'v6', tables: {} };
+  for (const t of tables.results || []) {
+    const rows = await env.D1_DB.prepare('SELECT * FROM "' + t.name + '"').all();
+    dump.tables[t.name] = rows.results || [];
+  }
+  return dump;
+}
+
+async function handleAdminBackup(env) {
+  try {
+    const dump = await dumpAllTables(env);
+    return json({ ok: true, data: dump });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminBackupSave(env) {
+  try {
+    const dump = await dumpAllTables(env);
+    const name = 'backups/db-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19).replace('T', '_') + '.json';
+    await env.R2_BUCKET.put(name, JSON.stringify(dump), { httpMetadata: { contentType: 'application/json' } });
+    // 保留最近 20 份，删除更旧的
+    try {
+      const listed = await env.R2_BUCKET.list({ prefix: 'backups/db-' });
+      const keys = (listed.objects || []).map(function(o){ return o.key; }).sort();
+      while (keys.length > 20) {
+        await env.R2_BUCKET.delete(keys.shift());
+      }
+    } catch (e) {}
+    return json({ ok: true, data: { name: name, tables: Object.keys(dump.tables).length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminBackupList(env) {
+  try {
+    const listed = await env.R2_BUCKET.list({ prefix: 'backups/db-' });
+    const items = (listed.objects || []).map(function(o) {
+      return { key: o.key, size: o.size, uploaded: o.uploaded };
+    }).sort(function(a, b){ return a.uploaded < b.uploaded ? 1 : -1; });
+    return json({ ok: true, data: { backups: items } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminBackupDelete(request, env) {
+  try {
+    const u = new URL(request.url);
+    const name = u.searchParams.get('name') || '';
+    if (!name || name.indexOf('backups/db-') !== 0 || name.indexOf('..') !== -1) return json({ ok: false, error: 'invalid name' }, 400);
+    await env.R2_BUCKET.delete(name);
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminGetNotify(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'admin_chat_id'").first();
+    return json({ ok: true, data: { chat_id: s && s.value ? s.value : '' } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminSaveNotify(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const chatId = b && b.chat_id ? String(b.chat_id).trim().slice(0, 40) : '';
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('admin_chat_id', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(chatId).run();
+    return json({ ok: true, data: { chat_id: chatId } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminNotifyTest(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const chatId = b && b.chat_id ? String(b.chat_id).trim().slice(0, 40) : '';
+    if (!chatId || !env.TG_BOT_TOKEN) return json({ ok: false, error: 'chat_id 或 TG_BOT_TOKEN 未配置' }, 400);
+    const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: '\u2705 告警通道测试成功（来自 telegram-r2-bot）' })
+    });
+    const j = await r.json().catch(() => null);
+    if (j && j.ok) return json({ ok: true });
+    return json({ ok: false, error: (j && j.description) || '发送失败，检查 chat_id 是否正确（先向 bot 发一条消息，再把你的用户 ID 填进来）' }, 400);
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminGetRateLimit(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'api_rate_limit'").first();
+    let cfg = { enabled: false, limit_per_min: 60 };
+    if (s && s.value) { try { cfg = Object.assign(cfg, JSON.parse(s.value)); } catch (e) {} }
+    return json({ ok: true, data: cfg });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminSaveRateLimit(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const enabled = !!(b && b.enabled);
+    const limit = Math.max(1, Math.min(100000, parseInt((b && b.limit_per_min) || 60, 10) || 60));
+    const cfg = { enabled: enabled, limit_per_min: limit };
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('api_rate_limit', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
+    return json({ ok: true, data: cfg });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
