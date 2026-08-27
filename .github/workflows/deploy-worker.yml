@@ -1,17 +1,19 @@
 # GitHub Actions：推送 main 分支即自动部署 Worker 并上传 admin.html 到 R2
+# 本仓库根目录就是 Worker 项目（wrangler.toml / worker.js / admin.html 都在根）
 # 需要的 GitHub Secrets（仓库 → Settings → Secrets and variables → Actions）：
 #   CLOUDFLARE_API_TOKEN : Cloudflare API Token（权限：Account.Cloudflare Workers Scripts:Edit、
 #                         Account.D1:Edit、Account.R2 Storage:Edit、Account.Workers R2 Storage:Edit、
 #                         Account.Account Settings:Read）
-#   CLOUDFLARE_ACCOUNT_ID: Cloudflare 账号 ID（Dashboard 右侧栏可复制）
-#   R2_ADMIN_BUCKET      : 存放 admin.html 的 R2 桶名（通常与 wrangler.toml 的 bucket 相同）
+#   CLOUDFLARE_ACCOUNT_ID: Cloudflare 账号 ID（77fc93b832a9f816ee841c3a321b57b5）
 name: Deploy Worker
 
 on:
   push:
     branches: [main]
     paths:
-      - "telegram-r2-worker/**"
+      - "worker.js"
+      - "admin.html"
+      - "wrangler.toml"
       - ".github/workflows/**"
 
 jobs:
@@ -21,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Syntax check worker.js
-        run: node --check telegram-r2-worker/worker.js
+        run: node --check worker.js
 
       - name: Deploy Worker to Cloudflare
         uses: cloudflare/wrangler-action@v3
@@ -29,12 +31,10 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
-          workingDirectory: telegram-r2-worker
 
-      - name: Upload admin.html to R2
+      - name: Upload admin.html to R2 (bucket: bot-telegram)
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put admin.html --file=admin.html --bucket=${{ secrets.R2_ADMIN_BUCKET }}
-          workingDirectory: telegram-r2-worker
+          command: r2 object put admin.html --file=admin.html --bucket=bot-telegram

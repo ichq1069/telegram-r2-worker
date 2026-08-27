@@ -15,24 +15,17 @@
    - Account · Workers R2 Storage · **Edit**
    - Account · Account Settings · **Read**
    范围限定到部署用的账号。创建后复制 token（只显示一次）。
-3. **GitHub 建私有仓库**：如 `telegram-r2-worker`，然后本地推送：
-   ```bash
-   cd telegram-r2-worker
-   git remote add origin https://github.com/<你的用户名>/telegram-r2-worker.git
-   git branch -M main
-   git push -u origin main
-   ```
-4. **填写 `wrangler.toml` 的两个占位符**（推仓库前填好）：
-   - `PASTE_D1_DATABASE_ID_HERE` → Dashboard → D1 → 你的数据库 → 概览 → 复制 ID
-   - `PASTE_R2_BUCKET_NAME_HERE` → Dashboard → R2 → 复制桶名
-5. **GitHub Secrets**（仓库 → Settings → Secrets and variables → Actions）新增 3 个：
+3. **GitHub Secrets**（仓库 → Settings → Secrets and variables → Actions）新增 2 个：
    - `CLOUDFLARE_API_TOKEN` = 第 2 步的 token
-   - `CLOUDFLARE_ACCOUNT_ID` = Dashboard 右侧栏的账号 ID
-   - `R2_ADMIN_BUCKET` = 存放 admin.html 的桶名（一般与 wrangler.toml 相同）
-6. **确认 Dashboard secrets**：`TG_BOT_TOKEN`、`API_KEY`、`TG_SECRET` 已在
+   - `CLOUDFLARE_ACCOUNT_ID` = `77fc93b832a9f816ee841c3a321b57b5`
+4. **确认 Dashboard secrets**：`TG_BOT_TOKEN`、`API_KEY`、`TG_SECRET` 已在
    Dashboard → Workers → `telegram-r2-bot` → Settings → Variables and Secrets 中配置
    （wrangler 部署不会删除它们，无需迁移）。
-7. **首次推送**后到 GitHub → Actions 页看部署是否成功。
+5. **本地推送**（若换电脑则先 clone）：
+   ```bash
+   git push
+   ```
+   push 后到 GitHub → Actions 页看部署是否成功。
 
 ## 日常操作（任何电脑）
 
