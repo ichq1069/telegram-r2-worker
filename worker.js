@@ -181,9 +181,9 @@ export default {
     } catch (e) {
       console.error('scheduled retryUnsaved:', e.message);
     }
-    // 查重后台化：每 5 分钟算 5 个缺失 MD5 + 清理 1 个重复组（免费版子请求/墙钟限制内，限时 12s）
+    // 查重后台化：每 5 分钟算 3 个缺失 MD5（scheduled 子请求预算有限，不清理留给手动/后台）
     try {
-      await runDedupBatch(env, 5, 1, 12000, false);
+      await runDedupBatch(env, 3, 0, 10000, false);
     } catch (e) {
       console.error('scheduled dedup:', e.message);
     }
@@ -1493,7 +1493,7 @@ async function groupItems(env, groupStr, limit) {
   });
   if (ids.length) {
     const stmt = env.D1_DB.prepare('SELECT id, url, thumb_url, title, tags FROM random_pool WHERE id IN (' + ids.map(function(){ return '?'; }).join(',') + ')');
-    const d = await stmt.bind.apply(stmt, ids).all();
+    const d = await stmt.bind(...ids).all();
     const map = {};
     (d.results || []).forEach(function(r) { map[r.id] = r; });
     ids.forEach(function(id) {
@@ -2811,8 +2811,10 @@ async function handleUnsavedRetry(request, env) {
     const b = await request.json().catch(function(){ return null; });
     let rows = [];
     if (b && Array.isArray(b.ids) && b.ids.length) {
-      const marks = b.ids.map(function(){ return '?'; }).join(',');
-      rows = (await env.D1_DB.prepare('SELECT * FROM files WHERE id IN (' + marks + ') AND deleted_at IS NULL').bind.apply(null, b.ids).all()).results || [];
+      const arr = b.ids.slice(0, 50);
+      const marks = arr.map(function(){ return '?'; }).join(',');
+      // 用展开运算符而非 bind.apply（D1 对 apply(null,...) 会报 dbSession null 错误）
+      rows = (await env.D1_DB.prepare('SELECT * FROM files WHERE id IN (' + marks + ') AND deleted_at IS NULL').bind(...arr).all()).results || [];
     } else {
       // 免费版单调用最多 50 个子请求（每条转存约占 8-12 个），默认批 5 条最安全
       rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 5").all()).results || [];
@@ -2834,11 +2836,11 @@ async function handleUnsavedRetry(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
-// Cron 兜底转存：每次最多 2 条 pending/failed（免费版单调用 50 子请求限制），每条限时 ~10s（scheduled 免费版墙钟 30s）
+// Cron 兜底转存：每次最多 1 条 pending/failed（scheduled 与 webhook 自愈、查重叠加，子请求预算有限）
 async function retryUnsavedCron(env, ctx) {
   if (!env.D1_DB) return;
   try {
-    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 2").all();
+    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 1").all();
     for (const row of d.results || []) {
       const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=?').bind(row.id).first();
       if (!f) continue;
