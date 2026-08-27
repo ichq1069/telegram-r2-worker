@@ -10,11 +10,6 @@ name: Deploy Worker
 on:
   push:
     branches: [main]
-    paths:
-      - "worker.js"
-      - "admin.html"
-      - "wrangler.toml"
-      - ".github/workflows/**"
 
 jobs:
   deploy:
