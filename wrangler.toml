@@ -1,0 +1,24 @@
+# Cloudflare Workers 部署配置（GitHub Actions 自动部署用）
+# 注意：TG_BOT_TOKEN / API_KEY / TG_SECRET 属于机密，不写在此文件！
+# 它们继续在 Cloudflare Dashboard → Workers → Settings → Variables and Secrets 配置，
+# wrangler deploy 不会删除 Dashboard 里已存在的 secrets。
+# 如果本机用 `wrangler deploy` 部署前，请先 `wrangler secret put` 补齐这三个。
+
+name = "telegram-r2-bot"
+main = "worker.js"
+compatibility_date = "2026-08-01"   # 若线上运行正常，可从 Dashboard 复制原值覆盖此项，避免行为变化
+
+# 公开变量（非密钥）
+[vars]
+R2_PUBLIC_URL = "https://telegramup.wo58.cn"
+
+# R2 存储桶绑定 —— bucket_name 需替换为你的实际桶名（Dashboard → R2 → 复制名称）
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "PASTE_R2_BUCKET_NAME_HERE"
+
+# D1 数据库绑定 —— database_id 必须替换（Dashboard → D1 → 你的数据库 → 概览 → 复制 ID）
+[[d1_databases]]
+binding = "D1_DB"
+database_name = "telegram-files"
+database_id = "PASTE_D1_DATABASE_ID_HERE"
