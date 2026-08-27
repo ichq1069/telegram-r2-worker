@@ -1280,6 +1280,11 @@ function init() {
   loadProgress();
   loadDedupStats();
   startProgressAutoRefresh();
+  // Tele文件列表自动刷新（30s，仅当前 tab 可见时）：方便盯着新文件入库
+  setInterval(function() {
+    var onTab = document.querySelector(".tab.on");
+    if (onTab && onTab.getAttribute("data-tab") === "files" && !document.hidden) loadFiles(currentPage);
+  }, 30000);
 }
 
 // 存储去重
