@@ -3000,7 +3000,7 @@ async function handleDedupGroups(env) {
     const groups = [];
     for (const d of (dups.results || [])) {
       const rows = await env.D1_DB.prepare(
-        "SELECT id, file_name, file_type, file_size, created_at, storage_key, pool_status, tags FROM files WHERE md5_hash=? AND deleted_at IS NULL ORDER BY CASE WHEN pool_status='imported' THEN 0 WHEN tags!='' THEN 1 WHEN processing_state='completed' THEN 2 ELSE 3 END, id ASC LIMIT 20"
+        "SELECT id, file_name, file_type, file_size, created_at, storage_key, r2_url, pool_status, tags FROM files WHERE md5_hash=? AND deleted_at IS NULL ORDER BY CASE WHEN pool_status='imported' THEN 0 WHEN tags!='' THEN 1 WHEN processing_state='completed' THEN 2 ELSE 3 END, id ASC LIMIT 20"
       ).bind(d.md5_hash).all();
       const res = rows.results || [];
       const poolRefs = new Set();
@@ -3012,7 +3012,7 @@ async function handleDedupGroups(env) {
         md5: d.md5_hash,
         count: d.cnt,
         keeper_id: res.length ? res[0].id : null,
-        files: res.map(function(f) { return { id: f.id, file_name: f.file_name, file_type: f.file_type, file_size: f.file_size, created_at: f.created_at, pool_ref: poolRefs.has(String(f.id)) }; })
+        files: res.map(function(f) { return { id: f.id, file_name: f.file_name, file_type: f.file_type, file_size: f.file_size, created_at: f.created_at, r2_url: f.r2_url || '', pool_ref: poolRefs.has(String(f.id)) }; })
       });
     }
     return json({ ok: true, data: { total_groups: dups.results?.length || 0, groups: groups } });

@@ -1316,6 +1316,17 @@ async function runDedup(purge) {
   }
 }
 
+// 重复分组缩略图：图片显示缩略图（点击新标签放大），视频/文档显示占位图标
+function dupThumb(f) {
+  var u = f.r2_url || '';
+  var isImg = f.file_type === 'photo' || /\.(jpe?g|png|webp|gif|bmp)$/i.test(u);
+  if (isImg && u) {
+    return '<img src="' + escStr(u) + '" loading="lazy" style="width:56px;height:56px;object-fit:cover;border-radius:6px;cursor:zoom-in;border:1px solid #e5e7eb" onclick="window.open(\'' + escStr(u) + '\',\'_blank\')" onerror="this.outerHTML=\'<div style=\"width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#f3f4f6;border-radius:6px;font-size:20px\">🖼</div>\'">';
+  }
+  if (f.file_type === 'video') return '<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#eef2ff;border-radius:6px;font-size:20px">🎬</div>';
+  return '<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#f3f4f6;border-radius:6px;font-size:20px">📄</div>';
+}
+
 // 重复分组对比视图（清理前核对：每组哪些保留、哪些待清理、哪些被随机库引用）
 async function showDupGroups() {
   var overlay = document.createElement("div");
@@ -1338,11 +1349,12 @@ async function showDupGroups() {
     var grp = d.groups[g];
     h += '<div style="border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;padding:12px">';
     h += '<div style="font-size:12px;font-weight:600;margin-bottom:8px">组 ' + (g + 1) + ' · ' + grp.count + ' 个文件 · MD5 <code style="font-size:11px">' + escStr(grp.md5.slice(0, 16)) + '…</code></div>';
-    h += '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-secondary)"><th style="padding:4px">保留</th><th style="padding:4px">ID</th><th style="padding:4px">文件名</th><th style="padding:4px">类型</th><th style="padding:4px">大小</th><th style="padding:4px">创建时间</th><th style="padding:4px">状态</th></tr></thead><tbody>';
+    h += '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-secondary)"><th style="padding:4px">预览</th><th style="padding:4px">保留</th><th style="padding:4px">ID</th><th style="padding:4px">文件名</th><th style="padding:4px">类型</th><th style="padding:4px">大小</th><th style="padding:4px">创建时间</th><th style="padding:4px">状态</th></tr></thead><tbody>';
     for (var i = 0; i < grp.files.length; i++) {
       var f = grp.files[i];
       var isKeeper = f.id === grp.keeper_id;
       h += '<tr style="border-top:1px solid #f3f4f6;' + (isKeeper ? 'background:#f0f7ff' : 'opacity:.8') + '">';
+      h += '<td style="padding:6px 4px">' + dupThumb(f) + '</td>';
       h += '<td style="padding:6px 4px">' + (isKeeper ? '<span style="color:#f59e0b;font-weight:700">★</span>' : '') + '</td>';
       h += '<td style="padding:6px 4px">' + f.id + '</td>';
       h += '<td style="padding:6px 4px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escStr(f.file_name || '') + '">' + escStr(f.file_name || '') + '</td>';
