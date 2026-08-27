@@ -5,6 +5,10 @@
 #                         Account.D1:Edit、Account.R2 Storage:Edit、Account.Workers R2 Storage:Edit、
 #                         Account.Account Settings:Read）
 #   CLOUDFLARE_ACCOUNT_ID: Cloudflare 账号 ID（77fc93b832a9f816ee841c3a321b57b5）
+#   TG_BOT_TOKEN         : Telegram Bot Token（每次部署自动写入 Worker 的 Secret，不再依赖 Dashboard）
+#   API_KEY              : Worker Admin API Key（同上）
+#   TG_SECRET            : Webhook Secret —— 暂不自动部署（webhook 未配 secret_token 时不需要；
+#                          若以后要启用，在 GitHub Secrets 加 TG_SECRET 并在此列表补一行）
 name: Deploy Worker
 
 on:
@@ -21,6 +25,21 @@ jobs:
         run: |
           node --check worker.js
           for f in src/*.js; do node --check "$f"; done
+
+      # 一劳永逸：每次部署前，把 2 个 Secret 写入 Worker（wrangler secret put）。
+      # 这样 TG_BOT_TOKEN 不会因部署而丢失，Dashboard 里也无需再手动配置这些机密。
+      - name: Set worker secrets
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: secret put
+          secrets: |
+            TG_BOT_TOKEN
+            API_KEY
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          API_KEY: ${{ secrets.API_KEY }}
 
       - name: Deploy Worker to Cloudflare
         uses: cloudflare/wrangler-action@v3

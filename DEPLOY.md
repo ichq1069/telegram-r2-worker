@@ -15,9 +15,16 @@
    - Account · Workers R2 Storage · **Edit**
    - Account · Account Settings · **Read**
    范围限定到部署用的账号。创建后复制 token（只显示一次）。
-3. **GitHub Secrets**（仓库 → Settings → Secrets and variables → Actions）新增 2 个：
+3. **GitHub Secrets**（仓库 → Settings → Secrets and variables → Actions）新增 4 个：
    - `CLOUDFLARE_API_TOKEN` = 第 2 步的 token
    - `CLOUDFLARE_ACCOUNT_ID` = `77fc93b832a9f816ee841c3a321b57b5`
+   - `TG_BOT_TOKEN` = Telegram Bot Token（如 `8727712730:...`）
+   - `API_KEY` = 管理后台 API Key（如 `teleup2026`）
+
+   部署时 GitHub Actions 会自动把这些 Secret 写入 Worker（`wrangler secret put`），
+   **因此 Dashboard 里无需再配置这几个机密，也不会因部署而丢失**。
+   （`TG_SECRET` 暂未纳入自动部署：webhook 未配 secret_token 时不需要；若以后启用，在
+   GitHub Secrets 加 `TG_SECRET` 并在 `.github/workflows/deploy-worker.yml` 的 secrets 列表补一行。）
 4. **确认 Dashboard secrets**：`TG_BOT_TOKEN`、`API_KEY`、`TG_SECRET` 已在
    Dashboard → Workers → `telegram-r2-bot` → Settings → Variables and Secrets 中配置
    （wrangler 部署不会删除它们，无需迁移）。
@@ -49,3 +56,4 @@ Dashboard → Workers → `telegram-r2-bot` → 编辑代码 → 粘贴 `worker.
 - `index.js`、`handlers/`、`services/`、`utils/` 是**废弃的实验版**，实际运行的是 `worker.js` + 正式模块目录 `src/`（util.js/db.js/notify.js/backup.js/ratelimit.js），忽略废弃目录。
 - 手动部署时**必须**同时粘贴 `worker.js` 和 `src/` 下所有文件（Worker 代码编辑器支持多文件）或在编辑器新建对应文件。
 - `TG_BOT_TOKEN`、`API_KEY`、`TG_SECRET` 是机密，**禁止**写进代码或提交到仓库。
+  它们存在 **GitHub Secrets** 里，由部署流程自动写入 Worker；如需修改，改 GitHub Secrets 后重新 push 即可。
