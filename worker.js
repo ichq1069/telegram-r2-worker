@@ -1081,7 +1081,9 @@ var COLD_STORAGE_CLASS = 'Infrequent Access';
 async function putR2(key, buf, ct, env, storageClass) {
   try {
     const opts = { httpMetadata: { contentType: ct, cacheControl: 'public, max-age=31536000' } };
-    if (storageClass) opts.storageClass = storageClass;
+    // storageClass 暂不使用：Infrequent Access 需 R2 账号启用，未启用时 put 报 10001。
+    // 先全部走 Standard 保证功能，需要省成本时再按账号能力启用。
+    // if (storageClass) opts.storageClass = storageClass;
     await env.R2_BUCKET.put(key, buf, opts);
     return (env.R2_PUBLIC_URL || '') + '/' + key;
   } catch (e) { lastUploadError = (e && e.message) || String(e); console.log('putR2 error:', lastUploadError); return null; }
@@ -1090,7 +1092,8 @@ async function putR2(key, buf, ct, env, storageClass) {
 async function putR2Stream(key, stream, ct, env, storageClass) {
   try {
     const opts = { httpMetadata: { contentType: ct, cacheControl: 'public, max-age=31536000' } };
-    if (storageClass) opts.storageClass = storageClass;
+    // 同上：storageClass 暂不使用（避免未启用 Infrequent Access 时 10001）
+    // if (storageClass) opts.storageClass = storageClass;
     await env.R2_BUCKET.put(key, stream, opts);
     return (env.R2_PUBLIC_URL || '') + '/' + key;
   } catch (e) { lastUploadError = (e && e.message) || String(e); console.log('putR2Stream error:', lastUploadError); return null; }
