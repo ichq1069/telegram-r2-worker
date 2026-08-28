@@ -2478,7 +2478,16 @@ async function handleStats(env) {
       env.D1_DB.prepare("SELECT COUNT(*) as c FROM random_pool WHERE source='tg'").first(),
       env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state='completed'").first()
     ]);
-    return json({ ok: true, data: { total_files: t?.c || 0, completed_files: comp?.c || 0, unsaved_files: (t?.c || 0) - (comp?.c || 0), total_size: ts?.s || 0, total_size_formatted: fmtSize(ts?.s || 0), today_uploads: td?.c || 0, month_uploads: mo?.c || 0, by_type: bt.results || [], by_chat: bc.results || [], pool_total: pt?.c || 0, pool_enabled: pe?.c || 0, pool_manual: pm?.c || 0, pool_tg: ptg?.c || 0 } });
+    // D1 各表行数（方便排查容量/膨胀）
+    let tableRows = {};
+    try {
+      const tables = ['files', 'random_pool', 'show_groups', 'bot_commands', 'api_keys', 'bot_config', 'settings', 'rate_limits', 'worker_stats'];
+      for (const tbl of tables) {
+        const rc = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM ' + tbl).first();
+        tableRows[tbl] = rc?.c || 0;
+      }
+    } catch (e) {}
+    return json({ ok: true, data: { total_files: t?.c || 0, completed_files: comp?.c || 0, unsaved_files: (t?.c || 0) - (comp?.c || 0), total_size: ts?.s || 0, total_size_formatted: fmtSize(ts?.s || 0), today_uploads: td?.c || 0, month_uploads: mo?.c || 0, by_type: bt.results || [], by_chat: bc.results || [], pool_total: pt?.c || 0, pool_enabled: pe?.c || 0, pool_manual: pm?.c || 0, pool_tg: ptg?.c || 0, table_rows: tableRows } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
