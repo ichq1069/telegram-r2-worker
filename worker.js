@@ -2839,6 +2839,7 @@ function matchProgram(cfg, now) {
       if (s.weekdays.indexOf(dow1) === -1) continue;
     }
     const st = parseHM(s.start), en = parseHM(s.end);
+    if (st === en) return s; // 00:00-00:00 表示全天节目（任何时刻都匹配）
     if (st <= en) { if (hm >= st && hm < en) return s; }
     else { if (hm >= st || hm < en) return s; } // crosses midnight
   }
