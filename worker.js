@@ -101,6 +101,7 @@ export default {
     if (m === 'POST' && p === '/admin/api/ai/ask') return isAdmin ? handleAdminAskAI(request, env) : json({ok:false,error:'Unauthorized'},401);
     // R2 用量概览 / 套餐配额配置
     if (m === 'GET' && p === '/admin/api/r2-usage') return isAdmin ? handleAdminR2Usage(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/cf/introspect') return isAdmin ? handleCfIntrospect(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminGetR2Quota(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminSaveR2Quota(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
@@ -453,6 +454,25 @@ async function cfR2Usage(env) {
   }
   return { _err: 'no dataset: ' + lastErr };
 }
+// 临时调试：列出 GraphQL schema 中含 "r2" 的类型与 viewer.accounts 字段，用于定位正确的 R2 数据集名
+async function handleCfIntrospect(env) {
+  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return json({ ok: false, error: 'no token/account' });
+  try {
+    const q = '{ __schema { types { name } } }';
+    const r = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.CF_API_TOKEN },
+      body: JSON.stringify({ query: q })
+    });
+    const j = await r.json();
+    if (j.errors) return json({ ok: false, error: 'errors: ' + JSON.stringify(j.errors).slice(0, 300) });
+    const names = (j.data && j.data.__schema && j.data.__schema.types || []).map(function(t) { return t.name; });
+    const r2 = names.filter(function(n) { return /r2/i.test(n); }).sort();
+    const acct = names.filter(function(n) { return /acct|analytic|bucket|viewer/i.test(n); }).slice(0, 60).sort();
+    return json({ ok: true, data: { r2_types: r2, total_types: names.length, related: acct } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+
 async function handleAdminR2Usage(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
