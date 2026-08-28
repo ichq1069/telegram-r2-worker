@@ -503,7 +503,8 @@ async function handleUsageForecast(env) {
     let storageBytes = null, storageRemaining = null;
     try {
       const ru = await handleAdminR2Usage(env);
-      if (ru && ru.ok && ru.data && ru.data.storage_bytes !== undefined) { storageBytes = ru.data.storage_bytes; storageRemaining = ru.data.storage_remaining; }
+      const rj = (ru instanceof Response) ? await ru.json() : ru;
+      if (rj && rj.ok && rj.data && rj.data.storage_bytes !== undefined) { storageBytes = rj.data.storage_bytes; storageRemaining = rj.data.storage_remaining; }
     } catch (e) {}
     let daysToFull = null;
     if (storageBytes !== null && storageBytes < cap && newBytes > 0) {
@@ -4096,8 +4097,9 @@ async function sendDailyReport(env) {
     let storageTxt = '';
     try {
       const ru = await handleAdminR2Usage(env);
-      if (ru && ru.ok && ru.data) {
-        storageTxt = 'R2 存储 ' + (ru.data.storage_bytes / 1073741824).toFixed(2) + ' GB / 10 GB（' + (ru.data.storage_pct !== null && ru.data.storage_pct !== undefined ? ru.data.storage_pct + '%' : '—') + '）';
+      const rj = (ru instanceof Response) ? await ru.json() : ru;
+      if (rj && rj.ok && rj.data) {
+        storageTxt = 'R2 存储 ' + (rj.data.storage_bytes / 1073741824).toFixed(2) + ' GB / 10 GB（' + (rj.data.storage_pct !== null && rj.data.storage_pct !== undefined ? rj.data.storage_pct + '%' : '—') + '）';
       }
     } catch (e) {}
     const dayStr = new Date().toISOString().slice(0, 10);
