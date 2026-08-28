@@ -101,7 +101,6 @@ export default {
     if (m === 'POST' && p === '/admin/api/ai/ask') return isAdmin ? handleAdminAskAI(request, env) : json({ok:false,error:'Unauthorized'},401);
     // R2 用量概览 / 套餐配额配置
     if (m === 'GET' && p === '/admin/api/r2-usage') return isAdmin ? handleAdminR2Usage(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'GET' && p === '/admin/api/cf/introspect') return isAdmin ? handleCfIntrospect(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminGetR2Quota(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminSaveR2Quota(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
@@ -422,57 +421,39 @@ async function cfR2Usage(env) {
     }).then(function(r) { return r.json(); });
   };
   const acct = env.CF_ACCOUNT_ID;
-  // R2 存储数据集名在不同账号/版本 schema 下写法不同，逐个探测取第一个可用的
-  const cands = ['r2BucketStorage', 'r2BucketStorageAdaptiveGroups', 'r2BucketStorageGroups', 'r2BucketStorageDailyGroups', 'r2BucketStorage1dGroups', 'r2BucketStorageWeeklyGroups', 'r2BucketStorageHourlyGroups'];
-  let lastErr = '';
-  for (const ds of cands) {
-    try {
-      const q = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { ' + ds + '(filter:{bucketName:"bot-telegram"},limit:1){ bucketName bytesStored } } } }';
-      const j = await gql(q);
-      if (j.errors) { lastErr = ds + ' -> ' + JSON.stringify(j.errors).slice(0, 110); continue; }
-      const a = j.data && j.data.viewer && j.data.viewer.accounts && j.data.viewer.accounts[0];
-      const arr = a && a[ds];
-      const row = arr && arr[0];
-      if (row && row.bytesStored !== undefined) {
-        const out = { storage_bytes: row.bytesStored, source: 'cf', ds: ds };
-        // 近 30 天 A/B 类操作（可选，字段不支持则回退本地计数）
-        try {
-          const start = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-          const q2 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2BucketOperations(filter:{bucketName:"bot-telegram", datetimeMinute_geq:"' + start + '"}){ sum { classARequests classBRequests } } } } }';
-          const j2 = await gql(q2);
-          const a2 = j2 && j2.data && j2.data.viewer && j2.data.viewer.accounts && j2.data.viewer.accounts[0];
-          const ops = a2 && a2.r2BucketOperations && a2.r2BucketOperations[0] && a2.r2BucketOperations[0].sum;
-          if (ops && ops.classARequests !== undefined) {
-            out.class_a = ops.classARequests || 0;
-            out.class_b = ops.classBRequests || 0;
-          }
-        } catch (e) {}
-        return out;
-      }
-      lastErr = ds + ' -> empty: ' + JSON.stringify(j).slice(0, 150);
-    } catch (e) { lastErr = ds + ' -> ' + e.message; }
-  }
-  return { _err: 'no dataset: ' + lastErr };
-}
-// 临时调试：列出 GraphQL schema 中含 "r2" 的类型与 viewer.accounts 字段，用于定位正确的 R2 数据集名
-async function handleCfIntrospect(env) {
-  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return json({ ok: false, error: 'no token/account' });
   try {
-    const q = '{ __schema { types { name } } }';
-    const r = await fetch('https://api.cloudflare.com/client/v4/graphql', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.CF_API_TOKEN },
-      body: JSON.stringify({ query: q })
-    });
-    const j = await r.json();
-    if (j.errors) return json({ ok: false, error: 'errors: ' + JSON.stringify(j.errors).slice(0, 300) });
-    const names = (j.data && j.data.__schema && j.data.__schema.types || []).map(function(t) { return t.name; });
-    const r2 = names.filter(function(n) { return /r2/i.test(n); }).sort();
-    const acct = names.filter(function(n) { return /acct|analytic|bucket|viewer/i.test(n); }).slice(0, 60).sort();
-    return json({ ok: true, data: { r2_types: r2, total_types: names.length, related: acct } });
-  } catch (e) { return json({ ok: false, error: e.message }); }
+    const endDate = new Date().toISOString();
+    const startDate = new Date(Date.now() - 86400000).toISOString();
+    // 存储用量（最近 24h 最新一条，payloadSize = 真实存储字节数，与 R2 Dashboard 同源）
+    const q1 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2StorageAdaptiveGroups(limit:1, filter:{datetime_geq:"' + startDate + '", datetime_leq:"' + endDate + '", bucketName:"bot-telegram"}, orderBy:[datetime_DESC]) { max { objectCount payloadSize metadataSize uploadCount } } } } }';
+    const j1 = await gql(q1);
+    if (j1.errors) return { _err: 'storage errors: ' + JSON.stringify(j1.errors).slice(0, 200) };
+    const a1 = j1.data && j1.data.viewer && j1.data.viewer.accounts && j1.data.viewer.accounts[0];
+    const s = a1 && a1.r2StorageAdaptiveGroups && a1.r2StorageAdaptiveGroups[0];
+    const max = s && s.max;
+    if (!max || max.payloadSize === undefined) return { _err: 'storage empty: ' + JSON.stringify(j1).slice(0, 200) };
+    const out = { storage_bytes: max.payloadSize || 0, object_count: max.objectCount || 0, source: 'cf', ds: 'r2StorageAdaptiveGroups' };
+    // 操作数（近 30 天，按 actionType 归入 A/B 类）
+    try {
+      const s30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      const q2 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2OperationsAdaptiveGroups(limit:10000, filter:{datetime_geq:"' + s30 + '", bucketName:"bot-telegram"}) { sum { requests } dimensions { actionType } } } } }';
+      const j2 = await gql(q2);
+      const a2 = j2 && j2.data && j2.data.viewer && j2.data.viewer.accounts && j2.data.viewer.accounts[0];
+      const groups = (a2 && a2.r2OperationsAdaptiveGroups) || [];
+      const classA = ['ListBuckets','PutBucket','ListObjects','PutObject','CopyObject','CompleteMultipartUpload','CreateMultipartUpload','LifecycleStorageTierTransition','ListMultipartUploads','UploadPart','UploadPartCopy','ListParts','PutBucketEncryption','PutBucketCors','PutBucketLifecycleConfiguration'];
+      const classB = ['HeadBucket','HeadObject','GetObject','UsageSummary','GetBucketEncryption','GetBucketLocation','GetBucketCors','GetBucketLifecycleConfiguration'];
+      let ca = 0, cb = 0;
+      for (const g of groups) {
+        const act = g.dimensions && g.dimensions.actionType;
+        const n = (g.sum && g.sum.requests) || 0;
+        if (classA.indexOf(act) >= 0) ca += n;
+        else if (classB.indexOf(act) >= 0) cb += n;
+      }
+      out.class_a = ca; out.class_b = cb;
+    } catch (e) {}
+    return out;
+  } catch (e) { return { _err: 'exception: ' + e.message }; }
 }
-
 async function handleAdminR2Usage(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
@@ -496,6 +477,7 @@ async function handleAdminR2Usage(env) {
     return json({ ok: true, data: {
       storage_bytes: storageBytes,
       storage_estimate: estBytes,
+      object_count: cfOk && cf.object_count !== undefined ? cf.object_count : null,
       storage_source: cfOk ? 'cf' : 'estimate',
       cf_error: cfOk ? '' : ((cf && cf._err) || 'cf unavailable'),
       capacity_bytes: capacityBytes,
