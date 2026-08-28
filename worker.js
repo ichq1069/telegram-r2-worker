@@ -544,7 +544,11 @@ async function aiComplete(env, userText) {
   for (let round = 0; round < 3; round++) {
     const resp = await fetchAI(cfg, msgs);
     if (!resp) return { ok: false, error: 'AI 服务调用失败，请检查后台 AI 配置（Base/Key/模型）' };
-    if (resp._err) return { ok: false, error: 'AI 服务调用失败：' + resp._err };
+    if (resp._err) {
+      let msg = 'AI 服务调用失败：' + resp._err;
+      if (resp._err.indexOf('HTTP 429') === 0) msg += '（请求过于频繁被限流，请稍等 30-60 秒再试；持续出现建议更换更稳定的 AI 服务商）';
+      return { ok: false, error: msg };
+    }
     const choice = resp.choices && resp.choices[0];
     const m = choice && choice.message;
     if (!m) return { ok: false, error: 'AI 返回异常' };
@@ -564,7 +568,17 @@ async function aiComplete(env, userText) {
   }
   return { ok: false, error: 'AI 工具调用次数超限' };
 }
+// AI 消息自动响应节流：同 chat 5 秒冷却（防刷屏/连续触发导致服务商限流 429）
+var AI_THROTTLE = {};
+function aiThrottled(chatId) {
+  const now = Date.now();
+  const last = AI_THROTTLE[chatId] || 0;
+  if (now - last < 5000) return true;
+  AI_THROTTLE[chatId] = now;
+  return false;
+}
 async function callAIManage(chatId, msgId, text, env) {
+  if (aiThrottled(chatId)) return; // 冷却期内忽略新的自动 AI 响应（后台测试/浮窗不受影响）
   const r = await aiComplete(env, text);
   if (!r.ok) {
     await replyText(chatId, msgId, '❌ ' + r.error, env);
@@ -604,20 +618,31 @@ async function handleAdminAskAI(request, env) {
 }
 async function fetchAI(cfg, msgs) {
   const url = (cfg.base || 'https://api.deepseek.com').replace(/\/+$/, '') + '/chat/completions';
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
-      body: JSON.stringify({ model: cfg.model || 'deepseek-chat', messages: msgs, tools: AI_TOOLS, tool_choice: 'auto' })
-    });
-    if (!r.ok) {
-      const tb = String(await r.text()).slice(0, 220);
-      console.log('ai http:', r.status, tb);
-      // 返回具体错误（HTTP 状态码 + 响应体），供测试/会话定位 key、模型、配额问题
-      return { _err: 'HTTP ' + r.status + ' ' + tb };
+  const body = JSON.stringify({ model: cfg.model || 'deepseek-chat', messages: msgs, tools: AI_TOOLS, tool_choice: 'auto' });
+  const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key };
+  // 429（含 Cloudflare 1015 限流）/5xx：退避重试（1s、3s），应对瞬时限流
+  const delays = [1000, 3000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const r = await fetch(url, { method: 'POST', headers: headers, body: body });
+      if (!r.ok) {
+        const tb = String(await r.text()).slice(0, 220);
+        if ((r.status === 429 || r.status >= 500) && attempt < delays.length) {
+          const d = delays[attempt];
+          console.log('ai retry ' + r.status + ' in ' + d + 'ms');
+          await new Promise(function(res) { setTimeout(res, d); });
+          continue;
+        }
+        console.log('ai http:', r.status, tb);
+        return { _err: 'HTTP ' + r.status + ' ' + tb };
+      }
+      return await r.json();
+    } catch (e) {
+      if (attempt < delays.length) { await new Promise(function(res) { setTimeout(res, delays[attempt]); }); continue; }
+      console.log('ai fetch:', e.message);
+      return { _err: '网络错误 ' + e.message };
     }
-    return await r.json();
-  } catch (e) { console.log('ai fetch:', e.message); return { _err: '网络错误 ' + e.message }; }
+  }
 }
 async function aiRunTool(name, args, env) {
   if (name === 'get_stats') return await aiGetStatsText(env);
