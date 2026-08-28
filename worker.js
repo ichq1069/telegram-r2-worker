@@ -96,6 +96,10 @@ export default {
     // AI 管理配置（enabled/base/model/api_key/prompt）
     if (m === 'GET' && p === '/admin/api/settings/ai') return isAdmin ? handleAdminGetAI(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/ai') return isAdmin ? handleAdminSaveAI(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // R2 用量概览 / 套餐配额配置
+    if (m === 'GET' && p === '/admin/api/r2-usage') return isAdmin ? handleAdminR2Usage(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminGetR2Quota(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminSaveR2Quota(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
     if (m === 'GET' && p === '/admin/api/backup') return isAdmin ? handleAdminBackup(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/backup') return isAdmin ? handleAdminBackupSave(env) : json({ok:false,error:'Unauthorized'},401);
@@ -353,6 +357,52 @@ async function handleAdminSaveAI(request, env) {
     if (b.api_key && String(b.api_key).trim() && String(b.api_key).indexOf('****') === -1) await set('ai_api_key', String(b.api_key).trim());
     if (b.prompt !== undefined) await set('ai_prompt', String(b.prompt).trim());
     _aiCfgCache = null;
+    return json({ ok: true, data: { saved: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== R2 用量与套餐配额 ====================
+async function handleAdminR2Usage(env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    await ensureTablesOnce(env.D1_DB);
+    const s = await env.D1_DB.prepare('SELECT COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL').first();
+    const map = {};
+    const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('r2_class_a','r2_class_b','r2_capacity_gb','r2_class_a_quota','r2_class_b_quota')").all();
+    (q.results || []).forEach(function(r) { map[r.key] = r.value; });
+    const storageBytes = (s && s.s) || 0;
+    const capacityBytes = (parseFloat(map.r2_capacity_gb) || 10) * 1024 * 1024 * 1024;
+    const classA = parseInt(map.r2_class_a) || 0;
+    const classB = parseInt(map.r2_class_b) || 0;
+    const quotaA = parseInt(map.r2_class_a_quota) || 1000000;
+    const quotaB = parseInt(map.r2_class_b_quota) || 10000000;
+    return json({ ok: true, data: {
+      storage_bytes: storageBytes,
+      capacity_bytes: capacityBytes,
+      storage_pct: capacityBytes ? Math.round(storageBytes / capacityBytes * 1000) / 10 : 0,
+      storage_remaining: Math.max(0, capacityBytes - storageBytes),
+      class_a: classA, class_a_quota: quotaA,
+      class_a_pct: quotaA ? Math.round(classA / quotaA * 1000) / 10 : 0,
+      class_b: classB, class_b_quota: quotaB,
+      class_b_pct: quotaB ? Math.round(classB / quotaB * 1000) / 10 : 0
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+async function handleAdminGetR2Quota(env) {
+  try {
+    const map = {};
+    const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('r2_capacity_gb','r2_class_a_quota','r2_class_b_quota')").all();
+    (q.results || []).forEach(function(r) { map[r.key] = r.value; });
+    return json({ ok: true, data: { capacity_gb: map.r2_capacity_gb || '10', class_a_quota: map.r2_class_a_quota || '1000000', class_b_quota: map.r2_class_b_quota || '10000000' } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+async function handleAdminSaveR2Quota(request, env) {
+  try {
+    const b = await request.json().catch(function(){ return {}; });
+    const set = function(k, v) { return env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, String(v)).run(); };
+    if (b.capacity_gb && !isNaN(parseFloat(b.capacity_gb))) await set('r2_capacity_gb', parseFloat(b.capacity_gb));
+    if (b.class_a_quota && !isNaN(parseInt(b.class_a_quota))) await set('r2_class_a_quota', parseInt(b.class_a_quota));
+    if (b.class_b_quota && !isNaN(parseInt(b.class_b_quota))) await set('r2_class_b_quota', parseInt(b.class_b_quota));
     return json({ ok: true, data: { saved: true } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -1654,6 +1704,12 @@ var lastUploadError = '';
 // Big media goes to the cheaper Infrequent Access storage class (still public + CDN-cached)
 var COLD_STORAGE_MIN = 10 * 1024 * 1024; // >=10MB
 var COLD_STORAGE_CLASS = 'Infrequent Access';
+// R2 用量计数器（settings 表，异步写不阻塞主流程；A类=写操作，B类=读操作）
+function bumpR2Usage(env, key) {
+  if (!env || !env.D1_DB) return;
+  env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(COALESCE(value,'0') AS INTEGER)+1").bind(key).run().catch(function(){});
+}
+
 async function putR2(key, buf, ct, env, storageClass) {
   try {
     const opts = { httpMetadata: { contentType: ct, cacheControl: 'public, max-age=31536000' } };
@@ -1661,6 +1717,7 @@ async function putR2(key, buf, ct, env, storageClass) {
     // 先全部走 Standard 保证功能，需要省成本时再按账号能力启用。
     // if (storageClass) opts.storageClass = storageClass;
     await env.R2_BUCKET.put(key, buf, opts);
+    bumpR2Usage(env, 'r2_class_a');
     return (env.R2_PUBLIC_URL || '') + '/' + key;
   } catch (e) { lastUploadError = (e && e.message) || String(e); console.log('putR2 error:', lastUploadError); return null; }
 }
@@ -1671,6 +1728,7 @@ async function putR2Stream(key, stream, ct, env, storageClass) {
     // 同上：storageClass 暂不使用（避免未启用 Infrequent Access 时 10001）
     // if (storageClass) opts.storageClass = storageClass;
     await env.R2_BUCKET.put(key, stream, opts);
+    bumpR2Usage(env, 'r2_class_a');
     return (env.R2_PUBLIC_URL || '') + '/' + key;
   } catch (e) { lastUploadError = (e && e.message) || String(e); console.log('putR2Stream error:', lastUploadError); return null; }
 }
@@ -3148,7 +3206,7 @@ async function handleLatest(request, env) {
 
 async function handleStream(request, env) {
   const u = new URL(request.url); const id = u.searchParams.get('id');
-  try { const f = await env.D1_DB.prepare('SELECT storage_key FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first(); if (!f) return json({ ok: false, error: 'not found' }, 404); const o = await env.R2_BUCKET.get(f.storage_key); if (!o) return json({ ok: false, error: 'gone' }, 404); const h = new Headers(); o.writeHttpMetadata(h); h.set('Cache-Control', 'public,max-age=31536000'); h.set('Access-Control-Allow-Origin', '*'); return new Response(o.body, { headers: h }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+  try { const f = await env.D1_DB.prepare('SELECT storage_key FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first(); if (!f) return json({ ok: false, error: 'not found' }, 404); const o = await env.R2_BUCKET.get(f.storage_key); if (!o) return json({ ok: false, error: 'gone' }, 404); bumpR2Usage(env, 'r2_class_b'); const h = new Headers(); o.writeHttpMetadata(h); h.set('Cache-Control', 'public,max-age=31536000'); h.set('Access-Control-Allow-Origin', '*'); return new Response(o.body, { headers: h }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 async function handleDeleteFile(request, env) {

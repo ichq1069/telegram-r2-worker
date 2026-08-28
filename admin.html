@@ -703,6 +703,18 @@ https://example.com/b.jpg"></textarea></div>
           <span id="aiKeyHint" style="font-size:11px;color:var(--text-secondary)"></span>
         </div>
       </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>R2 套餐配额 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">概览页用量与超限提醒依据；存储估算自库内文件，A/B 操作数自本功能上线起累计（写/读操作）</span></div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+          <div class="fr" style="margin:0"><label>存储容量 (GB)</label><input class="inp" id="r2Cap" placeholder="10"></div>
+          <div class="fr" style="margin:0"><label>A 类操作配额</label><input class="inp" id="r2QuotaA" placeholder="1000000"></div>
+          <div class="fr" style="margin:0"><label>B 类操作配额</label><input class="inp" id="r2QuotaB" placeholder="10000000"></div>
+        </div>
+        <div class="fb" style="margin-top:10px">
+          <button class="btn btn-primary" id="r2QuotaSaveBtn">保存配额</button>
+          <span style="font-size:11px;color:var(--text-secondary)">A 类=写入（上传/转存），B 类=读取（访问直链）。</span>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -716,6 +728,8 @@ https://example.com/b.jpg"></textarea></div>
 function imgUrl(f) { if (f && f.id) return '/file/tg/' + f.id; return (f && f.tg_file_url) ? f.tg_file_url : (f ? f.r2_url : ''); }
 // Escape HTML to prevent XSS when injecting user-controlled strings
 function escStr(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+// 后台版本号：GitHub Actions 部署时自动注入 v1.0.<run#>
+var APP_VERSION = "v1.0.0";
 var AK = ""; // no longer injected by the server; key comes from ?api_key=, localStorage or the login form
 var LS = document.getElementById("loginScreen");
 var AM = document.getElementById("appMain");
@@ -1733,6 +1747,50 @@ async function loadStats() {
     bc += '<div class="list-item"><span class="name">' + escStr(c.chat_title) + '</span><span class="count">' + c.c + '</span></div>';
   }
   document.getElementById("byChat").innerHTML = bc || '<div class="empty">暂无数据</div>';
+  loadR2UsageCards();
+}
+
+// ==================== R2 用量（存储 / A类 / B类 操作 + 剩余 + 超限提示） ====================
+function fmtNum(n) {
+  n = parseInt(n) || 0;
+  if (n >= 1000000) return (n / 1000000).toFixed(2) + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+  return String(n);
+}
+function r2Color(pct) { return pct >= 90 ? "#dc2626" : (pct >= 50 ? "#d97706" : "#16a34a"); }
+function r2Bg(pct) { return pct >= 90 ? "#fee2e2" : (pct >= 50 ? "#fffbeb" : "#f0fdf4"); }
+async function loadR2UsageCards() {
+  try {
+    const r = await api("GET", "/admin/api/r2-usage");
+    if (!r.ok || !r.data) return;
+    const d = r.data;
+    const gb = function(b) { return (b / 1073741824).toFixed(2) + " GB"; };
+    var card = function(title, val, sub, pct) {
+      return '<div class="stat-card" style="border-color:' + r2Color(pct) + ';background:' + r2Bg(pct) + '"><div class="value" style="color:' + r2Color(pct) + '">' + val + '</div><div class="label">' + title + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">' + sub + '</div></div>';
+    };
+    var el = document.getElementById("statsGrid");
+    el.innerHTML = el.innerHTML +
+      card('R2 存储用量 ' + d.storage_pct + '%', gb(d.storage_bytes), '容量 ' + gb(d.capacity_bytes) + ' · 剩余 ' + gb(d.storage_remaining), d.storage_pct) +
+      card('A 类操作 ' + d.class_a_pct + '%', fmtNum(d.class_a), '配额 ' + fmtNum(d.class_a_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_a_quota - d.class_a)), d.class_a_pct) +
+      card('B 类操作 ' + d.class_b_pct + '%', fmtNum(d.class_b), '配额 ' + fmtNum(d.class_b_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_b_quota - d.class_b)), d.class_b_pct);
+    // 超过 50% / 90% 弹窗提示（每个阈值只弹一次，localStorage 记忆）
+    warnOnce("r2_storage", d.storage_pct, "R2 存储用量已达 " + d.storage_pct + "%", "已用 " + gb(d.storage_bytes) + " / 容量 " + gb(d.capacity_bytes) + "，剩余 " + gb(d.storage_remaining) + "。<br>可在 后台 → 运维 → R2 套餐 调整容量。");
+    warnOnce("r2_class_a", d.class_a_pct, "A 类操作已达 " + d.class_a_pct + "%", "已用 " + fmtNum(d.class_a) + " / 配额 " + fmtNum(d.class_a_quota) + "。<br>可在 后台 → 运维 → R2 套餐 调整配额。");
+    warnOnce("r2_class_b", d.class_b_pct, "B 类操作已达 " + d.class_b_pct + "%", "已用 " + fmtNum(d.class_b) + " / 配额 " + fmtNum(d.class_b_quota) + "。<br>可在 后台 → 运维 → R2 套餐 调整配额。");
+  } catch (e) {}
+}
+function warnOnce(key, pct, title, desc) {
+  if (pct < 50) return;
+  var k = "r2warn_" + key + "_" + (pct >= 90 ? "90" : "50");
+  try { if (localStorage.getItem(k)) return; localStorage.setItem(k, "1"); } catch (e) { return; }
+  var color = pct >= 90 ? "#dc2626" : "#d97706";
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal">' +
+    '<h3 style="color:' + color + '">⚠️ ' + title + '</h3>' +
+    '<div style="font-size:13px;color:var(--text-secondary);line-height:1.7">' + desc + '</div>' +
+    '<div class="modal-actions"><button class="btn btn-primary" id="warnOkBtn">知道了</button></div>' +
+    '</div></div>';
+  document.getElementById("warnOkBtn").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
 }
 
 // 文件
@@ -1982,6 +2040,15 @@ async function loadOpsPage() {
       if (kh) kh.textContent = rai.data.has_key ? ("已保存 Key：" + rai.data.api_key) : "未保存 Key";
     }
   } catch (e) {}
+  // R2 套餐配额
+  try {
+    const rq = await api("GET", "/admin/api/settings/r2-quota");
+    if (rq && rq.ok && rq.data) {
+      document.getElementById("r2Cap").value = rq.data.capacity_gb || "10";
+      document.getElementById("r2QuotaA").value = rq.data.class_a_quota || "1000000";
+      document.getElementById("r2QuotaB").value = rq.data.class_b_quota || "10000000";
+    }
+  } catch (e) {}
 }
 
 document.getElementById("aiSaveBtn").addEventListener("click", function() {
@@ -1994,6 +2061,18 @@ document.getElementById("aiSaveBtn").addEventListener("click", function() {
   };
   api("POST", "/admin/api/settings/ai", b).then(function(r) {
     if (r && r.ok) { toast("AI 配置已保存", 1); document.getElementById("aiKey").value = ""; }
+    else toast((r && r.error) || "保存失败", 0);
+  });
+});
+
+document.getElementById("r2QuotaSaveBtn").addEventListener("click", function() {
+  var b = {
+    capacity_gb: document.getElementById("r2Cap").value.trim(),
+    class_a_quota: document.getElementById("r2QuotaA").value.trim(),
+    class_b_quota: document.getElementById("r2QuotaB").value.trim()
+  };
+  api("POST", "/admin/api/settings/r2-quota", b).then(function(r) {
+    if (r && r.ok) { toast("R2 配额已保存", 1); loadOpsPage(); }
     else toast((r && r.error) || "保存失败", 0);
   });
 });
@@ -3027,9 +3106,9 @@ async function callApi() {
 async function loadBotInfo() {
   var r = await api("GET", "/admin/api/bot-info");
   if (r.ok && r.result)
-    document.getElementById("botInfo").textContent = "@" + r.result.username + " · " + r.result.first_name;
+    document.getElementById("botInfo").textContent = "@" + r.result.username + " · " + r.result.first_name + " · v" + APP_VERSION.replace("v", "");
   else
-    document.getElementById("botInfo").textContent = "Bot 未连接";
+    document.getElementById("botInfo").textContent = "Bot 未连接 · v" + APP_VERSION.replace("v", "");
 }
 
 // 格式化大小

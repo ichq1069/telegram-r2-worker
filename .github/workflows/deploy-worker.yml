@@ -53,6 +53,11 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      - name: Bump admin page version
+        run: node .github/scripts/bump-version.js
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+
       - name: Upload admin.html to R2 (bot-telegram bucket)
         uses: cloudflare/wrangler-action@v3
         with:
