@@ -1479,14 +1479,14 @@ async function showDupGroups() {
   renderDupBody(body, d);
 }
 
-// 重复分组 + 一键清理（清理后再次渲染刷新）
+// 重复分组 + 逐行操作（保留/清理）+ 批量选择 + 一键清理（操作后再次渲染刷新）
 function renderDupBody(body, d) {
-  var h = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">共 <b>' + d.total_groups + '</b> 组重复。每组 MD5 相同（内容一致），★ 为将保留项；「池引用」的文件不会被清理。去重为分批执行，下方按钮可立即多清理一批。</div>';
+  var h = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">共 <b>' + d.total_groups + '</b> 组重复。每组 MD5 相同（内容一致），★ 为将保留项；「池引用」的文件不会被动。每行可点 <b>保留</b>（清掉同组其他）或 <b>清理</b>（仅清该行），也可勾选后批量清理。</div>';
   for (var g = 0; g < d.groups.length; g++) {
     var grp = d.groups[g];
     h += '<div style="border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;padding:12px">';
     h += '<div style="font-size:12px;font-weight:600;margin-bottom:8px">组 ' + (g + 1) + ' · ' + grp.count + ' 个文件 · MD5 <code style="font-size:11px">' + escStr(grp.md5.slice(0, 16)) + '…</code></div>';
-    h += '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-secondary)"><th style="padding:4px">预览</th><th style="padding:4px">保留</th><th style="padding:4px">ID</th><th style="padding:4px">文件名</th><th style="padding:4px">类型</th><th style="padding:4px">大小</th><th style="padding:4px">创建时间</th><th style="padding:4px">状态</th></tr></thead><tbody>';
+    h += '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr style="text-align:left;color:var(--text-secondary)"><th style="padding:4px">预览</th><th style="padding:4px">保留</th><th style="padding:4px">ID</th><th style="padding:4px">文件名</th><th style="padding:4px">类型</th><th style="padding:4px">大小</th><th style="padding:4px">创建时间</th><th style="padding:4px">状态</th><th style="padding:4px">操作</th></tr></thead><tbody>';
     for (var i = 0; i < grp.files.length; i++) {
       var f = grp.files[i];
       var isKeeper = f.id === grp.keeper_id;
@@ -1494,25 +1494,106 @@ function renderDupBody(body, d) {
       h += '<td style="padding:6px 4px">' + dupThumb(f) + '</td>';
       h += '<td style="padding:6px 4px">' + (isKeeper ? '<span style="color:#f59e0b;font-weight:700">★</span>' : '') + '</td>';
       h += '<td style="padding:6px 4px">' + f.id + '</td>';
-      h += '<td style="padding:6px 4px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escStr(f.file_name || '') + '">' + escStr(f.file_name || '') + '</td>';
+      h += '<td style="padding:6px 4px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escStr(f.file_name || '') + '">' + escStr(f.file_name || '') + '</td>';
       h += '<td style="padding:6px 4px">' + escStr(f.file_type || '') + '</td>';
       h += '<td style="padding:6px 4px">' + fmtSize(f.file_size) + '</td>';
       h += '<td style="padding:6px 4px">' + (f.created_at || '').replace('T', ' ').slice(0, 16) + '</td>';
       h += '<td style="padding:6px 4px">' + (isKeeper ? '<span class="badge badge-green">保留</span>' : (f.pool_ref ? '<span class="badge badge-red">池引用·不清</span>' : '<span class="badge badge-gray">待清理</span>')) + '</td>';
+      h += '<td style="padding:6px 4px;white-space:nowrap">';
+      if (isKeeper) {
+        h += '<span style="font-size:11px;color:#9ca3af">保留项</span>';
+      } else {
+        h += '<label style="cursor:pointer" title="勾选后批量清理"><input type="checkbox" data-did="' + f.id + '"></label> ';
+        h += '<button class="btn btn-ghost btn-sm" data-keep="' + f.id + '" data-md5="' + escStr(grp.md5) + '" title="保留该文件，清理同组其他">保留</button> ';
+        h += f.pool_ref
+          ? '<span style="font-size:11px;color:#9ca3af">池引用</span>'
+          : '<button class="btn btn-danger btn-sm" data-del="' + f.id + '" data-md5="' + escStr(grp.md5) + '" title="清理该文件（移入回收站）">清理</button>';
+      }
+      h += '</td>';
       h += '</tr>';
     }
     h += '</tbody></table></div>';
   }
-  h += '<div style="display:flex;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb;align-items:center">';
-  h += '<button class="btn btn-primary" id="dupCleanBtn">一键清理重复（移入回收站）</button>';
-  h += '<button class="btn btn-danger" id="dupPurgeAllBtn">一键彻底删除重复</button>';
+  h += '<div style="display:flex;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb;align-items:center;flex-wrap:wrap">';
+  h += '<label style="font-size:12px;cursor:pointer"><input type="checkbox" id="dupSelAll"> 全选</label>';
+  h += '<button class="btn btn-primary btn-sm" id="dupSelClean">清理选中(0)</button>';
+  h += '<button class="btn btn-primary btn-sm" id="dupCleanBtn">一键清理重复（移入回收站）</button>';
+  h += '<button class="btn btn-danger btn-sm" id="dupPurgeAllBtn">一键彻底删除重复</button>';
   h += '<span id="dupCleanMsg" style="font-size:12px;color:var(--text-secondary)"></span>';
   h += '</div>';
   body.innerHTML = h;
-  document.getElementById("dupCleanBtn").addEventListener("click", function() { dupCleanAll(false, body); });
-  document.getElementById("dupPurgeAllBtn").addEventListener("click", function() {
-    if (confirm("彻底删除重复文件？将直接删除 R2 对象且不可恢复，请先确认！")) dupCleanAll(true, body);
-  });
+  // 行级操作/全选/清理选中：事件委托（每次渲染 body 不变，避免重复绑定）
+  body.onclick = function(e) {
+    var t = e.target;
+    if (t.id === "dupCleanBtn") { dupCleanAll(false, body); return; }
+    if (t.id === "dupPurgeAllBtn") { if (confirm("彻底删除重复文件？将直接删除 R2 对象且不可恢复，请先确认！")) dupCleanAll(true, body); return; }
+    if (t.id === "dupSelAll") {
+      var cbs = body.querySelectorAll("input[data-did]");
+      for (var i = 0; i < cbs.length; i++) cbs[i].checked = t.checked;
+      dupSelCount(body);
+      return;
+    }
+    if (t.id === "dupSelClean") { dupCleanSelected(body); return; }
+    var keepBtn = t.closest ? t.closest("[data-keep]") : null;
+    if (keepBtn) {
+      if (confirm("保留 id=" + keepBtn.getAttribute("data-keep") + "？将清理同组其他重复文件（移入回收站，可恢复）。")) dupRowAction(body, { md5: keepBtn.getAttribute("data-md5"), id: +keepBtn.getAttribute("data-keep"), action: "keep" });
+      return;
+    }
+    var delBtn = t.closest ? t.closest("[data-del]") : null;
+    if (delBtn) {
+      if (confirm("清理 id=" + delBtn.getAttribute("data-del") + "（移入回收站，可恢复）？")) dupRowAction(body, { md5: delBtn.getAttribute("data-md5"), id: +delBtn.getAttribute("data-del"), action: "del" });
+      return;
+    }
+  };
+  body.onchange = function(e) {
+    var t = e.target;
+    if (t && t.hasAttribute && t.hasAttribute("data-did")) dupSelCount(body);
+  };
+}
+
+function dupSelCount(body) {
+  var n = 0;
+  var cbs = body.querySelectorAll("input[data-did]:checked");
+  for (var i = 0; i < cbs.length; i++) n++;
+  var btn = document.getElementById("dupSelClean");
+  if (btn) btn.textContent = "清理选中(" + n + ")";
+}
+
+// 逐行：保留(keep)/清理(del)
+async function dupRowAction(body, payload) {
+  var msg = document.getElementById("dupCleanMsg");
+  if (msg) msg.textContent = "处理中...";
+  var r = await api("POST", "/admin/api/dedup/row", payload);
+  if (r.ok) {
+    if (msg) msg.textContent = r.data.message;
+    toast(r.data.message, 1);
+    loadDedupStats();
+  } else {
+    if (msg) msg.textContent = r.error || "操作失败";
+    toast(r.error || "操作失败", 0);
+  }
+  refreshDupBody(body);
+}
+
+// 批量清理选中的行（软删，可恢复）
+async function dupCleanSelected(body) {
+  var cbs = body.querySelectorAll("input[data-did]:checked");
+  var ids = [];
+  for (var i = 0; i < cbs.length; i++) ids.push(+cbs[i].getAttribute("data-did"));
+  if (!ids.length) { toast("请先勾选要清理的文件", 0); return; }
+  if (!confirm("清理选中的 " + ids.length + " 个文件（移入回收站，可恢复）？")) return;
+  var msg = document.getElementById("dupCleanMsg");
+  if (msg) msg.textContent = "处理中...";
+  var r = await api("POST", "/admin/api/dedup/rows", { ids: ids });
+  if (r.ok) {
+    if (msg) msg.textContent = r.data.message;
+    toast(r.data.message, 1);
+    loadDedupStats();
+  } else {
+    if (msg) msg.textContent = r.error || "清理失败";
+    toast(r.error || "清理失败", 0);
+  }
+  refreshDupBody(body);
 }
 
 async function dupCleanAll(purge, body) {
@@ -1520,18 +1601,22 @@ async function dupCleanAll(purge, body) {
   var msg = document.getElementById("dupCleanMsg");
   if (!btn) return;
   btn.disabled = true;
-  msg.textContent = "处理中...";
+  if (msg) msg.textContent = "处理中...";
   var r = await api("POST", "/admin/api/dedup" + (purge ? "?purge=1" : ""));
   btn.disabled = false;
   if (r.ok) {
-    msg.textContent = r.data.message;
+    if (msg) msg.textContent = r.data.message;
     toast(r.data.message, 1);
     loadDedupStats();
   } else {
-    msg.textContent = r.error || "清理失败";
+    if (msg) msg.textContent = r.error || "清理失败";
     toast(r.error || "清理失败", 0);
   }
-  // 清理后刷新分组视图
+  refreshDupBody(body);
+}
+
+// 清理后重新加载分组视图
+async function refreshDupBody(body) {
   var r2 = await api("GET", "/admin/api/dedup/groups");
   if (r2.ok && r2.data) {
     if (!r2.data.groups || !r2.data.groups.length) { body.innerHTML = '<div class="empty">暂无重复文件</div>'; return; }

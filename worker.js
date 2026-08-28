@@ -41,6 +41,9 @@ export default {
     if (m === 'POST' && p === '/admin/api/dedup') return isAdmin ? handleDedup(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/dedup/stats') return isAdmin ? handleDedupStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/dedup/groups') return isAdmin ? handleDedupGroups(env) : json({ok:false,error:'Unauthorized'},401);
+    // 去重行级操作：单文件清理 / 设为保留（keep 保留该行并清理同组其他）
+    if (m === 'POST' && p === '/admin/api/dedup/row') return isAdmin ? handleDedupRow(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/dedup/rows') return isAdmin ? handleDedupRows(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/processing') return isAdmin ? handleProcessingStatus(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/retry') return isAdmin ? handleRetry(request, env, ctx) : json({ok:false,error:'Unauthorized'},401);
     // 未转存列表（已入库但未完成）+ 批量重试
@@ -3725,33 +3728,130 @@ async function handleDedupStats(env) {
 
 // Dedup groups preview: show every duplicate group with its members and the
 // keeper that would survive a cleanup, so admins can verify before purging.
+// 已优化：原来每组 2 次 D1 查询（N+1，最多 100 次往返 → 慢），改为 3~4 次总查询。
 async function handleDedupGroups(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
     await ensureTablesOnce(env.D1_DB);
-    const dups = await env.D1_DB.prepare(
+    const dupRows = await env.D1_DB.prepare(
       'SELECT md5_hash, COUNT(*) as cnt FROM files WHERE deleted_at IS NULL AND md5_hash!="" GROUP BY md5_hash HAVING COUNT(*)>1 ORDER BY cnt DESC LIMIT 50'
     ).all();
+    const dups = dupRows.results || [];
+    if (!dups.length) return json({ ok: true, data: { total_groups: 0, groups: [] } });
+    // 1) 一次性取所有组成员（md5 IN 分批，SQLite 单条变量上限 999）
+    const allRows = [];
+    const md5List = dups.map(function(d) { return d.md5_hash; });
+    for (let i = 0; i < md5List.length; i += 200) {
+      const chunk = md5List.slice(i, i + 200);
+      const ph = chunk.map(function() { return '?'; }).join(',');
+      const rr = await env.D1_DB.prepare(
+        'SELECT id, file_name, file_type, file_size, created_at, storage_key, r2_url, pool_status, tags, md5_hash FROM files WHERE deleted_at IS NULL AND md5_hash IN (' + ph + ')'
+      ).bind.apply(null, chunk).all();
+      (rr.results || []).forEach(function(x) { allRows.push(x); });
+    }
+    // 2) 收集所有成员 id，统一查一次随机库引用（分批防超限）
+    const allIds = allRows.map(function(x) { return x.id; });
+    const poolRefs = await poolRefIds(env, allIds);
+    // 3) 组内排序（与清理时一致：池导入 > 有标签 > 已完成 > 其他）并分组
+    const byMd5 = {};
+    allRows.forEach(function(f) { (byMd5[f.md5_hash] = byMd5[f.md5_hash] || []).push(f); });
     const groups = [];
-    for (const d of (dups.results || [])) {
-      const rows = await env.D1_DB.prepare(
-        "SELECT id, file_name, file_type, file_size, created_at, storage_key, r2_url, pool_status, tags FROM files WHERE md5_hash=? AND deleted_at IS NULL ORDER BY CASE WHEN pool_status='imported' THEN 0 WHEN tags!='' THEN 1 WHEN processing_state='completed' THEN 2 ELSE 3 END, id ASC LIMIT 20"
-      ).bind(d.md5_hash).all();
-      const res = rows.results || [];
-      const poolRefs = new Set();
-      try {
-        const pr = await env.D1_DB.prepare('SELECT tg_file_id FROM random_pool WHERE tg_file_id IN (' + res.map(function(x){ return x.id; }).join(',') + ')').all();
-        (pr.results || []).forEach(function(x){ poolRefs.add(String(x.tg_file_id)); });
-      } catch (e) {}
+    for (const d of dups) {
+      const res = (byMd5[d.md5_hash] || []).sort(function(a, b) {
+        const ka = a.pool_status === 'imported' ? 0 : (a.tags ? 1 : 2);
+        const kb = b.pool_status === 'imported' ? 0 : (b.tags ? 1 : 2);
+        return ka - kb || a.id - b.id;
+      }).slice(0, 20);
+      if (!res.length) continue;
       groups.push({
         md5: d.md5_hash,
         count: d.cnt,
-        keeper_id: res.length ? res[0].id : null,
+        keeper_id: res[0].id,
         files: res.map(function(f) { return { id: f.id, file_name: f.file_name, file_type: f.file_type, file_size: f.file_size, created_at: f.created_at, r2_url: f.r2_url || '', pool_ref: poolRefs.has(String(f.id)) }; })
       });
     }
-    return json({ ok: true, data: { total_groups: dups.results?.length || 0, groups: groups } });
+    return json({ ok: true, data: { total_groups: groups.length, groups: groups } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 随机库引用 id 集合（分批查，避免 SQLite IN 变量超限）
+async function poolRefIds(env, ids) {
+  const set = new Set();
+  for (let i = 0; i < ids.length; i += 800) {
+    const chunk = ids.slice(i, i + 800);
+    if (!chunk.length) continue;
+    const pr = await env.D1_DB.prepare('SELECT tg_file_id FROM random_pool WHERE tg_file_id IN (' + chunk.join(',') + ')').all();
+    (pr.results || []).forEach(function(x) { set.add(String(x.tg_file_id)); });
+  }
+  return set;
+}
+
+// 按行清理/保留：keep = 保留该 id 并清理同组其他；del = 只清理该 id。
+// 默认软删（移入回收站），purge=1 硬删（含 R2 对象）。池引用文件自动跳过。
+async function handleDedupRow(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    const body = await request.json().catch(function() { return {}; });
+    const md5 = String(body.md5 || '').trim();
+    const id = Number(body.id) || 0;
+    const action = body.action;
+    const purge = body.purge === 1 || body.purge === '1';
+    if (!md5 || !id || (action !== 'keep' && action !== 'del')) return json({ ok: false, error: '参数错误：需要 md5 / id / action(keep|del)' });
+    const rows = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE md5_hash=? AND deleted_at IS NULL").bind(md5).all();
+    const res = rows.results || [];
+    const poolRefs = await poolRefIds(env, res.map(function(x) { return x.id; }));
+    let targets = [];
+    if (action === 'keep') {
+      targets = res.filter(function(r) { return r.id !== id && !poolRefs.has(String(r.id)); });
+    } else {
+      targets = res.filter(function(r) { return r.id === id && !poolRefs.has(String(r.id)); });
+    }
+    const cleaned = await purgeFileRows(env, targets, purge);
+    const mode = purge ? '硬删除' : '移入回收站';
+    const kept = action === 'keep' ? '（保留 id=' + id + '）' : '';
+    return json({ ok: true, data: { cleaned: cleaned, message: (action === 'keep' ? '保留并清理同组' : '清理') + ' ' + cleaned + ' 个文件，已' + mode + kept + '。池引用文件已自动跳过。' } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+
+// 批量清理选中的文件行（复选框多选）
+async function handleDedupRows(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    const body = await request.json().catch(function() { return {}; });
+    const ids = (body.ids || []).map(Number).filter(Boolean);
+    const purge = body.purge === 1 || body.purge === '1';
+    if (!ids.length) return json({ ok: false, error: '未选择文件' });
+    const ph = ids.map(function() { return '?'; }).join(',');
+    const rows = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE deleted_at IS NULL AND id IN (" + ph + ")").bind.apply(null, ids).all();
+    const res = rows.results || [];
+    const poolRefs = await poolRefIds(env, res.map(function(x) { return x.id; }));
+    const targets = res.filter(function(r) { return !poolRefs.has(String(r.id)); });
+    const cleaned = await purgeFileRows(env, targets, purge);
+    const mode = purge ? '硬删除' : '移入回收站';
+    return json({ ok: true, data: { cleaned: cleaned, skipped: res.length - targets.length, message: '已清理 ' + cleaned + ' 个文件（' + mode + '）' + (res.length - targets.length ? '，跳过池引用 ' + (res.length - targets.length) + ' 个。' : '。') } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+
+// 批量软删/硬删（含 R2 对象，最后引用才删），返回实际清理数
+async function purgeFileRows(env, targets, purge) {
+  const now = new Date().toISOString();
+  let cleaned = 0;
+  for (const f of targets) {
+    try {
+      if (purge) {
+        if (f.storage_key) {
+          const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
+          if (!ref || (ref.c || 0) <= 1) { try { await env.R2_BUCKET.delete(f.storage_key); } catch (e) {} }
+        }
+        const r = await env.D1_DB.prepare('DELETE FROM files WHERE id=?').bind(f.id).run();
+        if (r.meta && r.meta.changes) cleaned++;
+      } else {
+        const r = await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=? AND deleted_at IS NULL').bind(now, f.id).run();
+        if (r.meta && r.meta.changes) cleaned++;
+      }
+    } catch (e) {}
+  }
+  return cleaned;
 }
 
 // 查重分批执行（手动/定时共用）：算 N 个缺失 MD5，再清理 G 个重复组。
