@@ -3953,7 +3953,7 @@ async function handleCompressRun(env) {
     const startT = Date.now();
     const rows = await env.D1_DB.prepare("SELECT id, storage_key, file_size FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND file_type='photo' AND (mime_type='' OR mime_type IN ('image/jpeg','image/png')) AND (storage_key LIKE '%.jpg' OR storage_key LIKE '%.jpeg' OR storage_key LIKE '%.png') ORDER BY file_size DESC LIMIT 3").all();
     if (!(rows.results || []).length) return json({ ok: true, data: { done: 0, skipped: 0, not_available: false, message: '没有可压缩的 JPEG/PNG 图片。' } });
-    let done = 0, skipped = 0, notAvailable = false;
+    let done = 0, skipped = 0, webpFail = 0;
     for (const f of rows.results) {
       if (Date.now() - startT > 25000) break;
       try {
@@ -3963,7 +3963,7 @@ async function handleCompressRun(env) {
         const res = await fetch(url, { cf: { image: { format: 'webp', quality: 80, fit: 'scale-down' } } });
         if (!res.ok) { skipped++; continue; }
         const ct = res.headers.get('content-type') || '';
-        if (ct.indexOf('webp') === -1) { notAvailable = true; skipped++; continue; } // Image Resizing 未生效
+        if (ct.indexOf('webp') === -1) { webpFail++; skipped++; continue; } // 该文件未转成 webp（如超大图超限）
         const wbuf = await res.arrayBuffer();
         if (!wbuf.byteLength || wbuf.byteLength >= (f.file_size || 0)) { skipped++; continue; } // 未变小不覆盖
         await env.R2_BUCKET.put(f.storage_key, wbuf, { httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=31536000' } });
@@ -3971,9 +3971,10 @@ async function handleCompressRun(env) {
         done++;
       } catch (e) { console.log('compress item fail:', e.message); }
     }
+    const notAvailable = (webpFail > 0 && done === 0);
     const msg = notAvailable
       ? 'Cloudflare Image Resizing 未生效（需账号启用，通常为 Pro 套餐或按量开通）。可通过 fetch 加 cf.image 转换的 Worker 验证；未启用时无法转 WebP，可先用回收站清理/去重释放空间。'
-      : ('本轮压缩 ' + done + ' 张为 WebP' + (skipped ? '，跳过 ' + skipped + ' 张（被多行引用/未变小/非图片）' : '') + '。分批执行（每批最多 3 张，限时 25s），可重复点击加速。');
+      : ('本轮压缩 ' + done + ' 张为 WebP' + (skipped ? '，跳过 ' + skipped + ' 张（被多行引用/未变小/超大图超限）' : '') + '。分批执行（每批最多 3 张，限时 25s），可重复点击加速。');
     return json({ ok: true, data: { done, skipped, not_available: notAvailable, message: msg } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
