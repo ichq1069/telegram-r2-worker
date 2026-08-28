@@ -425,7 +425,7 @@ async function cfR2Usage(env) {
     const endDate = new Date().toISOString();
     const startDate = new Date(Date.now() - 86400000).toISOString();
     // 存储用量（最近 24h 最新一条，payloadSize = 真实存储字节数，与 R2 Dashboard 同源）
-    const q1 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2StorageAdaptiveGroups(limit:1, filter:{datetime_geq:"' + startDate + '", datetime_leq:"' + endDate + '", bucketName:"bot-telegram"}, orderBy:[datetime_DESC]) { max { objectCount payloadSize metadataSize uploadCount } } } } }';
+    const q1 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2StorageAdaptiveGroups(limit:1, filter:{datetime_geq:"' + startDate + '", datetime_leq:"' + endDate + '", bucketName:"bot-telegram"}) { max { objectCount payloadSize metadataSize uploadCount } } } } }';
     const j1 = await gql(q1);
     if (j1.errors) return { _err: 'storage errors: ' + JSON.stringify(j1.errors).slice(0, 200) };
     const a1 = j1.data && j1.data.viewer && j1.data.viewer.accounts && j1.data.viewer.accounts[0];
@@ -436,7 +436,7 @@ async function cfR2Usage(env) {
     // 操作数（近 30 天，按 actionType 归入 A/B 类）
     try {
       const s30 = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-      const q2 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2OperationsAdaptiveGroups(limit:10000, filter:{datetime_geq:"' + s30 + '", bucketName:"bot-telegram"}) { sum { requests } dimensions { actionType } } } } }';
+      const q2 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2OperationsAdaptiveGroups(limit:10000, filter:{datetime_geq:"' + s30 + '", datetime_leq:"' + endDate + '", bucketName:"bot-telegram"}) { sum { requests } dimensions { actionType } } } } }';
       const j2 = await gql(q2);
       const a2 = j2 && j2.data && j2.data.viewer && j2.data.viewer.accounts && j2.data.viewer.accounts[0];
       const groups = (a2 && a2.r2OperationsAdaptiveGroups) || [];
