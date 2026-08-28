@@ -1181,7 +1181,9 @@ async function handleAdminWebhookStatus(env) {
     const j = await r.json();
     const res = (j && j.result) || {};
     const expectUrl = 'https://telegram-r2-bot.wo58.cn/webhook';
-    const healthy = j.ok && res.url === expectUrl && !res.last_error_message;
+    // 最近错误若已超过 5 分钟未更新（且无积压），视为已恢复（Telegram 成功后不再更新 last_error）
+    const errAge = res.last_error_date ? (Math.floor(Date.now() / 1000) - res.last_error_date) : 0;
+    const healthy = j.ok && res.url === expectUrl && (!res.last_error_message || errAge > 300);
     return json({ ok: true, data: {
       has_token: true,
       healthy: healthy ? 1 : 0,
@@ -1190,6 +1192,7 @@ async function handleAdminWebhookStatus(env) {
       url_match: res.url === expectUrl ? 1 : 0,
       pending: res.pending_update_count || 0,
       last_error: res.last_error_message || '',
+      last_error_age: errAge,
       last_error_date: res.last_error_date || 0,
       max_connections: res.max_connections || 40,
       ip_address: res.ip_address || '',
