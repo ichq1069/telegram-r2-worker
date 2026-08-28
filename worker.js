@@ -420,29 +420,38 @@ async function cfR2Usage(env) {
       body: JSON.stringify({ query: q })
     }).then(function(r) { return r.json(); });
   };
-  try {
-    // 真实存储字节数（R2 Dashboard 同源数据）
-    const q1 = 'query { viewer { accounts(filter:{accountTag:"' + env.CF_ACCOUNT_ID + '"}) { r2BucketStorage(filter:{bucketName:"bot-telegram"},limit:1){ bucketName bytesStored } } } }';
-    const j1 = await gql(q1);
-    if (j1.errors) return { _err: 'graphql errors: ' + JSON.stringify(j1.errors).slice(0, 220) };
-    const a1 = j1 && j1.data && j1.data.viewer && j1.data.viewer.accounts && j1.data.viewer.accounts[0];
-    const st = a1 && a1.r2BucketStorage && a1.r2BucketStorage[0];
-    if (!st || st.bytesStored === undefined || st.bytesStored === null) return { _err: 'storage dataset empty: ' + JSON.stringify(j1).slice(0, 220) };
-    const out = { storage_bytes: st.bytesStored, source: 'cf' };
-    // 近 30 天 A/B 类操作（字段不存在时忽略，回退本地计数）
+  const acct = env.CF_ACCOUNT_ID;
+  // R2 存储数据集名在不同账号/版本 schema 下写法不同，逐个探测取第一个可用的
+  const cands = ['r2BucketStorage', 'r2BucketStorageAdaptiveGroups', 'r2BucketStorageGroups', 'r2BucketStorageDailyGroups', 'r2BucketStorage1dGroups', 'r2BucketStorageWeeklyGroups', 'r2BucketStorageHourlyGroups'];
+  let lastErr = '';
+  for (const ds of cands) {
     try {
-      const start = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-      const q2 = 'query { viewer { accounts(filter:{accountTag:"' + env.CF_ACCOUNT_ID + '"}) { r2BucketOperations(filter:{bucketName:"bot-telegram", datetimeMinute_geq:"' + start + '"}){ sum { classARequests classBRequests } } } } }';
-      const j2 = await gql(q2);
-      const a2 = j2 && j2.data && j2.data.viewer && j2.data.viewer.accounts && j2.data.viewer.accounts[0];
-      const ops = a2 && a2.r2BucketOperations && a2.r2BucketOperations[0] && a2.r2BucketOperations[0].sum;
-      if (ops && ops.classARequests !== undefined) {
-        out.class_a = ops.classARequests || 0;
-        out.class_b = ops.classBRequests || 0;
+      const q = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { ' + ds + '(filter:{bucketName:"bot-telegram"},limit:1){ bucketName bytesStored } } } }';
+      const j = await gql(q);
+      if (j.errors) { lastErr = ds + ' -> ' + JSON.stringify(j.errors).slice(0, 110); continue; }
+      const a = j.data && j.data.viewer && j.data.viewer.accounts && j.data.viewer.accounts[0];
+      const arr = a && a[ds];
+      const row = arr && arr[0];
+      if (row && row.bytesStored !== undefined) {
+        const out = { storage_bytes: row.bytesStored, source: 'cf', ds: ds };
+        // 近 30 天 A/B 类操作（可选，字段不支持则回退本地计数）
+        try {
+          const start = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+          const q2 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2BucketOperations(filter:{bucketName:"bot-telegram", datetimeMinute_geq:"' + start + '"}){ sum { classARequests classBRequests } } } } }';
+          const j2 = await gql(q2);
+          const a2 = j2 && j2.data && j2.data.viewer && j2.data.viewer.accounts && j2.data.viewer.accounts[0];
+          const ops = a2 && a2.r2BucketOperations && a2.r2BucketOperations[0] && a2.r2BucketOperations[0].sum;
+          if (ops && ops.classARequests !== undefined) {
+            out.class_a = ops.classARequests || 0;
+            out.class_b = ops.classBRequests || 0;
+          }
+        } catch (e) {}
+        return out;
       }
-    } catch (e) {}
-    return out;
-  } catch (e) { return { _err: 'exception: ' + e.message }; }
+      lastErr = ds + ' -> empty: ' + JSON.stringify(j).slice(0, 150);
+    } catch (e) { lastErr = ds + ' -> ' + e.message; }
+  }
+  return { _err: 'no dataset: ' + lastErr };
 }
 async function handleAdminR2Usage(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
