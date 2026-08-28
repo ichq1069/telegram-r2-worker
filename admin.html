@@ -1872,7 +1872,7 @@ function tagHtml(f) {
   for (var i = 0; i < tags.length; i++) h += '<span class="badge badge-blue" style="margin-right:3px;font-size:10px">#' + escStr(tags[i]) + '</span>';
   return h;
 }
-// 群资源编号徽章（如 #440-001）：bot 回复、后台列表、搜索均以此编号对应
+// 群资源编号徽章（如 #3-001：批次号=本次转发总数，序号=批内第几个）：bot 回复、后台列表、搜索均以此编号对应
 function refBadge(f) {
   if (!f || !f.group_ref) return "";
   return '<span class="badge badge-blue" style="margin-right:3px;font-size:10px" title="群资源编号">#' + escStr(f.group_ref) + '</span>';
