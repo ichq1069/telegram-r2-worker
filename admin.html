@@ -196,6 +196,19 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
 .store-tab { padding: 6px 14px; border: 1px solid var(--border); background: #fff; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: all .15s; }
 .store-tab:hover { border-color: var(--primary); color: var(--primary); }
 .store-tab.on { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+
+/* AI 助手浮窗（登录后 init 中显示） */
+#aiFab { position: fixed; right: 20px; bottom: 20px; width: 52px; height: 52px; border-radius: 50%; background: linear-gradient(135deg, #4f6ef7, #7c3aed); color: #fff; font-size: 22px; display: none; align-items: center; justify-content: center; cursor: pointer; box-shadow: var(--shadow-lg); z-index: 400; border: none; transition: transform .15s; }
+#aiFab:hover { transform: scale(1.08); }
+#aiFloat { position: fixed; right: 20px; bottom: 84px; width: 340px; max-width: calc(100vw - 40px); background: var(--card); border-radius: 14px; box-shadow: var(--shadow-lg); z-index: 400; flex-direction: column; overflow: hidden; display: none; }
+.aif-head { padding: 10px 14px; background: linear-gradient(135deg, #4f6ef7, #7c3aed); color: #fff; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+.aif-head button { background: transparent; border: none; color: #fff; font-size: 18px; cursor: pointer; line-height: 1; }
+#aiFloatMsgs { padding: 10px; overflow-y: auto; flex: 1; min-height: 120px; max-height: 320px; font-size: 13px; background: #fafbfd; }
+.aif-msg { margin-bottom: 8px; padding: 8px 10px; border-radius: 10px; max-width: 92%; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.aif-user { background: #e0e7ff; margin-left: auto; color: #1e293b; }
+.aif-bot { background: #ffffff; border: 1px solid var(--border); color: #1e293b; }
+.aif-input { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--border); background: #fff; }
+.aif-input .inp { flex: 1; }
 </style>
 </head>
 <body>
@@ -702,6 +715,11 @@ https://example.com/b.jpg"></textarea></div>
           <button class="btn btn-primary" id="aiSaveBtn">保存配置</button>
           <span id="aiKeyHint" style="font-size:11px;color:var(--text-secondary)"></span>
         </div>
+        <div class="fb" style="margin-top:10px">
+          <input class="inp" id="aiTestChat" placeholder="测试目标 chat_id（群或私聊 ID，可填上面告警的 ID）" style="flex:1">
+          <button class="btn btn-ghost" id="aiTestBtn">发送测试</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">测试：AI 会给目标 chat 发一条自我介绍消息，用于确认 Key 可用。已保存的 Key 会以掩码形式回显在输入框（不会因重复保存丢失）。</div>
       </div>
       <div class="card">
         <div class="card-title"><span class="dot"></span>R2 套餐配额 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">概览页用量与超限提醒依据；存储估算自库内文件，A/B 操作数自本功能上线起累计（写/读操作）</span></div>
@@ -721,6 +739,17 @@ https://example.com/b.jpg"></textarea></div>
 
 <div id="modalArea"></div>
 <div id="lightboxArea"></div>
+
+<!-- AI 助手浮窗（后台问答，仅登录后可用） -->
+<button id="aiFab" title="AI 助手">💬</button>
+<div id="aiFloat">
+  <div class="aif-head">🤖 AI 助手 <button id="aiFloatClose">✕</button></div>
+  <div id="aiFloatMsgs"></div>
+  <div class="aif-input">
+    <input class="inp" id="aiFloatQ" placeholder="问：图库有多少文件？" autocomplete="off">
+    <button class="btn btn-primary" id="aiFloatSend">发送</button>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -1338,6 +1367,46 @@ function init() {
     var onTab = document.querySelector(".tab.on");
     if (onTab && onTab.getAttribute("data-tab") === "files" && !document.hidden) loadFiles(currentPage);
   }, 30000);
+  initAiFloat();
+}
+
+// ==================== AI 助手浮窗（后台问答） ====================
+var aiFloatOpen = false;
+function initAiFloat() {
+  var fab = document.getElementById("aiFab");
+  var fl = document.getElementById("aiFloat");
+  if (!fab || !fl) return;
+  fab.style.display = "flex"; // 仅登录后显示
+  fab.addEventListener("click", function() {
+    aiFloatOpen = !aiFloatOpen;
+    fl.style.display = aiFloatOpen ? "flex" : "none";
+    if (aiFloatOpen) {
+      if (fl.querySelector(".aif-msg") == null) addAiMsg("bot", "你好，我是 AI 助手 🤖\n可以问我：图库统计、文件搜索、未转存情况、触发重试转存等。");
+      document.getElementById("aiFloatQ").focus();
+    }
+  });
+  document.getElementById("aiFloatClose").addEventListener("click", function() { fl.style.display = "none"; aiFloatOpen = false; });
+  document.getElementById("aiFloatSend").addEventListener("click", function() { sendAiAsk(); });
+  document.getElementById("aiFloatQ").addEventListener("keydown", function(e) { if (e.key === "Enter") sendAiAsk(); });
+}
+function addAiMsg(who, text) {
+  var el = document.getElementById("aiFloatMsgs");
+  var d = document.createElement("div");
+  d.className = "aif-msg " + (who === "user" ? "aif-user" : "aif-bot");
+  d.textContent = text;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  return d;
+}
+async function sendAiAsk() {
+  var q = document.getElementById("aiFloatQ").value.trim();
+  if (!q) return;
+  addAiMsg("user", q);
+  document.getElementById("aiFloatQ").value = "";
+  var wait = addAiMsg("bot", "思考中...");
+  var r = await api("POST", "/admin/api/ai/ask", { question: q });
+  if (r && r.ok && r.data) wait.textContent = r.data.text;
+  else wait.textContent = "❌ " + ((r && r.error) || "请求失败，请检查 AI 配置");
 }
 
 // 存储去重
@@ -2038,6 +2107,13 @@ async function loadOpsPage() {
       document.getElementById("aiPrompt").value = rai.data.prompt || "";
       var kh = document.getElementById("aiKeyHint");
       if (kh) kh.textContent = rai.data.has_key ? ("已保存 Key：" + rai.data.api_key) : "未保存 Key";
+      // 掩码 Key 回显到输入框，避免用户误以为丢失；重复保存不会覆盖（后端忽略含 **** 的值）
+      var ki = document.getElementById("aiKey");
+      if (ki && rai.data.has_key) ki.value = rai.data.api_key;
+      // 测试目标默认填告警 chat_id
+      var tc = document.getElementById("aiTestChat");
+      var nc = document.getElementById("notifyChatId");
+      if (tc && nc && nc.value && !tc.value) tc.value = nc.value;
     }
   } catch (e) {}
   // R2 套餐配额
@@ -2060,8 +2136,20 @@ document.getElementById("aiSaveBtn").addEventListener("click", function() {
     api_key: document.getElementById("aiKey").value.trim()
   };
   api("POST", "/admin/api/settings/ai", b).then(function(r) {
-    if (r && r.ok) { toast("AI 配置已保存", 1); document.getElementById("aiKey").value = ""; }
+    if (r && r.ok) { toast("AI 配置已保存", 1); loadOpsPage(); }
     else toast((r && r.error) || "保存失败", 0);
+  });
+});
+
+document.getElementById("aiTestBtn").addEventListener("click", function() {
+  var chatId = document.getElementById("aiTestChat").value.trim();
+  if (!chatId) { toast("请先填写测试目标 chat_id", 0); return; }
+  var btn = this;
+  btn.disabled = true; btn.textContent = "发送中...";
+  api("POST", "/admin/api/ai/test", { chat_id: chatId, wait: true }).then(function(r) {
+    btn.disabled = false; btn.textContent = "发送测试";
+    if (r && r.ok) toast("测试消息已发送到 " + chatId, 1);
+    else toast((r && r.error) || "测试失败", 0);
   });
 });
 

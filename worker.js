@@ -96,6 +96,9 @@ export default {
     // AI 管理配置（enabled/base/model/api_key/prompt）
     if (m === 'GET' && p === '/admin/api/settings/ai') return isAdmin ? handleAdminGetAI(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/ai') return isAdmin ? handleAdminSaveAI(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // AI 测试（往指定 chat 发测试消息）/ AI 浮窗问答
+    if (m === 'POST' && p === '/admin/api/ai/test') return isAdmin ? handleAdminTestAI(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/ai/ask') return isAdmin ? handleAdminAskAI(request, env) : json({ok:false,error:'Unauthorized'},401);
     // R2 用量概览 / 套餐配额配置
     if (m === 'GET' && p === '/admin/api/r2-usage') return isAdmin ? handleAdminR2Usage(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminGetR2Quota(env) : json({ok:false,error:'Unauthorized'},401);
@@ -414,21 +417,18 @@ var AI_TOOLS = [
   { type: 'function', function: { name: 'search_files', description: '按关键字搜索已入库文件（文件名/标签/编号/说明）', parameters: { type: 'object', properties: { keyword: { type: 'string', description: '搜索关键字' }, limit: { type: 'number', description: '显示条数，默认 10' } }, required: ['keyword'] } } },
   { type: 'function', function: { name: 'get_file', description: '按 ID 查询单个文件信息（状态、大小、标签、链接）', parameters: { type: 'object', properties: { id: { type: 'number', description: '文件 id' } }, required: ['id'] } } }
 ];
-async function callAIManage(chatId, msgId, text, env) {
+// AI 对话（function calling 循环，最多 3 轮工具调用），返回 {ok,text} 或 {ok:false,error}
+async function aiComplete(env, userText) {
   const cfg = await getAIConfig(env);
-  if (cfg.enabled !== 1 || !cfg.key) {
-    await replyText(chatId, msgId, '🤖 AI 助手未配置（后台 → 运维 → AI 管理填 API Key 并开启）。', env);
-    return;
-  }
+  if (cfg.enabled !== 1 || !cfg.key) return { ok: false, error: 'AI 未开启或未配置 API Key' };
   const sys = cfg.prompt || '你是 Telegram 图库管理助手。用户会用中文提问，请调用工具获取真实数据后简洁回答；需要重试/转存时调用工具并说明已触发。不要编造数据。';
-  const msgs = [{ role: 'system', content: sys }, { role: 'user', content: String(text).slice(0, 2000) }];
-  let finalText = '';
+  const msgs = [{ role: 'system', content: sys }, { role: 'user', content: String(userText || '').slice(0, 2000) }];
   for (let round = 0; round < 3; round++) {
     const resp = await fetchAI(cfg, msgs);
-    if (!resp) { await replyText(chatId, msgId, '❌ AI 服务调用失败，请检查后台 AI 配置', env); return; }
+    if (!resp) return { ok: false, error: 'AI 服务调用失败，请检查后台 AI 配置（Base/Key/模型）' };
     const choice = resp.choices && resp.choices[0];
     const m = choice && choice.message;
-    if (!m) { await replyText(chatId, msgId, '❌ AI 返回异常', env); return; }
+    if (!m) return { ok: false, error: 'AI 返回异常' };
     if (m.tool_calls && m.tool_calls.length) {
       msgs.push(m);
       for (const tc of m.tool_calls) {
@@ -441,12 +441,43 @@ async function callAIManage(chatId, msgId, text, env) {
       }
       continue;
     }
-    finalText = m.content || '';
-    break;
+    return { ok: true, text: m.content || '' };
   }
-  if (!finalText) finalText = '（AI 无回复，请稍后再试）';
+  return { ok: false, error: 'AI 工具调用次数超限' };
+}
+async function callAIManage(chatId, msgId, text, env) {
+  const r = await aiComplete(env, text);
+  if (!r.ok) {
+    await replyText(chatId, msgId, '❌ ' + r.error, env);
+    return;
+  }
+  const finalText = r.text || '（AI 无回复，请稍后再试）';
   const parts = finalText.match(/[\s\S]{1,3800}/g) || [finalText];
   for (const pt of parts) await replyTextPlain(chatId, msgId, pt, env);
+}
+// 后台测试：让 AI 给指定 chat 发一条测试消息
+async function handleAdminTestAI(request, env) {
+  try {
+    const cfg = await getAIConfig(env);
+    if (cfg.enabled !== 1 || !cfg.key) return json({ ok: false, error: 'AI 未开启或未配置 API Key' });
+    const b = await request.json().catch(function(){ return {}; });
+    const chatId = String(b.chat_id || '').trim();
+    if (!chatId) return json({ ok: false, error: '缺少 chat_id（测试目标）' });
+    const p = callAIManage(chatId, 0, '测试消息：请用一句话介绍你自己，并说明你可以帮管理员做什么。', env).catch(function(e){ console.error('ai test:', e.message); });
+    if (b.wait) await p; // 测试默认等待完成（前端可传 wait=true）
+    return json({ ok: true, data: { sent: true, chat_id: chatId } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+// 后台 AI 浮窗问答：返回 AI 回复文本
+async function handleAdminAskAI(request, env) {
+  try {
+    const b = await request.json().catch(function(){ return {}; });
+    const q = String(b.question || '').trim();
+    if (!q) return json({ ok: false, error: '缺少问题' });
+    const r = await aiComplete(env, q);
+    if (!r.ok) return json({ ok: false, error: r.error });
+    return json({ ok: true, data: { text: r.text } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 async function fetchAI(cfg, msgs) {
   const url = (cfg.base || 'https://api.deepseek.com').replace(/\/+$/, '') + '/chat/completions';
