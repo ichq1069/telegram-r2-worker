@@ -2241,13 +2241,16 @@ function poolFileJson(r) {
 async function handleAdminTags(env) {
   try {
     const d1 = await env.D1_DB.prepare("SELECT tags FROM files WHERE processing_state='completed' AND deleted_at IS NULL AND tags IS NOT NULL AND tags != ''").all();
-    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND tags IS NOT NULL AND tags != ''").all();
+    // random_pool 只统计非 TG 副本（source != 'tg'），避免与 files.tags 重复计数；
+    // 同一张 TG 图在 files 里计一次即可，pool 里的副本不再重复计
+    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND source != 'tg' AND tags IS NOT NULL AND tags != ''").all();
     const cnt = {};
     [d1, d2].forEach(function(res) {
       (res.results || []).forEach(function(r) {
+        const seen = {};
         (r.tags || '').split(',').forEach(function(t) {
           t = t.trim();
-          if (t) cnt[t] = (cnt[t] || 0) + 1;
+          if (t && !seen[t]) { seen[t] = 1; cnt[t] = (cnt[t] || 0) + 1; }  // 行内去重，防止 a,a 计两次
         });
       });
     });
@@ -2754,6 +2757,9 @@ async function handleAdminPoolFromTg(request, env) {
   try {
     const b = await request.json().catch(() => null);
     if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    // 可选 tags：导入时统一设置标签（覆盖文件现有标签并同步回 files.tags）；不传则沿用文件现有标签
+    const tagsOverride = Array.isArray(b.tags) ? b.tags.map(s => String(s).trim()).filter(Boolean) : [];
+    const finalTags = tagsOverride.length ? Array.from(new Set(tagsOverride)).join(',') : '';
     let added = 0, skipped = 0;
     for (const id of b.ids) {
       const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
@@ -2761,8 +2767,13 @@ async function handleAdminPoolFromTg(request, env) {
       const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE tg_file_id = ?').bind(id).first();
       if (ex) continue;
       const now = new Date().toISOString();
+      const useTags = finalTags || f.tags || '';
       await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
-        .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', f.tags || '', f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, id, now).run();
+        .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, id, now).run();
+      if (finalTags) {
+        // 同步文件标签，保证标签计数一致（files 与 pool 同标签）
+        await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(finalTags, id).run();
+      }
       added++;
     }
     return json({ ok: true, data: { added: added, skipped: skipped } });

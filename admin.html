@@ -2078,6 +2078,46 @@ async function saveTags() {
     loadTagCloud();
   } else toast(r.error || "保存失败", 0);
 }
+// 导入随机库弹窗：可选 ①设置标签并导入 ②仅导入(沿用现有标签) ③只设标签不导入
+function showPoolImportModal(ids) {
+  var closeM = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal">' +
+    '<h3>导入随机库 (' + ids.length + ' 个文件)</h3>' +
+    '<div class="fr"><label>标签（可选，逗号分隔；留空则沿用文件现有标签）</label><input class="inp" id="impTags" placeholder="街拍,美女"></div>' +
+    '<div class="modal-actions" style="flex-wrap:wrap">' +
+    '<button class="btn btn-primary" id="impImportTag">设置标签并导入</button>' +
+    '<button class="btn" id="impImportOnly" style="background:#f1f5f9;color:var(--text)">仅导入（沿用现有标签）</button>' +
+    '<button class="btn btn-ghost" id="impTagOnly">只设标签不导入</button>' +
+    '<button class="btn btn-ghost" id="modalCancel">取消</button>' +
+    '</div></div></div>';
+  document.getElementById("impImportTag").onclick = function() {
+    var tags = document.getElementById("impTags").value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
+    api("POST", "/admin/api/pool/from-tg", { ids: ids, tags: tags }).then(function(r) {
+      if (r.ok) {
+        toast("已设置标签并导入 " + (r.data && r.data.added || 0) + " 张" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
+        closeM(); loadFiles(currentPage); loadTagCloud(); loadPool();
+      } else toast(r.error || "失败", 0);
+    });
+  };
+  document.getElementById("impImportOnly").onclick = function() {
+    api("POST", "/admin/api/pool/from-tg", { ids: ids }).then(function(r) {
+      if (r.ok) {
+        toast("已导入 " + (r.data && r.data.added || 0) + " 张到随机库" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
+        closeM(); loadFiles(currentPage); loadTagCloud(); loadPool();
+      } else toast(r.error || "导入失败", 0);
+    });
+  };
+  document.getElementById("impTagOnly").onclick = function() {
+    var tags = document.getElementById("impTags").value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
+    api("POST", "/admin/api/files/tags", { ids: ids, tags: tags, mode: "set" }).then(function(r) {
+      if (r.ok) {
+        toast("已设置标签（未导入）", 1);
+        closeM(); loadFiles(currentPage); loadTagCloud();
+      } else toast(r.error || "失败", 0);
+    });
+  };
+}
 // 轮播展示页设置
 function addProgRow(p) {
   p = p || {};
@@ -2655,14 +2695,7 @@ function copySelected(mode) {
   if (bPool) bPool.addEventListener("click", function() {
     var ids = Array.from(selSet);
     if (!ids.length) { toast("请先选择文件", 0); return; }
-    api("POST", "/admin/api/pool/from-tg", { ids: ids }).then(function(r) {
-      if (r.ok) {
-        var msg = "已加入 " + (r.data && r.data.added || 0) + " 张到随机库";
-        if (r.data && r.data.skipped) msg += "，跳过忽略 " + r.data.skipped + " 张";
-        toast(msg, 1);
-        loadFiles(currentPage);
-      } else toast(r.error || "导入失败", 0);
-    });
+    showPoolImportModal(ids);
   });
   var bIgnore = document.getElementById("btnIgnoreSel");
   if (bIgnore) bIgnore.addEventListener("click", function() {
