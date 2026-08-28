@@ -20,7 +20,7 @@ export default {
     const p = url.pathname;
     const m = request.method;
     if (m === 'GET' && p === '/health') return json({ ok: true, time: new Date().toISOString(), version: 'v6' });
-    if (m === 'POST' && p === '/webhook') return handleWebhook(request, env);
+    if (m === 'POST' && p === '/webhook') return handleWebhook(request, env, ctx);
     if (m === 'GET' && p === '/dashboard') return handleDashboard(env);
     if (m === 'GET' && p === '/docs') return handleDocs();
     if (m === 'GET' && p === '/show') return handleShowPage();
@@ -1137,7 +1137,7 @@ async function handleSearchCommand(chatId, msgId, keyword, env) {
 
 // ==================== WEBHOOK ====================
 
-async function handleWebhook(request, env) {
+async function handleWebhook(request, env, ctx) {
   try {
     if (env.D1_DB) await ensureTablesOnce(env.D1_DB);
     const body = await request.text();
@@ -1147,7 +1147,9 @@ async function handleWebhook(request, env) {
     // 旧版本 setWebhook 未带 secret_token（Telegram 不会发该头），若严格校验会把所有
     // webhook 请求 403 拒收导致消息积压。不带头的请求一律放行，靠 url 白名单兜底。
     if (env.TG_SECRET && st && st !== env.TG_SECRET) return json({ error: 'Forbidden' }, 403);
-    const r = await processUpdateCore(update, env, function(p) { return request.waitUntil(p); });
+    // 注意：waitUntil 是 ctx 的方法，不是 request 的（曾误用 request.waitUntil 导致
+    // 每个 webhook 消息 500 拒收、消息积压的严重 bug）
+    const r = await processUpdateCore(update, env, function(p) { return ctx.waitUntil(p); });
     return json(r);
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
