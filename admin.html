@@ -301,6 +301,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             <button class="btn btn-danger" id="btnDeleteSel" style="display:none">删除选中 (<span id="selCount">0</span>)</button>
             <button class="btn btn-ghost" id="btnCopyLinks" style="display:none" title="复制所选文件的 R2 直链 (每行一个)">复制直链</button>
             <button class="btn btn-ghost" id="btnCopyProxy" style="display:none" title="复制所选文件的代理链接 /file/tg/&lt;id&gt; (每行一个)">复制代理链接</button>
+            <button class="btn btn-ghost" id="btnCopyBoth" style="display:none" title="R2 直链 + 代理链接一起复制 (| 分隔)">复制双链接</button>
             <button class="btn btn-primary" id="btnTagSel" style="display:none">打标签</button>
             <button class="btn btn-primary" id="btnPool" style="display:none">加入随机库</button>
             <button class="btn btn-ghost" id="btnIgnoreSel" style="display:none" title="标记为忽略：批量导入时跳过">忽略导入</button>
@@ -2520,6 +2521,7 @@ function updateSelUI() {
   var cBtn = document.getElementById("btnClearSel");
   var cL = document.getElementById("btnCopyLinks");
   var cP = document.getElementById("btnCopyProxy");
+  var cB = document.getElementById("btnCopyBoth");
   var tBtn = document.getElementById("btnTagSel");
   var pBtn = document.getElementById("btnPool");
   var iBtn = document.getElementById("btnIgnoreSel");
@@ -2528,6 +2530,7 @@ function updateSelUI() {
   if (cBtn) cBtn.style.display = n > 0 ? "inline-flex" : "none";
   if (cL) cL.style.display = n > 0 ? "inline-flex" : "none";
   if (cP) cP.style.display = n > 0 ? "inline-flex" : "none";
+  if (cB) cB.style.display = n > 0 ? "inline-flex" : "none";
   if (tBtn) tBtn.style.display = n > 0 ? "inline-flex" : "none";
   if (pBtn) pBtn.style.display = n > 0 ? "inline-flex" : "none";
   if (iBtn) iBtn.style.display = n > 0 ? "inline-flex" : "none";
@@ -2556,6 +2559,14 @@ function fallbackCopy(txt) {
 function workerOrigin() {
   return (location.origin.indexOf('telegram-r2-bot.wo58.cn') >= 0) ? location.origin : 'https://telegram-r2-bot.wo58.cn';
 }
+function linkBadge(f) {
+  if (!f) return '';
+  var t = f.link_type;
+  if (t === 'both') return '<span class="badge" style="background:#dcfce7;color:#16a34a">R2+代理</span>';
+  if (t === 'r2') return '<span class="badge" style="background:#dcfce7;color:#16a34a">R2直链</span>';
+  if (t === 'proxy') return '<span class="badge" style="background:#fef9c3;color:#a16207">Tele代理</span>';
+  return '';
+}
 function copySelected(mode) {
   var ids = Array.from(selSet);
   if (!ids.length) { toast("请先选择文件", 0); return; }
@@ -2563,7 +2574,11 @@ function copySelected(mode) {
   for (var i = 0; i < ids.length; i++) {
     var f = selFiles[ids[i]];
     if (!f) continue;
-    if (mode === 'proxy') {
+    if (mode === 'both') {
+      var r2l = (f.r2_url && f.r2_url.indexOf('/file/tg/') !== 0) ? f.r2_url : '';
+      var pr = workerOrigin() + '/file/tg/' + f.id;
+      links.push(r2l ? (r2l + ' | ' + pr) : pr);
+    } else if (mode === 'proxy') {
       links.push(workerOrigin() + '/file/tg/' + f.id);
     } else {
       links.push(f.r2_url || (workerOrigin() + '/file/tg/' + f.id));
@@ -2582,6 +2597,7 @@ function copySelected(mode) {
   var b3 = document.getElementById("btnDeleteSel");
   var b4 = document.getElementById("btnCopyLinks");
   var b5 = document.getElementById("btnCopyProxy");
+  var b6 = document.getElementById("btnCopyBoth");
   if (b1) b1.addEventListener("click", function() {
     var cs = document.querySelectorAll(".fck");
     for (var i = 0; i < cs.length; i++) selSet.add(cs[i].getAttribute("data-id"));
@@ -2600,6 +2616,7 @@ function copySelected(mode) {
   });
   if (b4) b4.addEventListener("click", function() { copySelected('direct'); });
   if (b5) b5.addEventListener("click", function() { copySelected('proxy'); });
+  if (b6) b6.addEventListener("click", function() { copySelected('both'); });
   var bTag = document.getElementById("btnTagSel");
   if (bTag) bTag.addEventListener("click", function() {
     var ids = Array.from(selSet);
@@ -2709,7 +2726,7 @@ async function loadFiles(page) {
       h += '<div class="cb-wrap"><input type="checkbox" class="fck" data-id="' + f.id + '"></div>';
       h += thumb;
       h += '<div class="info"><div class="name" title="' + nm + '">' + nm + '</div>';
-      h += '<div style="font-size:10px;margin:3px 0">' + poolStateBadge(f.pool_state) + ' ' + tagHtml(f) + '</div>';
+      h += '<div style="font-size:10px;margin:3px 0">' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div>';
       h += '<div class="meta"><span>' + fmtSize(f.file_size) + '</span><span>' + (f.created_at || "").split("T")[0] + '</span></div></div>';
       h += '<div class="actions"><a href="' + pv + '" target="_blank" class="btn btn-ghost btn-sm">打开</a>';
       h += '<button class="btn btn-ghost btn-sm" data-action="tag-file" data-id="' + f.id + '">标签</button>';
@@ -2733,7 +2750,7 @@ async function loadFiles(page) {
             : '<div class="preview-placeholder" style="cursor:pointer;background:#1e293b;color:#fff;font-size:14px" data-preview="' + pv + '" data-type="video" data-name="' + nm + '">\u25B6</div>')
         : '<div class="preview-placeholder">\uD83D\uDCC4</div>';
       h += '<tr><td><input type="checkbox" class="fck" data-id="' + f.id + '"></td><td>' + img + '</td>';
-      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + poolStateBadge(f.pool_state) + ' ' + tagHtml(f) + '</div></td>';
+      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div></td>';
       h += '<td><span class="badge badge-blue">' + f.file_type + '</span></td>';
       h += '<td>' + fmtSize(f.file_size) + '</td>';
       h += '<td style="font-size:12px">' + escStr(f.chat_title || "") + '</td>';

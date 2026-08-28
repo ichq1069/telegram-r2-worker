@@ -1567,8 +1567,31 @@ async function handleFiles(request, env) {
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files f ' + w).bind(...p).first();
     const d = await env.D1_DB.prepare("SELECT f.*, CASE WHEN f.pool_status='ignored' THEN 'ignored' WHEN EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) THEN 'imported' ELSE 'pending' END AS pool_state FROM files f " + w + ' ORDER BY f.id DESC LIMIT ? OFFSET ?').bind(...p, ps, off).all();
-    return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.total || 0) / ps), items: d.results || [] } });
+    const origin = new URL(request.url).origin;
+    const items = (d.results || []).map(function(f) { return decorateLinks(f, origin); });
+    return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.total || 0) / ps), items: items } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 给文件记录补三类直链字段：
+//   r2_url      真实 R2 直链（未转存 R2 时为空；代理占位 /file/tg/<id> 不算）
+//   proxy_url   tele 代理直链（worker 拉 TG，隐藏 token，总是可用）
+//   display_url 推荐直链（有 R2 秒开优先 R2，否则代理）
+//   link_type   'r2'=已有 R2（同时代理也可用）/ 'proxy'=仅代理 / 'both'=两者都给
+function decorateLinks(f, origin) {
+  const realR2 = f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0;
+  const proxyUrl = origin + '/file/tg/' + f.id;
+  if (realR2) {
+    f.link_type = 'both';          // r2_url + proxy_url 都有
+    f.proxy_url = proxyUrl;
+    f.display_url = f.r2_url;
+  } else {
+    f.link_type = 'proxy';         // 仅代理直链
+    f.r2_url = '';
+    f.proxy_url = proxyUrl;
+    f.display_url = proxyUrl;
+  }
+  return f;
 }
 
 async function handleFile(request, env) {
@@ -1579,7 +1602,7 @@ async function handleFile(request, env) {
     let f;
     if (id) f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
     else if (fu) f = await env.D1_DB.prepare('SELECT * FROM files WHERE r2_url=? AND deleted_at IS NULL').bind(fu).first();
-    return json({ ok: true, data: f || null });
+    return json({ ok: true, data: f ? decorateLinks(f, new URL(request.url).origin) : null });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
