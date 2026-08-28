@@ -25,7 +25,7 @@ export async function ensureTables(db) {
     "CREATE INDEX IF NOT EXISTS idx_files_deleted ON files(deleted_at);" +
     "CREATE INDEX IF NOT EXISTS idx_files_tgfileid ON files(telegram_file_id);" +
     "CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);" +
-    "CREATE TABLE IF NOT EXISTS bot_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT UNIQUE, response TEXT, description TEXT, enabled INTEGER, created_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS bot_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT UNIQUE, response TEXT, description TEXT, enabled INTEGER, created_at TEXT, menu TEXT DEFAULT '');" +
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);" +
     "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0);" +
     "CREATE TABLE IF NOT EXISTS random_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, thumb_url TEXT, title TEXT, tags TEXT DEFAULT '', file_type TEXT DEFAULT 'photo', width INTEGER, height INTEGER, file_size INTEGER, source TEXT DEFAULT 'manual', tg_file_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT);" +
@@ -68,6 +68,15 @@ export async function ensureTables(db) {
     for (const wc of wantCols) {
       if (names2.indexOf(wc[0]) === -1) throw new Error('column still missing after migration: ' + wc[0]);
     }
+    // bot_commands.menu：数字菜单交互配置（旧库无此列则补加）
+    try {
+      const bc = await db.prepare("PRAGMA table_info(bot_commands)").all();
+      const bcn = (bc.results || []).map(function(c) { return c.name; });
+      if (bcn.indexOf('menu') === -1) {
+        await db.exec("ALTER TABLE bot_commands ADD COLUMN menu TEXT DEFAULT ''");
+        console.log('migrated: bot_commands.menu column');
+      }
+    } catch (e3) { console.error('bot_commands menu migration:', e3.message); }
   } catch(e) { console.error('column migration:', e.message); throw e; }
   return true;
 }

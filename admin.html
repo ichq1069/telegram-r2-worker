@@ -687,6 +687,22 @@ https://example.com/b.jpg"></textarea></div>
           <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="proxyOnlyChk"> 前端仅用代理链接（API display_url / 复制链接一律给 /file/tg/&lt;id&gt; 代理链接，不再给 R2 直链）</label>
         </div>
       </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>AI 管理助手 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">开启后，群里普通文本消息（非命令、非文件）交给大模型处理，可问统计、搜索文件、触发重试转存</span></div>
+        <div class="fb">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="aiEnabledChk"> 启用 AI 管理</label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
+          <div class="fr" style="margin:0"><label>API Base（OpenAI 兼容）</label><input class="inp" id="aiBase" placeholder="https://api.deepseek.com"></div>
+          <div class="fr" style="margin:0"><label>模型</label><input class="inp" id="aiModel" placeholder="deepseek-chat"></div>
+        </div>
+        <div class="fr" style="margin-top:10px"><label>API Key（留空则保留已保存的）</label><input class="inp" id="aiKey" type="password" placeholder="sk-..." autocomplete="off"></div>
+        <div class="fr" style="margin-top:10px"><label>系统提示词（可选）</label><textarea class="inp" id="aiPrompt" style="min-height:64px" placeholder="你是 Telegram 图库管理助手，请调用工具获取真实数据后简洁回答。"></textarea></div>
+        <div class="fb" style="margin-top:10px">
+          <button class="btn btn-primary" id="aiSaveBtn">保存配置</button>
+          <span id="aiKeyHint" style="font-size:11px;color:var(--text-secondary)"></span>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -1113,6 +1129,16 @@ function init() {
     var prevBtn = t.closest("[data-page]");
     if (prevBtn && !prevBtn.disabled) {
       loadFiles(parseInt(prevBtn.getAttribute("data-page")));
+      return;
+    }
+    // 命令编辑
+    var cmdEdit = t.closest("[data-action='edit-cmd']");
+    if (cmdEdit) {
+      var ecid = parseInt(cmdEdit.getAttribute("data-id"));
+      api("GET", "/admin/api/commands").then(function(r) {
+        var all = r.data || [];
+        for (var i = 0; i < all.length; i++) if (all[i].id === ecid) showModal(all[i]);
+      });
       return;
     }
     // 命令切换
@@ -1944,7 +1970,33 @@ async function loadOpsPage() {
       if (chk) chk.checked = (rpo.data.proxy_only === 1);
     }
   } catch (e) {}
+  // AI 管理配置
+  try {
+    const rai = await api("GET", "/admin/api/settings/ai");
+    if (rai && rai.ok && rai.data) {
+      document.getElementById("aiEnabledChk").checked = (rai.data.enabled === 1);
+      document.getElementById("aiBase").value = rai.data.base || "";
+      document.getElementById("aiModel").value = rai.data.model || "";
+      document.getElementById("aiPrompt").value = rai.data.prompt || "";
+      var kh = document.getElementById("aiKeyHint");
+      if (kh) kh.textContent = rai.data.has_key ? ("已保存 Key：" + rai.data.api_key) : "未保存 Key";
+    }
+  } catch (e) {}
 }
+
+document.getElementById("aiSaveBtn").addEventListener("click", function() {
+  var b = {
+    enabled: document.getElementById("aiEnabledChk").checked ? 1 : 0,
+    base: document.getElementById("aiBase").value.trim() || "https://api.deepseek.com",
+    model: document.getElementById("aiModel").value.trim() || "deepseek-chat",
+    prompt: document.getElementById("aiPrompt").value.trim(),
+    api_key: document.getElementById("aiKey").value.trim()
+  };
+  api("POST", "/admin/api/settings/ai", b).then(function(r) {
+    if (r && r.ok) { toast("AI 配置已保存", 1); document.getElementById("aiKey").value = ""; }
+    else toast((r && r.error) || "保存失败", 0);
+  });
+});
 
 async function loadBackupList() {
   var el = document.getElementById("backupList");
@@ -2848,29 +2900,37 @@ async function loadCmds() {
     document.getElementById("cmdList").innerHTML = '<div class="empty">暂无命令，点击上方按钮添加</div>';
     return;
   }
-  var h = '<table><thead><tr><th>命令</th><th>回复内容</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+  var h = '<table><thead><tr><th>命令</th><th>回复内容</th><th>菜单</th><th>状态</th><th>操作</th></tr></thead><tbody>';
   for (var i = 0; i < d.length; i++) {
     var c = d[i];
+    var hasMenu = c.menu && c.menu.indexOf('"label"') !== -1;
     h += '<tr><td><code style="background:#f1f5f9;padding:2px 8px;border-radius:4px;font-size:12px">' + escStr(c.command) + '</code></td>';
-    h += '<td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text-secondary)">' + escStr(c.response) + '</td>';
+    h += '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text-secondary)">' + escStr(c.response) + '</td>';
+    h += '<td>' + (hasMenu ? '<span class="badge badge-blue">数字菜单</span>' : '<span style="color:var(--text-secondary);font-size:11px">无</span>') + '</td>';
     h += '<td>' + (c.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">禁用</span>') + '</td>';
-    h += '<td><button class="btn btn-ghost btn-sm" data-action="toggle-cmd" data-id="' + c.id + '" data-enabled="' + c.enabled + '">' + (c.enabled ? '禁用' : '启用') + '</button> ';
+    h += '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" data-action="edit-cmd" data-id="' + c.id + '">编辑</button> ';
+    h += '<button class="btn btn-ghost btn-sm" data-action="toggle-cmd" data-id="' + c.id + '" data-enabled="' + c.enabled + '">' + (c.enabled ? '禁用' : '启用') + '</button> ';
     h += '<button class="btn btn-danger btn-sm" data-action="delete-cmd" data-id="' + c.id + '">删除</button></td></tr>';
   }
   h += '</tbody></table>';
   document.getElementById("cmdList").innerHTML = h;
 }
 
-// 弹窗
-function showModal() {
+// 弹窗（添加 / 编辑，含数字菜单 JSON 配置）
+function showModal(cmd) {
+  cmd = cmd || {};
+  var isEdit = !!cmd.id;
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-bg" id="modalBackdrop"><div class="modal">' +
-    '<h3>添加命令</h3>' +
-    '<div class="fr"><label>命令名称</label><input class="inp" id="modalCmd" placeholder="/hello"></div>' +
-    '<div class="fr"><label>回复内容</label><textarea class="inp" id="modalResp" placeholder="你好！有什么可以帮你的？"></textarea></div>' +
-    '<div class="fr"><label>描述 (可选)</label><input class="inp" id="modalDesc" placeholder="打招呼"></div>' +
+    '<h3>' + (isEdit ? '编辑命令' : '添加命令') + '</h3>' +
+    '<div class="fr"><label>命令名称</label><input class="inp" id="modalCmd" value="' + escStr(cmd.command || '') + '" placeholder="/hello"></div>' +
+    '<div class="fr"><label>回复内容</label><textarea class="inp" id="modalResp" placeholder="你好！有什么可以帮你的？">' + escStr(cmd.response || '') + '</textarea></div>' +
+    '<div class="fr"><label>描述 (可选)</label><input class="inp" id="modalDesc" value="' + escStr(cmd.description || '') + '" placeholder="打招呼"></div>' +
+    '<div class="fr"><label>数字菜单 (JSON，可选)</label><textarea class="inp" id="modalMenu" style="min-height:88px" placeholder=\'[{"n":1,"label":"查看数量","action":"count"}]\'>' + escStr(cmd.menu || '') + '</textarea></div>' +
+    '<div style="font-size:11px;color:var(--text-secondary);margin-bottom:12px">菜单为 JSON 数组，每项 <code>{n:序号,label:按钮文字,action:动作}</code>。动作支持内置操作：<b>retry_all</b> 重试全部 / <b>retry_recent</b> 重试最近8条 / <b>unsaved_count</b> / <b>count</b> / <b>stats</b> / <b>health</b> / <b>help</b>，或以 <b>text:直接回复内容</b> 开头。用户可点按钮或直接回复数字。</div>' +
     '<div class="modal-actions">' +
     '<button class="btn btn-ghost" id="modalCancel">取消</button>' +
+    (isEdit ? '<input type="hidden" id="modalId" value="' + cmd.id + '">' : '') +
     '<button class="btn btn-primary" id="modalSave">保存</button>' +
     '</div></div></div>';
   document.getElementById("modalCmd").focus();
@@ -2881,9 +2941,11 @@ async function saveCmd() {
     command: document.getElementById("modalCmd").value,
     response: document.getElementById("modalResp").value,
     description: document.getElementById("modalDesc").value,
+    menu: document.getElementById("modalMenu").value.trim(),
     enabled: true
   };
-  var r = await api("POST", "/admin/api/commands", b);
+  var mid = document.getElementById("modalId");
+  var r = mid ? await api("PATCH", "/admin/api/commands", b) : await api("POST", "/admin/api/commands", b);
   if (r.ok) {
     toast("命令已保存", 1);
     document.getElementById("modalArea").innerHTML = "";

@@ -93,6 +93,9 @@ export default {
     if (m === 'POST' && p === '/admin/api/settings/proxy-mode') return isAdmin ? handleAdminSaveProxyMode(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/proxy-only') return isAdmin ? handleAdminGetProxyOnly(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/proxy-only') return isAdmin ? handleAdminSaveProxyOnly(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // AI 管理配置（enabled/base/model/api_key/prompt）
+    if (m === 'GET' && p === '/admin/api/settings/ai') return isAdmin ? handleAdminGetAI(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/ai') return isAdmin ? handleAdminSaveAI(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
     if (m === 'GET' && p === '/admin/api/backup') return isAdmin ? handleAdminBackup(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/backup') return isAdmin ? handleAdminBackupSave(env) : json({ok:false,error:'Unauthorized'},401);
@@ -261,6 +264,220 @@ const DEFAULT_COMMANDS = {
   '/search': 'Usage: /search <keyword>\nExample: /search cat',
 };
 
+// ==================== 数字菜单交互（1/2/3 选择） ====================
+// 命令的 menu 字段：JSON 数组 [{"n":1,"label":"重试全部未转存","action":"retry_all"},...]
+// action 支持内置操作（retry_all/retry_recent/unsaved_count/count/stats/health/help/pending）或 text:xxx 直接回复
+function parseMenu(menuStr) {
+  if (!menuStr) return [];
+  try {
+    const arr = JSON.parse(menuStr);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(function(m) { return m && m.label; });
+  } catch (e) { return []; }
+}
+function menuButtons(items) {
+  var row = [];
+  for (var i = 0; i < items.length; i++) row.push({ text: items[i].label, callback_data: 'menu:n:' + items[i].n });
+  return [row];
+}
+function menuText(items) {
+  var s = '';
+  for (var i = 0; i < items.length; i++) s += items[i].n + '. ' + items[i].label + '\n';
+  return s;
+}
+async function setMenuCtx(env, chatId, cmd, items) {
+  try {
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind('menu_ctx_' + chatId, JSON.stringify({ cmd: cmd, items: items })).run();
+  } catch (e) {}
+}
+async function getMenuCtx(env, chatId) {
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind('menu_ctx_' + chatId).first();
+    if (r && r.value) { const j = JSON.parse(r.value); if (j && Array.isArray(j.items)) return j; }
+  } catch (e) {}
+  return null;
+}
+async function execMenuAction(action, chatId, env, msgId) {
+  if (!action) { await replyText(chatId, msgId || 0, '❌ 无效选项', env); return; }
+  if (action.indexOf('text:') === 0) {
+    await replyTextWithKeyboard(chatId, action.slice(5), MAIN_BUTTONS, env);
+    return;
+  }
+  if (action === 'retry_all') return await handleRetryCommand(chatId, env, null, 8);
+  if (action === 'retry_recent') return await handleRetryCommand(chatId, env, null, 8);
+  if (action === 'unsaved_count' || action === 'pending') return await handlePendingCommand(chatId, env);
+  if (action === 'count') return await handleCountCommand(chatId, env);
+  if (action === 'stats') return await handleStatsCommand(chatId, env);
+  if (action === 'health') return await handleHealthCommand(chatId, env);
+  if (action === 'help') { await replyTextWithKeyboard(chatId, DEFAULT_COMMANDS['/help'], MAIN_BUTTONS, env); return; }
+  await replyTextWithKeyboard(chatId, '❌ 未知操作：' + action, MAIN_BUTTONS, env);
+}
+async function replyCommandMenu(chatId, msgId, cmd, resp, items, env) {
+  const txt = (resp || ('📋 ' + cmd + ' 菜单')) + '\n\n' + menuText(items) + '\n（回复数字或点击按钮）';
+  await replyTextWithKeyboard(chatId, txt, menuButtons(items), env);
+  await setMenuCtx(env, chatId, cmd, items);
+}
+
+// ==================== AI 管理（function calling） ====================
+let _aiCfgCache = null, _aiCfgAt = 0;
+async function getAIConfig(env) {
+  const now = Date.now();
+  if (_aiCfgCache && now - _aiCfgAt < 30000) return _aiCfgCache;
+  const out = { enabled: 0, base: 'https://api.deepseek.com', model: 'deepseek-chat', key: '', prompt: '' };
+  try {
+    const s = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('ai_enabled','ai_base','ai_model','ai_api_key','ai_prompt')").all();
+    (s.results || []).forEach(function(r) {
+      if (r.key === 'ai_enabled') out.enabled = (String(r.value).trim() === '1') ? 1 : 0;
+      else if (r.key === 'ai_base') out.base = r.value || out.base;
+      else if (r.key === 'ai_model') out.model = r.value || out.model;
+      else if (r.key === 'ai_api_key') out.key = r.value || '';
+      else if (r.key === 'ai_prompt') out.prompt = r.value || '';
+    });
+  } catch (e) {}
+  _aiCfgCache = out; _aiCfgAt = now;
+  return out;
+}
+async function handleAdminGetAI(env) {
+  const c = await getAIConfig(env);
+  return json({ ok: true, data: { enabled: c.enabled, base: c.base, model: c.model, api_key: c.key ? String(c.key).slice(0, 4) + '****' : '', has_key: !!c.key, prompt: c.prompt } });
+}
+async function handleAdminSaveAI(request, env) {
+  try {
+    const b = await request.json().catch(function(){ return {}; });
+    const set = function(k, v) {
+      return env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, v).run();
+    };
+    if (b.enabled !== undefined) await set('ai_enabled', b.enabled ? '1' : '0');
+    if (b.base && String(b.base).trim()) await set('ai_base', String(b.base).trim());
+    if (b.model && String(b.model).trim()) await set('ai_model', String(b.model).trim());
+    if (b.api_key && String(b.api_key).trim() && String(b.api_key).indexOf('****') === -1) await set('ai_api_key', String(b.api_key).trim());
+    if (b.prompt !== undefined) await set('ai_prompt', String(b.prompt).trim());
+    _aiCfgCache = null;
+    return json({ ok: true, data: { saved: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+var AI_TOOLS = [
+  { type: 'function', function: { name: 'get_stats', description: '获取图库完整统计（总数、存储、今日新增、未转存、类型分布）', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'count_files', description: '查询文件总数', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'unsaved_list', description: '查询未转存文件列表与数量', parameters: { type: 'object', properties: { limit: { type: 'number', description: '显示条数，默认 10' } } } } },
+  { type: 'function', function: { name: 'retry_unsaved', description: '触发未转存文件重试转存（下载并上传到 R2）', parameters: { type: 'object', properties: { limit: { type: 'number', description: '重试条数，默认 8，最大 10' } } } } },
+  { type: 'function', function: { name: 'search_files', description: '按关键字搜索已入库文件（文件名/标签/编号/说明）', parameters: { type: 'object', properties: { keyword: { type: 'string', description: '搜索关键字' }, limit: { type: 'number', description: '显示条数，默认 10' } }, required: ['keyword'] } } },
+  { type: 'function', function: { name: 'get_file', description: '按 ID 查询单个文件信息（状态、大小、标签、链接）', parameters: { type: 'object', properties: { id: { type: 'number', description: '文件 id' } }, required: ['id'] } } }
+];
+async function callAIManage(chatId, msgId, text, env) {
+  const cfg = await getAIConfig(env);
+  if (cfg.enabled !== 1 || !cfg.key) {
+    await replyText(chatId, msgId, '🤖 AI 助手未配置（后台 → 运维 → AI 管理填 API Key 并开启）。', env);
+    return;
+  }
+  const sys = cfg.prompt || '你是 Telegram 图库管理助手。用户会用中文提问，请调用工具获取真实数据后简洁回答；需要重试/转存时调用工具并说明已触发。不要编造数据。';
+  const msgs = [{ role: 'system', content: sys }, { role: 'user', content: String(text).slice(0, 2000) }];
+  let finalText = '';
+  for (let round = 0; round < 3; round++) {
+    const resp = await fetchAI(cfg, msgs);
+    if (!resp) { await replyText(chatId, msgId, '❌ AI 服务调用失败，请检查后台 AI 配置', env); return; }
+    const choice = resp.choices && resp.choices[0];
+    const m = choice && choice.message;
+    if (!m) { await replyText(chatId, msgId, '❌ AI 返回异常', env); return; }
+    if (m.tool_calls && m.tool_calls.length) {
+      msgs.push(m);
+      for (const tc of m.tool_calls) {
+        let result = '';
+        try {
+          const args = JSON.parse(tc.function.arguments || '{}');
+          result = await aiRunTool(tc.function.name, args, env);
+        } catch (e) { result = 'error: ' + e.message; }
+        msgs.push({ role: 'tool', tool_call_id: tc.id, content: result });
+      }
+      continue;
+    }
+    finalText = m.content || '';
+    break;
+  }
+  if (!finalText) finalText = '（AI 无回复，请稍后再试）';
+  const parts = finalText.match(/[\s\S]{1,3800}/g) || [finalText];
+  for (const pt of parts) await replyTextPlain(chatId, msgId, pt, env);
+}
+async function fetchAI(cfg, msgs) {
+  const url = (cfg.base || 'https://api.deepseek.com').replace(/\/+$/, '') + '/chat/completions';
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
+      body: JSON.stringify({ model: cfg.model || 'deepseek-chat', messages: msgs, tools: AI_TOOLS, tool_choice: 'auto' })
+    });
+    if (!r.ok) { console.log('ai http:', r.status, String(await r.text()).slice(0, 200)); return null; }
+    return await r.json();
+  } catch (e) { console.log('ai fetch:', e.message); return null; }
+}
+async function aiRunTool(name, args, env) {
+  if (name === 'get_stats') return await aiGetStatsText(env);
+  if (name === 'count_files') return '文件总数: ' + (await aiCountFiles(env));
+  if (name === 'unsaved_list') return await aiUnsavedText(env, args.limit || 10);
+  if (name === 'retry_unsaved') { const n = await triggerRetryN(env, args.limit || 8); return '已触发 ' + n + ' 条未转存文件开始重试转存'; }
+  if (name === 'search_files') return await aiSearchText(env, args.keyword || '', args.limit || 10);
+  if (name === 'get_file') return await aiFileText(env, parseInt(args.id) || 0);
+  return 'unknown tool: ' + name;
+}
+async function aiCountFiles(env) {
+  try { const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first(); return t?.c || 0; } catch (e) { return 0; }
+}
+async function aiGetStatsText(env) {
+  try {
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
+    const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
+    const td = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first();
+    const bt = await env.D1_DB.prepare('SELECT file_type, COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY file_type').all();
+    const un = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed'").first();
+    let s2 = '📊 图库统计\n· 文件总数: ' + (t?.c || 0) + '\n· 占用存储: ' + fmtSize(s?.s || 0) + '\n· 今日新增: ' + (td?.c || 0) + '\n· 未转存: ' + (un?.c || 0);
+    if (bt.results && bt.results.length) {
+      s2 += '\n类型分布:';
+      for (const r of bt.results) s2 += '\n· ' + r.file_type + ': ' + r.c;
+    }
+    return s2;
+  } catch (e) { return '统计失败: ' + e.message; }
+}
+async function aiUnsavedText(env, limit) {
+  try {
+    await env.D1_DB.prepare("UPDATE files SET processing_state='failed' WHERE processing_state IN ('downloading','hashing','uploading','saving') AND deleted_at IS NULL AND julianday(created_at) < julianday('now','-30 minutes')").run();
+  } catch (e) {}
+  try {
+    const n = Math.min(parseInt(limit) || 10, 15);
+    const t = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed'").first();
+    const d = await env.D1_DB.prepare("SELECT id, file_name, processing_state, group_ref FROM files WHERE deleted_at IS NULL AND processing_state != 'completed' ORDER BY id DESC LIMIT ?").bind(n).all();
+    if ((d.results || []).length === 0) return '未转存: 0 条，全部已完成 ✓';
+    let s = '⏳ 未转存 ' + (t?.c || 0) + ' 条（显示前 ' + (d.results || []).length + ' 条）：\n';
+    (d.results || []).forEach(function(r) { s += '· #' + (r.group_ref || r.id) + ' ' + (r.file_name || '') + ' [' + r.processing_state + ']\n'; });
+    return s;
+  } catch (e) { return '查询失败: ' + e.message; }
+}
+async function aiSearchText(env, kw, limit) {
+  try {
+    const n = Math.min(parseInt(limit) || 10, 15);
+    const k = '%' + kw + '%';
+    const d = await env.D1_DB.prepare("SELECT id, file_name, file_type, group_ref FROM files WHERE deleted_at IS NULL AND processing_state='completed' AND (file_name LIKE ? OR caption LIKE ? OR group_ref LIKE ? OR tags LIKE ?) ORDER BY id DESC LIMIT ?").bind(k, k, k, k, n).all();
+    if (!(d.results || []).length) return '未找到「' + kw + '」相关文件';
+    let s = '🔍 「' + kw + '」结果 ' + (d.results || []).length + ' 条：\n';
+    (d.results || []).forEach(function(r) { s += '· #' + (r.group_ref || r.id) + ' ' + (r.file_name || '') + ' (' + r.file_type + ')\n'; });
+    return s;
+  } catch (e) { return '搜索失败: ' + e.message; }
+}
+async function aiFileText(env, id) {
+  try {
+    const f = await env.D1_DB.prepare("SELECT * FROM files WHERE id=? AND deleted_at IS NULL").bind(id).first();
+    if (!f) return '未找到 id=' + id;
+    const realR2 = f.r2_url && f.r2_url.indexOf('/file/tg/') !== 0;
+    return '#' + (f.group_ref || f.id) + ' ' + (f.file_name || '') + '\n类型: ' + (f.file_type || '') + ' | 大小: ' + fmtSize(f.file_size || 0) + '\n状态: ' + (f.processing_state || '') + '\n标签: ' + (f.tags || '（无）') + '\n链接: ' + (realR2 ? f.r2_url : '（未转存，代理: https://telegram-r2-bot.wo58.cn/file/tg/' + f.id + '）');
+  } catch (e) { return '查询失败: ' + e.message; }
+}
+async function triggerRetryN(env, n) {
+  try {
+    const fakeReq = { json: function() { return Promise.resolve({ all: true, limit: n }); } };
+    const r = await handleUnsavedRetry(fakeReq, env);
+    return (r && r.started) || 0;
+  } catch (e) { return 0; }
+}
+
 async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   const parts = text.trim().split(/\s+/);
   const cmd = parts[0].toLowerCase();
@@ -269,8 +486,13 @@ async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   // Check custom commands in DB
   if (env.D1_DB) {
     try {
-      const custom = await env.D1_DB.prepare('SELECT response, enabled FROM bot_commands WHERE command = ?').bind(cmd).first();
+      const custom = await env.D1_DB.prepare('SELECT response, enabled, menu FROM bot_commands WHERE command = ?').bind(cmd).first();
       if (custom && custom.enabled) {
+        const citems = parseMenu(custom.menu);
+        if (citems.length) {
+          await replyCommandMenu(chatId, msgId, cmd, custom.response, citems, env);
+          return { ok: true, custom: true, menu: true };
+        }
         if (custom.response === '__STATS__') {
           return await handleStatsCommand(chatId, env);
         }
@@ -316,7 +538,14 @@ async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   }
 
   if (cmd === '/retry') {
-    return await handleRetryCommand(chatId, env);
+    // 数字菜单交互：1=重试全部 2=重试最近 8 条 3=查看未转存（也可在后台自定义该命令的菜单）
+    const items = [
+      { n: 1, label: '🔄 重试全部未转存', action: 'retry_all' },
+      { n: 2, label: '🕒 重试 8 条未转存', action: 'retry_recent' },
+      { n: 3, label: '⏳ 查看未转存数量', action: 'unsaved_count' }
+    ];
+    await replyCommandMenu(chatId, msgId, cmd, '🔄 未转存重试，请选择：', items, env);
+    return { ok: true };
   }
 
   if (cmd === '/health') {
@@ -363,9 +592,9 @@ async function handlePendingCommand(chatId, env) {
   } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); return { ok: true }; }
 }
 
-// 命令：继续完成未转存入库（批 5 条，限频 60s）
+// 命令：继续完成未转存入库（默认批 8 条，限频 60s；limit 由菜单选项传入）
 var lastRetryCmdTs = 0;
-async function handleRetryCommand(chatId, env, waitFn) {
+async function handleRetryCommand(chatId, env, waitFn, limit) {
   const now = Date.now();
   if (now - lastRetryCmdTs < 60000) {
     await replyText(chatId, 0, '⏳ 60 秒内已执行过，请稍后再试（' + Math.ceil((60000 - (now - lastRetryCmdTs)) / 1000) + 's）', env);
@@ -374,7 +603,7 @@ async function handleRetryCommand(chatId, env, waitFn) {
   lastRetryCmdTs = now;
   if (!env.D1_DB) { await replyText(chatId, 0, '❌ D1 未配置', env); return { ok: true }; }
   try {
-    const fakeReq = { json: function() { return Promise.resolve({ all: true }); } };
+    const fakeReq = { json: function() { return Promise.resolve({ all: true, limit: limit || 8 }); } };
     const r = await handleUnsavedRetry(fakeReq, env, { waitUntil: waitFn });
     if (r && r.ok) {
       await replyTextWithKeyboard(chatId, '🚀 已开始转存 ' + (r.started || 0) + ' 条。剩余可稍后再点「继续转存」（60s 后）或在后台「未转存」页手动处理。', MAIN_BUTTONS, env);
@@ -1178,7 +1407,31 @@ async function processUpdate(update, env, waitFn) {
 
   // Handle file messages
   const fi = extractFileInfo(msg);
-  if (!fi) return { ok: true, skip: true, reason: 'unsupported' };
+  if (!fi) {
+    // 数字菜单选择：用户直接回复 1/2/3 时执行对应菜单动作
+    const digits = String(text).trim();
+    if (/^\d{1,2}$/.test(digits)) {
+      const ctx = await getMenuCtx(env, chatId);
+      if (ctx && ctx.items && ctx.items.length) {
+        const n = parseInt(digits, 10);
+        let it = null;
+        for (let i = 0; i < ctx.items.length; i++) if (ctx.items[i].n === n) { it = ctx.items[i]; break; }
+        if (it) { await execMenuAction(it.action, chatId, env, parseInt(msgId)); return { ok: true, menu: true }; }
+        await replyText(chatId, parseInt(msgId), '❌ 没有选项 ' + n, env);
+        return { ok: true, menu: true };
+      }
+    }
+    // AI 管理：开启 AI 后普通文本交给大模型（function calling 查询/重试/搜索）
+    if (env.D1_DB) {
+      const cfg = await getAIConfig(env);
+      if (cfg.enabled === 1 && cfg.key && String(text).trim()) {
+        const p = callAIManage(chatId, parseInt(msgId), text, env).catch(function(e) { console.error('ai manage:', e.message); });
+        if (waitFn) waitFn(p); else p;
+        return { ok: true, ai: true };
+      }
+    }
+    return { ok: true, skip: true, reason: 'unsupported' };
+  }
 
   console.log('file:', fi.type, chat.title || chat.username);
 
@@ -1445,6 +1698,17 @@ async function replyText(chatId, replyId, text, env) {
   } catch (e) { console.log('replyText error:', e.message); }
 }
 
+// 纯文本回复（无 parse_mode，AI 长回复/含特殊字符用）
+async function replyTextPlain(chatId, replyId, text, env) {
+  try {
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: text })
+    });
+  } catch (e) { console.log('replyTextPlain error:', e.message); }
+}
+
 // 主菜单按钮（inline keyboard），点按钮代替手动输命令
 var MAIN_BUTTONS = [
   [{ text: '📊 现有数量', callback_data: 'cmd:count' }, { text: '⏳ 未转存', callback_data: 'cmd:pending' }],
@@ -1478,6 +1742,22 @@ async function handleCallbackQuery(cq, env) {
   if (data === 'cmd:pending') { await answerCb('正在查询未转存...'); return await handlePendingCommand(chatId, env); }
   if (data === 'cmd:retry') { await answerCb('正在触发转存...'); return await handleRetryCommand(chatId, env); }
   if (data === 'cmd:health') { await answerCb('正在检查服务...'); return await handleHealthCommand(chatId, env); }
+  // 数字菜单按钮：menu:n:<序号> → 读该聊天的菜单上下文执行对应动作
+  if (data.indexOf('menu:n:') === 0) {
+    const n = parseInt(data.slice(7));
+    const ctx = await getMenuCtx(env, chatId);
+    if (ctx && ctx.items && ctx.items.length) {
+      let it = null;
+      for (let i = 0; i < ctx.items.length; i++) if (ctx.items[i].n === n) { it = ctx.items[i]; break; }
+      if (it) {
+        await answerCb('正在执行: ' + it.label);
+        await execMenuAction(it.action, chatId, env, 0);
+        return { ok: true, menu: true };
+      }
+    }
+    await answerCb('菜单已过期，请重新发送指令');
+    return { ok: true, menu: true };
+  }
   await answerCb('未知操作');
   return { ok: true, handled: 'callback' };
 }
@@ -3131,8 +3411,9 @@ async function handleUnsavedRetry(request, env, ctx) {
       // 用展开运算符而非 bind.apply（D1 对 apply(null,...) 会报 dbSession null 错误）
       rows = (await env.D1_DB.prepare('SELECT * FROM files WHERE id IN (' + marks + ') AND deleted_at IS NULL').bind(...arr).all()).results || [];
     } else {
-      // 免费版单调用最多 50 个子请求（每条转存约占 8-12 个），默认批 5 条最安全
-      rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 5").all()).results || [];
+      // 免费版单调用最多 50 个子请求（每条转存约占 5-8 个），默认批 8 条最安全；limit 可指定（最大 10）
+      const lim = (b && b.limit) ? Math.min(parseInt(b.limit) || 8, 10) : 8;
+      rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT ?").bind(lim).all()).results || [];
     }
     let started = 0;
     for (const f of rows) {
@@ -3333,8 +3614,9 @@ async function handleAdminAddCommand(request, env) {
     const cmd = (in2.command || '').trim().toLowerCase();
     const resp = (in2.response || '').trim();
     const desc = (in2.description || '').trim();
+    const menu = (in2.menu || '').trim();
     if (!cmd || !resp) return json({ ok: false, error: 'command and response required' });
-    await env.D1_DB.prepare('INSERT OR REPLACE INTO bot_commands (command, response, description, enabled) VALUES (?, ?, ?, ?)').bind(cmd, resp, desc, in2.enabled !== false ? 1 : 0).run();
+    await env.D1_DB.prepare('INSERT OR REPLACE INTO bot_commands (command, response, description, enabled, menu) VALUES (?, ?, ?, ?, ?)').bind(cmd, resp, desc, in2.enabled !== false ? 1 : 0, menu).run();
     return json({ ok: true, message: 'Command added' });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -3349,6 +3631,7 @@ async function handleAdminUpdateCommand(request, env) {
     if (in2.command !== undefined) { fields.push('command = ?'); vals.push(in2.command.trim().toLowerCase()); }
     if (in2.response !== undefined) { fields.push('response = ?'); vals.push(in2.response.trim()); }
     if (in2.description !== undefined) { fields.push('description = ?'); vals.push(in2.description.trim()); }
+    if (in2.menu !== undefined) { fields.push('menu = ?'); vals.push(String(in2.menu).trim()); }
     if (in2.enabled !== undefined) { fields.push('enabled = ?'); vals.push(in2.enabled ? 1 : 0); }
     if (fields.length === 0) return json({ ok: false, error: 'nothing to update' });
     vals.push(in2.id);
