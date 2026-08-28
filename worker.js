@@ -46,7 +46,7 @@ export default {
     if (m === 'POST' && p === '/admin/api/dedup/rows') return isAdmin ? handleDedupRows(request, env) : json({ok:false,error:'Unauthorized'},401);
     // 存储压缩：photo 转 WebP 省存储（需账号开通 Image Resizing）
     if (m === 'GET' && p === '/admin/api/compress/stats') return isAdmin ? handleCompressStats(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/compress/run') return isAdmin ? handleCompressRun(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/compress/run') return isAdmin ? handleCompressRun(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/processing') return isAdmin ? handleProcessingStatus(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/retry') return isAdmin ? handleRetry(request, env, ctx) : json({ok:false,error:'Unauthorized'},401);
     // 未转存列表（已入库但未完成）+ 批量重试
@@ -213,6 +213,12 @@ export default {
       await storageMaintenanceCron(env);
     } catch (e) {
       console.error('scheduled storage:', e.message);
+    }
+    // WebP 压缩后台化：每 5 分钟自动压 2 张（scheduled 预算有限，大头留给手动点击）
+    try {
+      await compressCronBatch(env);
+    } catch (e) {
+      console.error('scheduled compress:', e.message);
     }
   },
 };
@@ -3911,6 +3917,36 @@ async function purgeFileRows(env, targets, purge) {
   return cleaned;
 }
 
+// 后台 WebP 压缩：每 5 分钟最多 2 张（与手动 run 共享逻辑，限时 20s 防挤占 scheduled 预算）
+async function compressCronBatch(env) {
+  if (!env.D1_DB || !env.R2_BUCKET || !env.R2_PUBLIC_URL) return;
+  try {
+    const last = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='last_compress_cron'").first();
+    if (last && last.value && (Date.now() - (parseInt(last.value, 10) || 0)) < 300000) return;
+    const startT = Date.now();
+    const rows = await env.D1_DB.prepare("SELECT id, storage_key, file_size FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND file_type='photo' AND (mime_type='' OR mime_type IN ('image/jpeg','image/png')) AND (storage_key LIKE '%.jpg' OR storage_key LIKE '%.jpeg' OR storage_key LIKE '%.png') ORDER BY file_size DESC LIMIT 2").all();
+    let done = 0;
+    for (const f of rows.results || []) {
+      if (Date.now() - startT > 20000) break;
+      try {
+        const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
+        if (!ref || (ref.c || 0) > 1) continue;
+        const res = await fetch(env.R2_PUBLIC_URL + '/' + f.storage_key, { cf: { image: { format: 'webp', quality: 80, fit: 'scale-down' } } });
+        if (!res.ok) continue;
+        const ct = res.headers.get('content-type') || '';
+        if (ct.indexOf('webp') === -1) continue;
+        const wbuf = await res.arrayBuffer();
+        if (!wbuf.byteLength || wbuf.byteLength >= (f.file_size || 0)) continue;
+        await env.R2_BUCKET.put(f.storage_key, wbuf, { httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=31536000' } });
+        await env.D1_DB.prepare("UPDATE files SET mime_type='image/webp', file_size=?, md5_hash='', quick_hash='' WHERE id=?").bind(wbuf.byteLength, f.id).run();
+        done++;
+      } catch (e) {}
+    }
+    if (done) console.log('compress cron batch done:', done);
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('last_compress_cron', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run();
+  } catch (e) { console.error('compressCronBatch:', e.message); }
+}
+
 // 回收站自动清理：deleted_at 超过 30 天的文件硬删（含 R2 对象），24 小时最多执行一次。
 // 与手动"清空回收站"不同，这里是兜底，防止软删文件无限占 R2 存储。
 async function storageMaintenanceCron(env) {
@@ -3947,15 +3983,18 @@ async function handleCompressStats(env) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
-async function handleCompressRun(env) {
+async function handleCompressRun(request, env) {
   if (!env.D1_DB || !env.R2_BUCKET || !env.R2_PUBLIC_URL) return json({ ok: false, error: 'D1/R2 未配置' });
   try {
+    var n = parseInt((request && new URL(request.url).searchParams.get('n')) || '10', 10);
+    if (!(n > 0)) n = 10;
+    if (n > 20) n = 20;
     const startT = Date.now();
-    const rows = await env.D1_DB.prepare("SELECT id, storage_key, file_size FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND file_type='photo' AND (mime_type='' OR mime_type IN ('image/jpeg','image/png')) AND (storage_key LIKE '%.jpg' OR storage_key LIKE '%.jpeg' OR storage_key LIKE '%.png') ORDER BY file_size DESC LIMIT 3").all();
-    if (!(rows.results || []).length) return json({ ok: true, data: { done: 0, skipped: 0, not_available: false, message: '没有可压缩的 JPEG/PNG 图片。' } });
+    const rows = await env.D1_DB.prepare("SELECT id, storage_key, file_size FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND file_type='photo' AND (mime_type='' OR mime_type IN ('image/jpeg','image/png')) AND (storage_key LIKE '%.jpg' OR storage_key LIKE '%.jpeg' OR storage_key LIKE '%.png') ORDER BY file_size DESC LIMIT ?").bind(n).all();
+    if (!(rows.results || []).length) return json({ ok: true, data: { done: 0, skipped: 0, not_available: false, message: '没有可压缩的图片了（已全部转 WebP）。' } });
     let done = 0, skipped = 0, webpFail = 0;
     for (const f of rows.results) {
-      if (Date.now() - startT > 25000) break;
+      if (Date.now() - startT > 50000) break;
       try {
         const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
         if (!ref || (ref.c || 0) > 1) { skipped++; continue; }
@@ -3974,7 +4013,7 @@ async function handleCompressRun(env) {
     const notAvailable = (webpFail > 0 && done === 0);
     const msg = notAvailable
       ? 'Cloudflare Image Resizing 未生效（需账号启用，通常为 Pro 套餐或按量开通）。可通过 fetch 加 cf.image 转换的 Worker 验证；未启用时无法转 WebP，可先用回收站清理/去重释放空间。'
-      : ('本轮压缩 ' + done + ' 张为 WebP' + (skipped ? '，跳过 ' + skipped + ' 张（被多行引用/未变小/超大图超限）' : '') + '。分批执行（每批最多 3 张，限时 25s），可重复点击加速。');
+      : ('本轮压缩 ' + done + ' 张为 WebP' + (skipped ? '，跳过 ' + skipped + ' 张（被多行引用/未变小/超大图超限）' : '') + '。分批执行（每批 ' + n + ' 张），可重复点击或 cron 自动加速。');
     return json({ ok: true, data: { done, skipped, not_available: notAvailable, message: msg } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
