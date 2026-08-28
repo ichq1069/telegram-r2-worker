@@ -28,7 +28,7 @@ export default {
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
     if (m === 'GET' && p === '/favicon.ico') return new Response(null, { status: 204 });
     // File proxy: /file/tg/<id> -> 302 to official Telegram direct link (clean URL, no token exposed)
-    if (m === 'GET' && p.indexOf('/file/tg/') === 0) return handleTgFileRedirect(p, env, ctx);
+    if (m === 'GET' && p.indexOf('/file/tg/') === 0) return handleTgFileRedirect(request, env, ctx);
     // Admin API (auth via query param or header)
     const adminKey = url.searchParams.get('api_key') || request.headers.get('X-API-Key');
     const isAdmin = adminKey && adminKey === env.API_KEY;
@@ -849,7 +849,8 @@ async function aiFileText(env, id) {
     const f = await env.D1_DB.prepare("SELECT * FROM files WHERE id=? AND deleted_at IS NULL").bind(id).first();
     if (!f) return '未找到 id=' + id;
     const realR2 = f.r2_url && f.r2_url.indexOf('/file/tg/') !== 0;
-    return '#' + (f.group_ref || f.id) + ' ' + (f.file_name || '') + '\n类型: ' + (f.file_type || '') + ' | 大小: ' + fmtSize(f.file_size || 0) + '\n状态: ' + (f.processing_state || '') + '\n标签: ' + (f.tags || '（无）') + '\n链接: ' + (realR2 ? f.r2_url : '（未转存，代理: https://telegram-r2-bot.wo58.cn/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type) + '）');
+    const tok = await fileTok(f.id, env);
+    return '#' + (f.group_ref || f.id) + ' ' + (f.file_name || '') + '\n类型: ' + (f.file_type || '') + ' | 大小: ' + fmtSize(f.file_size || 0) + '\n状态: ' + (f.processing_state || '') + '\n标签: ' + (f.tags || '（无）') + '\n链接: ' + (realR2 ? f.r2_url : '（未转存，代理: https://telegram-r2-bot.wo58.cn/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type) + '?k=' + tok + '）');
   } catch (e) { return '查询失败: ' + e.message; }
 }
 async function triggerRetryN(env, n) {
@@ -2347,11 +2348,40 @@ async function handleBotCopyMessage(request, env) { return proxyBotApi('copyMess
 // ==================== API HANDLERS ====================
 
 // /file/tg/<id> -> 302 redirect to official Telegram direct link (if present) else R2 URL.
+// /file/tg/<id> 访问签名：token = HMAC-SHA256(secret, 'tgfile:<id>') 前 16 hex。
+// 防止通过递增 id 拼接 URL 遍历枚举所有图片；secret 取 API_KEY/TG_SECRET（未配置时用内置兜底）。
+let _tokKeyCache = null;
+async function fileTok(id, env) {
+  const secret = env.API_KEY || env.TG_SECRET || 'tgfile-sign-2026';
+  try {
+    if (!_tokKeyCache) {
+      _tokKeyCache = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    }
+    const sig = await crypto.subtle.sign('HMAC', _tokKeyCache, new TextEncoder().encode('tgfile:' + id));
+    const bytes = new Uint8Array(sig);
+    let hex = '';
+    for (let i = 0; i < 8; i++) hex += bytes[i].toString(16).padStart(2, '0');
+    return hex;
+  } catch (e) { return ''; }
+}
+// 校验 /file/tg/<id>?k=<token>；缺失或不匹配返回 false
+async function checkFileTok(request, id, env) {
+  const u = new URL(request.url);
+  const k = u.searchParams.get('k') || '';
+  const exp = await fileTok(id, env);
+  return !!(k && exp && k === exp);
+}
+
 // Keeps the exposed URL clean (no bot token).
-async function handleTgFileRedirect(p, env, ctx) {
+async function handleTgFileRedirect(request, env, ctx) {
   if (!env.D1_DB) return json({ ok: false, error: 'no d1' }, 500);
-  const id = parseInt(p.replace('/file/tg/', ''), 10) || 0;
+  const u = new URL(request.url);
+  const id = parseInt(u.pathname.replace('/file/tg/', ''), 10) || 0;
   if (!id) return json({ ok: false, error: 'bad id' }, 400);
+  // 签名校验：防枚举遍历（改 id 数字无法访问他人图片），旧的无 token 链接一律 403
+  if (!(await checkFileTok(request, id, env))) {
+    return json({ ok: false, error: 'forbidden: 需要有效签名 (?k=...)，请在后台重新复制链接' }, 403);
+  }
   try {
     const f = await env.D1_DB.prepare('SELECT tg_file_url, r2_url, telegram_file_id, mime_type, file_name FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
     if (!f) return json({ ok: false, error: 'not found' }, 404);
@@ -2446,20 +2476,21 @@ async function handleFiles(request, env) {
     const d = await env.D1_DB.prepare("SELECT f.*, CASE WHEN f.pool_status='ignored' THEN 'ignored' WHEN EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) THEN 'imported' ELSE 'pending' END AS pool_state FROM files f " + w + ' ORDER BY f.id DESC LIMIT ? OFFSET ?').bind(...p, ps, off).all();
     const origin = new URL(request.url).origin;
     const po = await getProxyOnly(env);
-    const items = (d.results || []).map(function(f) { return decorateLinks(f, origin, po); });
+    const items = await Promise.all((d.results || []).map(async function(f) { return decorateLinks(f, origin, po, env); }));
     return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.total || 0) / ps), items: items } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 // 给文件记录补三类直链字段：
 //   r2_url      真实 R2 直链（未转存 R2 时为空；代理占位 /file/tg/<id> 不算）
-//   proxy_url   tele 代理直链（worker 拉 TG，隐藏 token，总是可用）
+//   proxy_url   tele 代理直链（worker 拉 TG，隐藏 token，带签名防枚举，总是可用）
 //   display_url 推荐直链（proxy_only=1 时一律代理链接；否则有 R2 秒开优先 R2）
 //   link_type   'r2'=已有 R2（同时代理也可用）/ 'proxy'=仅代理 / 'both'=两者都给
-function decorateLinks(f, origin, proxyOnly) {
+async function decorateLinks(f, origin, proxyOnly, env) {
   const realR2 = f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0;
-  // 代理链接带后缀名（如 /file/tg/123.jpg），便于识别类型与下载文件名
-  const proxyUrl = origin + '/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type);
+  // 代理链接带后缀名 + 访问签名（如 /file/tg/123.jpg?k=xxxx），签名防止递增 id 遍历枚举
+  const tok = await fileTok(f.id, env);
+  const proxyUrl = origin + '/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type) + '?k=' + tok;
   if (realR2) {
     f.link_type = 'both';          // r2_url + proxy_url 都有
     f.proxy_url = proxyUrl;
@@ -2481,7 +2512,7 @@ async function handleFile(request, env) {
     let f;
     if (id) f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
     else if (fu) f = await env.D1_DB.prepare('SELECT * FROM files WHERE r2_url=? AND deleted_at IS NULL').bind(fu).first();
-    return json({ ok: true, data: f ? decorateLinks(f, new URL(request.url).origin, await getProxyOnly(env)) : null });
+    return json({ ok: true, data: f ? await decorateLinks(f, new URL(request.url).origin, await getProxyOnly(env), env) : null });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

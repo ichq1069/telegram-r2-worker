@@ -782,8 +782,8 @@ https://example.com/b.jpg"></textarea></div>
 
 <script>
 (function(){
-// Prefer clean proxy URL (/file/tg/<id> -> 302 to official link or R2), avoiding exposing bot token
-function imgUrl(f) { if (f && f.id) return '/file/tg/' + f.id; return (f && f.tg_file_url) ? f.tg_file_url : (f ? f.r2_url : ''); }
+// Prefer clean proxy URL (/file/tg/<id>?k=<token> -> 302 to official link or R2), avoiding exposing bot token
+function imgUrl(f) { if (f && f.id) { if (f.proxy_url) return f.proxy_url; if (f.display_url) return f.display_url; return '/file/tg/' + f.id; } return (f && f.tg_file_url) ? f.tg_file_url : (f ? f.r2_url : ''); }
 // Escape HTML to prevent XSS when injecting user-controlled strings
 function escStr(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 // 后台版本号：GitHub Actions 部署时自动注入 v1.0.<run#>
