@@ -683,6 +683,9 @@ https://example.com/b.jpg"></textarea></div>
           <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="radio" name="proxyMode" value="1"> 代理模式（省存储，实时拉取）</label>
           <button class="btn btn-primary" id="proxyModeSaveBtn">保存</button>
         </div>
+        <div class="fb" style="margin-top:10px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="proxyOnlyChk"> 前端仅用代理链接（API display_url / 复制链接一律给 /file/tg/&lt;id&gt; 代理链接，不再给 R2 直链）</label>
+        </div>
       </div>
     </div>
   </div>
@@ -1288,6 +1291,7 @@ function init() {
   loadBotInfo();
   loadProgress();
   loadDedupStats();
+  loadProxyOnlyState();
   startProgressAutoRefresh();
   // Tele文件列表自动刷新（30s，仅当前 tab 可见时）：方便盯着新文件入库
   setInterval(function() {
@@ -1928,6 +1932,13 @@ async function loadOpsPage() {
       for (var i = 0; i < radios.length; i++) radios[i].checked = (String(radios[i].value) === String(rp.data.proxy_mode));
     }
   } catch (e) {}
+  try {
+    const rpo = await api("GET", "/admin/api/settings/proxy-only");
+    if (rpo && rpo.ok) {
+      var chk = document.getElementById("proxyOnlyChk");
+      if (chk) chk.checked = (rpo.data.proxy_only === 1);
+    }
+  } catch (e) {}
 }
 
 async function loadBackupList() {
@@ -1999,9 +2010,17 @@ document.getElementById("notifySaveBtn").addEventListener("click", function() {
 document.getElementById("proxyModeSaveBtn").addEventListener("click", function() {
   var sel = document.querySelector('input[name="proxyMode"]:checked');
   var val = sel ? parseInt(sel.value) : 0;
-  api("POST", "/admin/api/settings/proxy-mode", { proxy_mode: val }).then(function(r) {
-    if (r && r.ok) toast("转存模式已保存" + (val === 1 ? "，新文件走代理" : "，新文件转存 R2"), 1);
-    else toast((r && r.error) || "保存失败", 0);
+  var poChk = document.getElementById("proxyOnlyChk");
+  var poVal = (poChk && poChk.checked) ? 1 : 0;
+  Promise.all([
+    api("POST", "/admin/api/settings/proxy-mode", { proxy_mode: val }),
+    api("POST", "/admin/api/settings/proxy-only", { proxy_only: poVal })
+  ]).then(function(rs) {
+    if (rs[0] && rs[0].ok) {
+      PROXY_ONLY = poVal;
+      toast("已保存" + (val === 1 ? "，新文件走代理" : "") + (poVal === 1 ? "，前端仅代理链接" : ""), 1);
+    }
+    else toast((rs[0] && rs[0].error) || "保存失败", 0);
   });
 });
 
@@ -2556,8 +2575,15 @@ function fallbackCopy(txt) {
   catch (e) { toast("复制失败: " + e.message, 0); }
   document.body.removeChild(ta);
 }
+var PROXY_ONLY = 0;
 function workerOrigin() {
   return (location.origin.indexOf('telegram-r2-bot.wo58.cn') >= 0) ? location.origin : 'https://telegram-r2-bot.wo58.cn';
+}
+async function loadProxyOnlyState() {
+  try {
+    const r = await api("GET", "/admin/api/settings/proxy-only");
+    PROXY_ONLY = (r && r.ok && r.data.proxy_only === 1) ? 1 : 0;
+  } catch (e) { PROXY_ONLY = 0; }
 }
 function linkBadge(f) {
   if (!f) return '';
@@ -2579,6 +2605,8 @@ function copySelected(mode) {
       var pr = workerOrigin() + '/file/tg/' + f.id;
       links.push(r2l ? (r2l + ' | ' + pr) : pr);
     } else if (mode === 'proxy') {
+      links.push(workerOrigin() + '/file/tg/' + f.id);
+    } else if (PROXY_ONLY === 1) {
       links.push(workerOrigin() + '/file/tg/' + f.id);
     } else {
       links.push(f.r2_url || (workerOrigin() + '/file/tg/' + f.id));

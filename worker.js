@@ -91,6 +91,8 @@ export default {
     // 代理模式：1=入库不转存 R2，直链 /file/tg/<id> 由 worker 实时拉 Telegram（省 R2 存储）
     if (m === 'GET' && p === '/admin/api/settings/proxy-mode') return isAdmin ? handleAdminGetProxyMode(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/proxy-mode') return isAdmin ? handleAdminSaveProxyMode(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/settings/proxy-only') return isAdmin ? handleAdminGetProxyOnly(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/proxy-only') return isAdmin ? handleAdminSaveProxyOnly(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
     if (m === 'GET' && p === '/admin/api/backup') return isAdmin ? handleAdminBackup(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/backup') return isAdmin ? handleAdminBackupSave(env) : json({ok:false,error:'Unauthorized'},401);
@@ -1568,7 +1570,8 @@ async function handleFiles(request, env) {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files f ' + w).bind(...p).first();
     const d = await env.D1_DB.prepare("SELECT f.*, CASE WHEN f.pool_status='ignored' THEN 'ignored' WHEN EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) THEN 'imported' ELSE 'pending' END AS pool_state FROM files f " + w + ' ORDER BY f.id DESC LIMIT ? OFFSET ?').bind(...p, ps, off).all();
     const origin = new URL(request.url).origin;
-    const items = (d.results || []).map(function(f) { return decorateLinks(f, origin); });
+    const po = await getProxyOnly(env);
+    const items = (d.results || []).map(function(f) { return decorateLinks(f, origin, po); });
     return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.total || 0) / ps), items: items } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -1576,15 +1579,15 @@ async function handleFiles(request, env) {
 // 给文件记录补三类直链字段：
 //   r2_url      真实 R2 直链（未转存 R2 时为空；代理占位 /file/tg/<id> 不算）
 //   proxy_url   tele 代理直链（worker 拉 TG，隐藏 token，总是可用）
-//   display_url 推荐直链（有 R2 秒开优先 R2，否则代理）
+//   display_url 推荐直链（proxy_only=1 时一律代理链接；否则有 R2 秒开优先 R2）
 //   link_type   'r2'=已有 R2（同时代理也可用）/ 'proxy'=仅代理 / 'both'=两者都给
-function decorateLinks(f, origin) {
+function decorateLinks(f, origin, proxyOnly) {
   const realR2 = f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0;
   const proxyUrl = origin + '/file/tg/' + f.id;
   if (realR2) {
     f.link_type = 'both';          // r2_url + proxy_url 都有
     f.proxy_url = proxyUrl;
-    f.display_url = f.r2_url;
+    f.display_url = (proxyOnly === 1) ? proxyUrl : f.r2_url;
   } else {
     f.link_type = 'proxy';         // 仅代理直链
     f.r2_url = '';
@@ -1602,7 +1605,7 @@ async function handleFile(request, env) {
     let f;
     if (id) f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
     else if (fu) f = await env.D1_DB.prepare('SELECT * FROM files WHERE r2_url=? AND deleted_at IS NULL').bind(fu).first();
-    return json({ ok: true, data: f ? decorateLinks(f, new URL(request.url).origin) : null });
+    return json({ ok: true, data: f ? decorateLinks(f, new URL(request.url).origin, await getProxyOnly(env)) : null });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -1629,6 +1632,32 @@ async function handleAdminSaveProxyMode(request, env) {
     await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('proxy_mode',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(v).run();
     _proxyMode = (v === '1') ? 1 : 0; _proxyModeAt = Date.now();
     return json({ ok: true, data: { proxy_mode: _proxyMode } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 前端仅代理链接开关（settings 表）：1=API 的 display_url 与推荐直链一律给 /file/tg/<id> 代理链接，不用 R2 直链
+let _proxyOnly = null, _proxyOnlyAt = 0;
+async function getProxyOnly(env) {
+  const now = Date.now();
+  if (_proxyOnly !== null && now - _proxyOnlyAt < 30000) return _proxyOnly;
+  _proxyOnly = 0;
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='proxy_only'").first();
+    if (r && r.value) _proxyOnly = (String(r.value).trim() === '1') ? 1 : 0;
+  } catch (e) {}
+  _proxyOnlyAt = now;
+  return _proxyOnly;
+}
+async function handleAdminGetProxyOnly(env) {
+  return json({ ok: true, data: { proxy_only: await getProxyOnly(env) } });
+}
+async function handleAdminSaveProxyOnly(request, env) {
+  try {
+    const b = await request.json().catch(() => ({}));
+    const v = (b.proxy_only === 1 || b.proxy_only === true || b.proxy_only === '1') ? '1' : '0';
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('proxy_only',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(v).run();
+    _proxyOnly = (v === '1') ? 1 : 0; _proxyOnlyAt = Date.now();
+    return json({ ok: true, data: { proxy_only: _proxyOnly } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
