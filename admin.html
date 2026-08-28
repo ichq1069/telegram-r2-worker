@@ -727,14 +727,19 @@ https://example.com/b.jpg"></textarea></div>
         <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">测试：AI 会给目标 chat 发一条自我介绍消息，用于确认 Key 可用。已保存的 Key 会以掩码形式回显在输入框（不会因重复保存丢失）。</div>
       </div>
       <div class="card">
-        <div class="card-title"><span class="dot"></span>R2 套餐配额 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">概览页用量与超限提醒依据；存储估算自库内文件，A/B 操作数自本功能上线起累计（写/读操作）</span></div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-          <div class="fr" style="margin:0"><label>存储容量 (GB)</label><input class="inp" id="r2Cap" placeholder="10"></div>
-          <div class="fr" style="margin:0"><label>A 类操作配额</label><input class="inp" id="r2QuotaA" placeholder="1000000"></div>
-          <div class="fr" style="margin:0"><label>B 类操作配额</label><input class="inp" id="r2QuotaB" placeholder="10000000"></div>
+        <div class="card-title"><span class="dot"></span>R2 套餐 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">配额由套餐自动决定（后台不再手动填容量/操作数）；概览页用量与超限提醒依据：免费版 10GB 存储 + 100 万 A 类 + 1000 万 B 类 / 月；付费版不限，按量计费</span></div>
+        <div style="display:grid;grid-template-columns:1fr;gap:10px">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:10px 12px;border:1px solid var(--border);border-radius:8px">
+            <input type="radio" name="r2Plan" value="free" checked style="margin-top:3px">
+            <span><b style="font-size:13px">CF 免费版</b><br><span style="font-size:12px;color:var(--text-secondary)">存储 10GB · A 类 100 万次/月 · B 类 1000 万次/月</span></span>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:10px 12px;border:1px solid var(--border);border-radius:8px">
+            <input type="radio" name="r2Plan" value="paid" style="margin-top:3px">
+            <span><b style="font-size:13px">CF 付费版</b><br><span style="font-size:12px;color:var(--text-secondary)">存储与操作数均不限（按量计费，无配额提醒）</span></span>
+          </label>
         </div>
         <div class="fb" style="margin-top:10px">
-          <button class="btn btn-primary" id="r2QuotaSaveBtn">保存配额</button>
+          <button class="btn btn-primary" id="r2QuotaSaveBtn">保存套餐</button>
           <span style="font-size:11px;color:var(--text-secondary)">A 类=写入（上传/转存），B 类=读取（访问直链）。</span>
         </div>
       </div>
@@ -1843,14 +1848,20 @@ async function loadR2UsageCards() {
       return '<div class="stat-card" style="border-color:' + r2Color(pct) + ';background:' + r2Bg(pct) + '"><div class="value" style="color:' + r2Color(pct) + '">' + val + '</div><div class="label">' + title + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">' + sub + '</div></div>';
     };
     var el = document.getElementById("statsGrid");
+    var capTxt = d.capacity_bytes ? gb(d.capacity_bytes) : '不限';
+    var capPctTxt = d.capacity_bytes ? d.storage_pct + '%' : '—';
+    var capPct = d.capacity_bytes ? d.storage_pct : 0;
+    var capSub = (d.storage_source === 'cf' ? 'CF 官方实时' : '估算(Σ文件大小)') + (d.capacity_bytes ? ' · 容量 ' + capTxt + ' · 剩余 ' + gb(d.storage_remaining) : ' · 付费版不限容量');
+    var aPct = d.class_a_quota ? d.class_a_pct : 0;
+    var bPct = d.class_b_quota ? d.class_b_pct : 0;
     el.innerHTML = el.innerHTML +
-      card('R2 存储用量 ' + d.storage_pct + '%', gb(d.storage_bytes), (d.storage_source === 'cf' ? 'CF 官方实时 · 容量 ' : '估算(Σ文件大小) · 容量 ') + gb(d.capacity_bytes) + ' · 剩余 ' + gb(d.storage_remaining), d.storage_pct) +
-      card('A 类操作 ' + d.class_a_pct + '%', fmtNum(d.class_a), '配额 ' + fmtNum(d.class_a_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_a_quota - d.class_a)), d.class_a_pct) +
-      card('B 类操作 ' + d.class_b_pct + '%', fmtNum(d.class_b), '配额 ' + fmtNum(d.class_b_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_b_quota - d.class_b)), d.class_b_pct);
-    // 超过 50% / 90% 弹窗提示（每个阈值只弹一次，localStorage 记忆）
-    warnOnce("r2_storage", d.storage_pct, "R2 存储用量已达 " + d.storage_pct + "%", "已用 " + gb(d.storage_bytes) + " / 容量 " + gb(d.capacity_bytes) + "，剩余 " + gb(d.storage_remaining) + "。<br>可在 后台 → 运维 → R2 套餐 调整容量。");
-    warnOnce("r2_class_a", d.class_a_pct, "A 类操作已达 " + d.class_a_pct + "%", "已用 " + fmtNum(d.class_a) + " / 配额 " + fmtNum(d.class_a_quota) + "。<br>可在 后台 → 运维 → R2 套餐 调整配额。");
-    warnOnce("r2_class_b", d.class_b_pct, "B 类操作已达 " + d.class_b_pct + "%", "已用 " + fmtNum(d.class_b) + " / 配额 " + fmtNum(d.class_b_quota) + "。<br>可在 后台 → 运维 → R2 套餐 调整配额。");
+      card('R2 存储用量 ' + capPctTxt, gb(d.storage_bytes), capSub, capPct) +
+      card('A 类操作 ' + (d.class_a_quota ? d.class_a_pct + '%' : '—'), fmtNum(d.class_a), d.class_a_quota ? '配额 ' + fmtNum(d.class_a_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_a_quota - d.class_a)) : '付费版不限', aPct) +
+      card('B 类操作 ' + (d.class_b_quota ? d.class_b_pct + '%' : '—'), fmtNum(d.class_b), d.class_b_quota ? '配额 ' + fmtNum(d.class_b_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_b_quota - d.class_b)) : '付费版不限', bPct);
+    // 超过 50% / 90% 弹窗提示（每个阈值只弹一次，localStorage 记忆；付费版不限不提示）
+    warnOnce("r2_storage", capPct, "R2 存储用量已达 " + d.storage_pct + "%", "已用 " + gb(d.storage_bytes) + " / 容量 " + gb(d.capacity_bytes) + "，剩余 " + gb(d.storage_remaining) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
+    warnOnce("r2_class_a", aPct, "A 类操作已达 " + d.class_a_pct + "%", "已用 " + fmtNum(d.class_a) + " / 配额 " + fmtNum(d.class_a_quota) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
+    warnOnce("r2_class_b", bPct, "B 类操作已达 " + d.class_b_pct + "%", "已用 " + fmtNum(d.class_b) + " / 配额 " + fmtNum(d.class_b_quota) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
   } catch (e) {}
 }
 function warnOnce(key, pct, title, desc) {
@@ -2121,13 +2132,12 @@ async function loadOpsPage() {
       if (tc && nc && nc.value && !tc.value) tc.value = nc.value;
     }
   } catch (e) {}
-  // R2 套餐配额
+  // R2 套餐
   try {
     const rq = await api("GET", "/admin/api/settings/r2-quota");
     if (rq && rq.ok && rq.data) {
-      document.getElementById("r2Cap").value = rq.data.capacity_gb || "10";
-      document.getElementById("r2QuotaA").value = rq.data.class_a_quota || "1000000";
-      document.getElementById("r2QuotaB").value = rq.data.class_b_quota || "10000000";
+      const rad = document.querySelector('input[name="r2Plan"][value="' + (rq.data.plan || 'free') + '"]');
+      if (rad) rad.checked = true;
     }
   } catch (e) {}
 }
@@ -2169,13 +2179,9 @@ document.getElementById("aiTestBtn").addEventListener("click", function() {
 });
 
 document.getElementById("r2QuotaSaveBtn").addEventListener("click", function() {
-  var b = {
-    capacity_gb: document.getElementById("r2Cap").value.trim(),
-    class_a_quota: document.getElementById("r2QuotaA").value.trim(),
-    class_b_quota: document.getElementById("r2QuotaB").value.trim()
-  };
-  api("POST", "/admin/api/settings/r2-quota", b).then(function(r) {
-    if (r && r.ok) { toast("R2 配额已保存", 1); loadOpsPage(); }
+  var p = document.querySelector('input[name="r2Plan"]:checked');
+  api("POST", "/admin/api/settings/r2-quota", { plan: p ? p.value : 'free' }).then(function(r) {
+    if (r && r.ok) { toast("R2 套餐已保存", 1); loadOpsPage(); }
     else toast((r && r.error) || "保存失败", 0);
   });
 });

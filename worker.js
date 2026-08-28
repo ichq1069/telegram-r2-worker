@@ -460,33 +460,36 @@ async function handleAdminR2Usage(env) {
     await ensureTablesOnce(env.D1_DB);
     const s = await env.D1_DB.prepare('SELECT COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL').first();
     const map = {};
-    const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('r2_class_a','r2_class_b','r2_capacity_gb','r2_class_a_quota','r2_class_b_quota')").all();
+    const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('r2_class_a','r2_class_b','r2_plan')").all();
     (q.results || []).forEach(function(r) { map[r.key] = r.value; });
     const estBytes = (s && s.s) || 0;
-    const capacityBytes = (parseFloat(map.r2_capacity_gb) || 10) * 1024 * 1024 * 1024;
     const localA = parseInt(map.r2_class_a) || 0;
     const localB = parseInt(map.r2_class_b) || 0;
+    // 套餐决定配额：free=CF 免费版（10GB 存储 / 100 万 A 类 / 1000 万 B 类）；paid=付费版（不限，0 表示不限）
+    const plan = map.r2_plan === 'paid' ? 'paid' : 'free';
+    const capacityBytes = plan === 'paid' ? 0 : 10 * 1024 * 1024 * 1024;
+    const quotaA = plan === 'paid' ? 0 : 1000000;
+    const quotaB = plan === 'paid' ? 0 : 10000000;
     // 优先官方用量，失败回退本地估算（cf_error 保留原因供排查）
     const cf = await cfR2Usage(env);
     const cfOk = cf && !cf._err && cf.storage_bytes !== undefined;
     const storageBytes = cfOk ? cf.storage_bytes : estBytes;
     const classA = (cfOk && cf.class_a !== undefined) ? cf.class_a : localA;
     const classB = (cfOk && cf.class_b !== undefined) ? cf.class_b : localB;
-    const quotaA = parseInt(map.r2_class_a_quota) || 1000000;
-    const quotaB = parseInt(map.r2_class_b_quota) || 10000000;
     return json({ ok: true, data: {
+      plan: plan,
       storage_bytes: storageBytes,
       storage_estimate: estBytes,
       object_count: cfOk && cf.object_count !== undefined ? cf.object_count : null,
       storage_source: cfOk ? 'cf' : 'estimate',
       cf_error: cfOk ? '' : ((cf && cf._err) || 'cf unavailable'),
-      capacity_bytes: capacityBytes,
-      storage_pct: capacityBytes ? Math.round(storageBytes / capacityBytes * 1000) / 10 : 0,
-      storage_remaining: Math.max(0, capacityBytes - storageBytes),
-      class_a: classA, class_a_quota: quotaA,
-      class_a_pct: quotaA ? Math.round(classA / quotaA * 1000) / 10 : 0,
+      capacity_bytes: capacityBytes, // 0 = 不限
+      storage_pct: capacityBytes ? Math.round(storageBytes / capacityBytes * 1000) / 10 : null,
+      storage_remaining: capacityBytes ? Math.max(0, capacityBytes - storageBytes) : -1,
+      class_a: classA, class_a_quota: quotaA, // 0 = 不限
+      class_a_pct: quotaA ? Math.round(classA / quotaA * 1000) / 10 : null,
       class_b: classB, class_b_quota: quotaB,
-      class_b_pct: quotaB ? Math.round(classB / quotaB * 1000) / 10 : 0,
+      class_b_pct: quotaB ? Math.round(classB / quotaB * 1000) / 10 : null,
       ops_source: (cfOk && cf.class_a !== undefined) ? 'cf' : 'local'
     } });
   } catch (e) { return json({ ok: false, error: e.message }); }
@@ -494,19 +497,18 @@ async function handleAdminR2Usage(env) {
 async function handleAdminGetR2Quota(env) {
   try {
     const map = {};
-    const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('r2_capacity_gb','r2_class_a_quota','r2_class_b_quota')").all();
+    const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key = 'r2_plan'").all();
     (q.results || []).forEach(function(r) { map[r.key] = r.value; });
-    return json({ ok: true, data: { capacity_gb: map.r2_capacity_gb || '10', class_a_quota: map.r2_class_a_quota || '1000000', class_b_quota: map.r2_class_b_quota || '10000000' } });
+    const plan = map.r2_plan === 'paid' ? 'paid' : 'free';
+    return json({ ok: true, data: { plan: plan, free: { capacity_gb: 10, class_a_quota: 1000000, class_b_quota: 10000000 } } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 async function handleAdminSaveR2Quota(request, env) {
   try {
     const b = await request.json().catch(function(){ return {}; });
-    const set = function(k, v) { return env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(k, String(v)).run(); };
-    if (b.capacity_gb && !isNaN(parseFloat(b.capacity_gb))) await set('r2_capacity_gb', parseFloat(b.capacity_gb));
-    if (b.class_a_quota && !isNaN(parseInt(b.class_a_quota))) await set('r2_class_a_quota', parseInt(b.class_a_quota));
-    if (b.class_b_quota && !isNaN(parseInt(b.class_b_quota))) await set('r2_class_b_quota', parseInt(b.class_b_quota));
-    return json({ ok: true, data: { saved: true } });
+    const plan = b.plan === 'paid' ? 'paid' : 'free';
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('r2_plan',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(plan).run();
+    return json({ ok: true, data: { saved: true, plan: plan } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 var AI_TOOLS = [
