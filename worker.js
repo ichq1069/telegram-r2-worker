@@ -412,7 +412,7 @@ async function handleAdminSaveAI(request, env) {
 // 官方用量：Cloudflare GraphQL Analytics API（r2BucketStorage/r2BucketOperations）
 // 需要 secret CF_API_TOKEN（权限：Account.R2 Storage:Read）与 var CF_ACCOUNT_ID
 async function cfR2Usage(env) {
-  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return null;
+  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return { _err: 'no CF_API_TOKEN or CF_ACCOUNT_ID' };
   const gql = function(q) {
     return fetch('https://api.cloudflare.com/client/v4/graphql', {
       method: 'POST',
@@ -424,9 +424,10 @@ async function cfR2Usage(env) {
     // 真实存储字节数（R2 Dashboard 同源数据）
     const q1 = 'query { viewer { accounts(filter:{accountTag:"' + env.CF_ACCOUNT_ID + '"}) { r2BucketStorage(filter:{bucketName:"bot-telegram"},limit:1){ bucketName bytesStored } } } }';
     const j1 = await gql(q1);
+    if (j1.errors) return { _err: 'graphql errors: ' + JSON.stringify(j1.errors).slice(0, 220) };
     const a1 = j1 && j1.data && j1.data.viewer && j1.data.viewer.accounts && j1.data.viewer.accounts[0];
     const st = a1 && a1.r2BucketStorage && a1.r2BucketStorage[0];
-    if (!st || st.bytesStored === undefined || st.bytesStored === null) return null;
+    if (!st || st.bytesStored === undefined || st.bytesStored === null) return { _err: 'storage dataset empty: ' + JSON.stringify(j1).slice(0, 220) };
     const out = { storage_bytes: st.bytesStored, source: 'cf' };
     // 近 30 天 A/B 类操作（字段不存在时忽略，回退本地计数）
     try {
@@ -441,7 +442,7 @@ async function cfR2Usage(env) {
       }
     } catch (e) {}
     return out;
-  } catch (e) { return null; }
+  } catch (e) { return { _err: 'exception: ' + e.message }; }
 }
 async function handleAdminR2Usage(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
@@ -455,17 +456,19 @@ async function handleAdminR2Usage(env) {
     const capacityBytes = (parseFloat(map.r2_capacity_gb) || 10) * 1024 * 1024 * 1024;
     const localA = parseInt(map.r2_class_a) || 0;
     const localB = parseInt(map.r2_class_b) || 0;
-    // 优先官方用量，失败回退本地估算
+    // 优先官方用量，失败回退本地估算（cf_error 保留原因供排查）
     const cf = await cfR2Usage(env);
-    const storageBytes = (cf && cf.storage_bytes !== undefined) ? cf.storage_bytes : estBytes;
-    const classA = (cf && cf.class_a !== undefined) ? cf.class_a : localA;
-    const classB = (cf && cf.class_b !== undefined) ? cf.class_b : localB;
+    const cfOk = cf && !cf._err && cf.storage_bytes !== undefined;
+    const storageBytes = cfOk ? cf.storage_bytes : estBytes;
+    const classA = (cfOk && cf.class_a !== undefined) ? cf.class_a : localA;
+    const classB = (cfOk && cf.class_b !== undefined) ? cf.class_b : localB;
     const quotaA = parseInt(map.r2_class_a_quota) || 1000000;
     const quotaB = parseInt(map.r2_class_b_quota) || 10000000;
     return json({ ok: true, data: {
       storage_bytes: storageBytes,
       storage_estimate: estBytes,
-      storage_source: cf ? 'cf' : 'estimate',
+      storage_source: cfOk ? 'cf' : 'estimate',
+      cf_error: cfOk ? '' : ((cf && cf._err) || 'cf unavailable'),
       capacity_bytes: capacityBytes,
       storage_pct: capacityBytes ? Math.round(storageBytes / capacityBytes * 1000) / 10 : 0,
       storage_remaining: Math.max(0, capacityBytes - storageBytes),
@@ -473,7 +476,7 @@ async function handleAdminR2Usage(env) {
       class_a_pct: quotaA ? Math.round(classA / quotaA * 1000) / 10 : 0,
       class_b: classB, class_b_quota: quotaB,
       class_b_pct: quotaB ? Math.round(classB / quotaB * 1000) / 10 : 0,
-      ops_source: (cf && cf.class_a !== undefined) ? 'cf' : 'local'
+      ops_source: (cfOk && cf.class_a !== undefined) ? 'cf' : 'local'
     } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
