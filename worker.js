@@ -3746,7 +3746,7 @@ async function handleDedupGroups(env) {
       const ph = chunk.map(function() { return '?'; }).join(',');
       const rr = await env.D1_DB.prepare(
         'SELECT id, file_name, file_type, file_size, created_at, storage_key, r2_url, pool_status, tags, md5_hash FROM files WHERE deleted_at IS NULL AND md5_hash IN (' + ph + ')'
-      ).bind.apply(null, chunk).all();
+      ).bind(...chunk).all();
       (rr.results || []).forEach(function(x) { allRows.push(x); });
     }
     // 2) 收集所有成员 id，统一查一次随机库引用（分批防超限）
@@ -3822,7 +3822,7 @@ async function handleDedupRows(request, env) {
     const purge = body.purge === 1 || body.purge === '1';
     if (!ids.length) return json({ ok: false, error: '未选择文件' });
     const ph = ids.map(function() { return '?'; }).join(',');
-    const rows = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE deleted_at IS NULL AND id IN (" + ph + ")").bind.apply(null, ids).all();
+    const rows = await env.D1_DB.prepare("SELECT id, storage_key FROM files WHERE deleted_at IS NULL AND id IN (" + ph + ")").bind(...ids).all();
     const res = rows.results || [];
     const poolRefs = await poolRefIds(env, res.map(function(x) { return x.id; }));
     const targets = res.filter(function(r) { return !poolRefs.has(String(r.id)); });
