@@ -2030,6 +2030,27 @@ async function loadR2UsageCards() {
     warnOnce("r2_storage", capPct, "R2 存储用量已达 " + d.storage_pct + "%", "已用 " + gb(d.storage_bytes) + " / 容量 " + gb(d.capacity_bytes) + "，剩余 " + gb(d.storage_remaining) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
     warnOnce("r2_class_a", aPct, "A 类操作已达 " + d.class_a_pct + "%", "已用 " + fmtNum(d.class_a) + " / 配额 " + fmtNum(d.class_a_quota) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
     warnOnce("r2_class_b", bPct, "B 类操作已达 " + d.class_b_pct + "%", "已用 " + fmtNum(d.class_b) + " / 配额 " + fmtNum(d.class_b_quota) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
+    // Worker 用量（请求数 / CPU / 错误）——同一网格追加
+    loadWorkerUsageInto(el, card);
+  } catch (e) {}
+}
+
+// Worker 用量卡（Cloudflare GraphQL 官方统计，CF_API_TOKEN 缺失时本地计数兜底）
+async function loadWorkerUsageInto(el, card) {
+  try {
+    const r = await api("GET", "/admin/api/worker-usage");
+    if (!r.ok || !r.data) return;
+    const d = r.data;
+    var qPct = d.today_quota ? d.today_pct : 0;
+    var qTxt = d.today_quota ? d.today_pct + '%' : '—';
+    var qSub = (d.source === 'cf' ? 'CF 官方' : '本地计数') + (d.today_quota ? ' · 配额 ' + fmtNum(d.today_quota) + '/天 · 剩余 ' + fmtNum(Math.max(0, d.today_quota - d.today_requests)) : '付费版不限');
+    var cpuV = (d.cpu_p50 !== undefined && d.cpu_p50 !== null) ? (d.cpu_p50 / 100).toFixed(2) + ' ms' : '—';
+    var cpuSub = (d.cpu_p90 !== undefined && d.cpu_p90 !== null) ? 'p90 ' + (d.cpu_p90 / 100).toFixed(2) + ' ms · 免费版有每日额度' : 'Cloudflare 面板可看总 CPU';
+    el.innerHTML = el.innerHTML +
+      card('今日请求 ' + qTxt, fmtNum(d.today_requests), qSub, qPct) +
+      card('本月请求', fmtNum(d.month_requests), '免费版配额 10 万/天', 0) +
+      card('今日错误', fmtNum(d.errors_today), d.source === 'cf' ? 'CF 官方统计' : '本地未统计', 0) +
+      card('CPU p50', cpuV, cpuSub, 0);
   } catch (e) {}
 }
 function warnOnce(key, pct, title, desc) {

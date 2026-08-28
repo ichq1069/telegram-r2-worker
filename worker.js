@@ -14,6 +14,8 @@ export default {
     if (request.method === 'OPTIONS') return cors(null, 204);
     // Ensure tables exist (only once per isolate, avoiding per-request D1 overhead)
     if (env.D1_DB) { try { await ensureTablesOnce(env.D1_DB); } catch (e) {} }
+    // 本地请求计数（兜底统计，异步不阻塞；主统计走 Cloudflare GraphQL）
+    bumpWorkerStat(env);
     const url = new URL(request.url);
     const p = url.pathname;
     const m = request.method;
@@ -107,6 +109,8 @@ export default {
     if (m === 'POST' && p === '/admin/api/ai/ask') return isAdmin ? handleAdminAskAI(request, env) : json({ok:false,error:'Unauthorized'},401);
     // R2 用量概览 / 套餐配额配置
     if (m === 'GET' && p === '/admin/api/r2-usage') return isAdmin ? handleAdminR2Usage(env) : json({ok:false,error:'Unauthorized'},401);
+    // Worker 用量统计（请求数/CPU/错误，GraphQL 官方 + 本地兜底）
+    if (m === 'GET' && p === '/admin/api/worker-usage') return isAdmin ? handleAdminWorkerUsage(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminGetR2Quota(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminSaveR2Quota(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
@@ -471,6 +475,76 @@ async function cfR2Usage(env) {
     } catch (e) {}
     return out;
   } catch (e) { return { _err: 'exception: ' + e.message }; }
+}
+
+// 官方 Worker 用量：Cloudflare GraphQL Analytics（workersInvocationsAdaptiveGroups）
+// 需要 secret CF_API_TOKEN（权限：Account.Workers Analytics:Read）+ var CF_ACCOUNT_ID
+async function cfWorkerUsage(env) {
+  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return { _err: 'no CF_API_TOKEN or CF_ACCOUNT_ID' };
+  const acct = env.CF_ACCOUNT_ID;
+  const gql = function(q) {
+    return fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.CF_API_TOKEN },
+      body: JSON.stringify({ query: q })
+    }).then(function(r) { return r.json(); });
+  };
+  try {
+    const dayStr = new Date().toISOString().slice(0, 10);
+    const todayStart = dayStr + 'T00:00:00Z';
+    const nowIso = new Date().toISOString();
+    const monthStart = dayStr.slice(0, 8) + '01T00:00:00Z';
+    const q1 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { workersInvocationsAdaptiveGroups(limit:1, filter:{datetime_geq:"' + todayStart + '", datetime_leq:"' + nowIso + '"}) { sum { requests errors } quantiles { cpuTime p50 cpuTime p90 } } } } }';
+    const j1 = await gql(q1);
+    if (j1.errors) return { _err: 'worker errors: ' + JSON.stringify(j1.errors).slice(0, 300) };
+    const a1 = j1.data && j1.data.viewer && j1.data.viewer.accounts && j1.data.viewer.accounts[0];
+    const g1 = a1 && a1.workersInvocationsAdaptiveGroups && a1.workersInvocationsAdaptiveGroups[0];
+    const s1 = g1 && g1.sum;
+    if (!s1 || s1.requests === undefined) return { _err: 'worker empty: ' + JSON.stringify(j1).slice(0, 300) };
+    const out = {
+      today_requests: s1.requests || 0,
+      errors_today: s1.errors || 0,
+      cpu_p50: g1.quantiles && g1.quantiles.cpuTime ? g1.quantiles.cpuTime.p50 : null,
+      cpu_p90: g1.quantiles && g1.quantiles.cpuTime ? g1.quantiles.cpuTime.p90 : null,
+      source: 'cf'
+    };
+    // 本月请求
+    try {
+      const q2 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { workersInvocationsAdaptiveGroups(limit:1, filter:{datetime_geq:"' + monthStart + '", datetime_leq:"' + nowIso + '"}) { sum { requests } } } } }';
+      const j2 = await gql(q2);
+      const a2 = j2.data && j2.data.viewer && j2.data.viewer.accounts && j2.data.viewer.accounts[0];
+      const g2 = a2 && a2.workersInvocationsAdaptiveGroups && a2.workersInvocationsAdaptiveGroups[0];
+      out.month_requests = (g2 && g2.sum && g2.sum.requests) || 0;
+    } catch (e) {}
+    return out;
+  } catch (e) { return { _err: 'exception: ' + e.message }; }
+}
+
+async function handleAdminWorkerUsage(env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    const dayStr = new Date().toISOString().slice(0, 10);
+    const mStart = dayStr.slice(0, 8) + '01';
+    const lt = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day=?').bind(dayStr).first();
+    const lm = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day>=?').bind(mStart).first();
+    const out = { today_quota: 100000, obs_quota: 200000, local_today: (lt && lt.r) || 0, local_month: (lm && lm.r) || 0 };
+    const cf = await cfWorkerUsage(env);
+    if (cf && !cf._err && cf.today_requests !== undefined) {
+      out.today_requests = cf.today_requests;
+      out.month_requests = cf.month_requests !== undefined ? cf.month_requests : out.local_month;
+      out.errors_today = cf.errors_today || 0;
+      out.cpu_p50 = cf.cpu_p50; out.cpu_p90 = cf.cpu_p90;
+      out.source = 'cf';
+      out.today_pct = Math.round(cf.today_requests / 100000 * 1000) / 10;
+    } else {
+      out.today_requests = out.local_today;
+      out.month_requests = out.local_month;
+      out.source = 'local';
+      out.today_pct = Math.round(out.local_today / 100000 * 1000) / 10;
+      out.cf_error = cf ? (cf._err || 'cf unavailable') : 'cf unavailable';
+    }
+    return json({ ok: true, data: out });
+  } catch (e) { return json({ ok: false, error: e.message }); }
 }
 async function handleAdminR2Usage(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
@@ -1908,6 +1982,13 @@ var COLD_STORAGE_CLASS = 'Infrequent Access';
 function bumpR2Usage(env, key) {
   if (!env || !env.D1_DB) return;
   env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value=CAST(COALESCE(value,'0') AS INTEGER)+1").bind(key).run().catch(function(){});
+}
+
+// 本地请求计数（worker_stats 表，按天累计；GraphQL 不可用时的兜底）
+function bumpWorkerStat(env) {
+  if (!env || !env.D1_DB) return;
+  const day = new Date().toISOString().slice(0, 10);
+  env.D1_DB.prepare("INSERT INTO worker_stats (day, requests, updated_at) VALUES (?, 1, ?) ON CONFLICT(day) DO UPDATE SET requests = requests + 1, updated_at = excluded.updated_at").bind(day, new Date().toISOString()).run().catch(function(){});
 }
 
 async function putR2(key, buf, ct, env, storageClass) {
