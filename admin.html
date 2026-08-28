@@ -250,6 +250,13 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
     <!-- 概览 -->
     <div class="panel on" id="panel-stats">
       <div class="stats-grid" id="statsGrid"></div>
+      <!-- 用量预测 + 请求趋势 -->
+      <div class="card" id="forecastCard" style="display:none;margin-top:16px">
+        <div class="card-title"><span class="dot"></span>用量预测 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">基于今日速率线性外推，仅供参考</span></div>
+        <div id="forecastBody" style="font-size:13px;color:var(--text-secondary)">计算中...</div>
+        <div style="display:flex;align-items:flex-end;gap:3px;height:56px;margin-top:12px" id="reqTrend"></div>
+        <div style="font-size:10px;color:var(--text-secondary);margin-top:4px">最近 14 天请求趋势（本地计数，部署后开始累计）</div>
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div class="card">
           <div class="card-title"><span class="dot"></span>文件类型</div>
@@ -2037,6 +2044,8 @@ async function loadR2UsageCards() {
     warnOnce("r2_class_b", bPct, "B 类操作已达 " + d.class_b_pct + "%", "已用 " + fmtNum(d.class_b) + " / 配额 " + fmtNum(d.class_b_quota) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
     // Worker 用量（请求数 / CPU / 错误）——同一网格追加
     loadWorkerUsageInto(el, card);
+    // 用量预测 + 趋势
+    loadUsageForecast();
   } catch (e) {}
 }
 
@@ -2056,6 +2065,41 @@ async function loadWorkerUsageInto(el, card) {
       card('本月请求', fmtNum(d.month_requests), '免费版配额 10 万/天', 0) +
       card('今日错误', fmtNum(d.errors_today), d.source === 'cf' ? 'CF 官方统计' : '本地未统计', 0) +
       card('CPU p50', cpuV, cpuSub, 0);
+  } catch (e) {}
+}
+
+// 用量预测 + 14 天请求趋势条图
+async function loadUsageForecast() {
+  try {
+    const r = await api("GET", "/admin/api/usage-forecast");
+    var cardEl = document.getElementById("forecastCard");
+    if (!r.ok || !r.data || !cardEl) return;
+    cardEl.style.display = "";
+    var d = r.data;
+    var b = document.getElementById("forecastBody");
+    var lines = [];
+    var ql = d.today_projected > 0 ? ('预计全天 <b>' + fmtNum(d.today_projected) + '</b> / 配额 ' + fmtNum(d.quota) + '（' + Math.round(d.today_projected / d.quota * 100) + '%）') : '今日暂无可预测数据';
+    lines.push('今日请求 <b>' + fmtNum(d.today_requests) + '</b> · ' + ql);
+    if (d.days_to_quota) lines.push('按当前速率，约 <b>' + d.days_to_quota + ' 天</b> 后达到每日 10 万请求配额');
+    if (d.new_files > 0) lines.push('今日新增 <b>' + fmtNum(d.new_files) + '</b> 个文件 / ' + fmtSize(d.new_bytes));
+    if (d.storage_bytes !== null && d.storage_bytes !== undefined) {
+      var pct = Math.round(d.storage_bytes / d.capacity * 1000) / 10;
+      lines.push('R2 存储 <b>' + fmtSize(d.storage_bytes) + '</b>（容量 ' + pct + '%）');
+      if (d.days_to_full) lines.push('按今日新增速率，约 <b>' + d.days_to_full + ' 天</b> 后 R2 达 10GB 上限');
+    } else {
+      lines.push('R2 存储：CF_API_TOKEN 未配置，无法读取官方用量');
+    }
+    b.innerHTML = lines.join('<br>');
+    // 趋势条图
+    var max = 1;
+    for (var i = 0; i < (d.trend || []).length; i++) if (d.trend[i].requests > max) max = d.trend[i].requests;
+    var th = "";
+    for (var j = 0; j < (d.trend || []).length; j++) {
+      var it = d.trend[j];
+      var h = Math.max(2, Math.round(it.requests / max * 54));
+      th += '<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px"><div style="width:70%;background:#2563eb;border-radius:2px 2px 0 0;height:' + h + 'px;opacity:' + (it.requests ? 0.9 : 0.25) + '"></div><div style="font-size:9px;color:var(--text-secondary)">' + it.day + '</div></div>';
+    }
+    document.getElementById("reqTrend").innerHTML = th;
   } catch (e) {}
 }
 function warnOnce(key, pct, title, desc) {

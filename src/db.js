@@ -48,7 +48,8 @@ export async function ensureTables(db) {
     ["tags", "ALTER TABLE files ADD COLUMN tags TEXT DEFAULT ''"],
     ["pool_status", "ALTER TABLE files ADD COLUMN pool_status TEXT DEFAULT ''"],
     ["group_ref", "ALTER TABLE files ADD COLUMN group_ref TEXT DEFAULT ''"],
-    ["deleted_at", 'ALTER TABLE files ADD COLUMN deleted_at TEXT']
+    ["deleted_at", 'ALTER TABLE files ADD COLUMN deleted_at TEXT'],
+    ["view_count", 'ALTER TABLE files ADD COLUMN view_count INTEGER DEFAULT 0']
   ];
   try {
     const cols = await db.prepare("PRAGMA table_info(files)").all();

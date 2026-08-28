@@ -111,6 +111,8 @@ export default {
     if (m === 'GET' && p === '/admin/api/r2-usage') return isAdmin ? handleAdminR2Usage(env) : json({ok:false,error:'Unauthorized'},401);
     // Worker 用量统计（请求数/CPU/错误，GraphQL 官方 + 本地兜底）
     if (m === 'GET' && p === '/admin/api/worker-usage') return isAdmin ? handleAdminWorkerUsage(env) : json({ok:false,error:'Unauthorized'},401);
+    // 用量预测 + 趋势（请求/存储）
+    if (m === 'GET' && p === '/admin/api/usage-forecast') return isAdmin ? handleUsageForecast(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminGetR2Quota(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminSaveR2Quota(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
@@ -189,6 +191,10 @@ export default {
 
   // Cron trigger: poll getUpdates from Local Bot API (Local file_id, bypasses 20MB limit)
   async scheduled(event, env, ctx) {
+    // 日报：UTC 01:00（北京 09:00）推送昨日汇总
+    if (event.cron === '0 1 * * *') {
+      try { await sendDailyReport(env); } catch (e) { console.error('scheduled daily:', e.message); }
+    }
     // webhook 自愈：每 5 分钟确认 webhook 还在，丢了自动恢复
     try {
       await ensureWebhook(env, ctx);
@@ -475,6 +481,45 @@ async function cfR2Usage(env) {
     } catch (e) {}
     return out;
   } catch (e) { return { _err: 'exception: ' + e.message }; }
+}
+
+// 用量预测：今日请求与全天预估、预计达每日配额天数、今日新增文件字节、R2 存储按增速达满预测、14 天请求趋势
+async function handleUsageForecast(env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    await ensureTablesOnce(env.D1_DB);
+    const dayStr = new Date().toISOString().slice(0, 10);
+    const hourNow = new Date().getUTCHours() + 1; // 已过小时数（1-24）
+    const t = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day=?').bind(dayStr).first();
+    const today = (t && t.r) || 0;
+    const quota = 100000;
+    const projected = hourNow > 0 ? Math.round(today / hourNow * 24) : today;
+    const daysToQuota = projected > 0 ? Math.max(1, Math.floor(quota / projected)) : null;
+    const todayStart = dayStr + 'T00:00:00Z';
+    const nw = await env.D1_DB.prepare('SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(todayStart).first();
+    const newFiles = (nw && nw.c) || 0;
+    const newBytes = (nw && nw.s) || 0;
+    const cap = 10 * 1024 * 1024 * 1024;
+    let storageBytes = null, storageRemaining = null;
+    try {
+      const ru = await handleAdminR2Usage(env);
+      if (ru && ru.ok && ru.data && ru.data.storage_bytes !== undefined) { storageBytes = ru.data.storage_bytes; storageRemaining = ru.data.storage_remaining; }
+    } catch (e) {}
+    let daysToFull = null;
+    if (storageBytes !== null && storageBytes < cap && newBytes > 0) {
+      daysToFull = Math.floor((cap - storageBytes) / newBytes);
+    }
+    const dStart = new Date(Date.now() - 13 * 86400000).toISOString().slice(0, 10);
+    const hist = await env.D1_DB.prepare('SELECT day, requests FROM worker_stats WHERE day>=? ORDER BY day').bind(dStart).all();
+    const map = {};
+    (hist.results || []).forEach(function(r) { map[r.day] = r.requests; });
+    const trend = [];
+    for (let i = 13; i >= 0; i--) {
+      const dd = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      trend.push({ day: dd.slice(5), requests: map[dd] || 0 });
+    }
+    return json({ ok: true, data: { today_requests: today, today_projected: projected, quota: quota, days_to_quota: daysToQuota, new_files: newFiles, new_bytes: newBytes, storage_bytes: storageBytes, storage_remaining: storageRemaining, capacity: cap, days_to_full: daysToFull, trend: trend } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
 // 官方 Worker 用量：Cloudflare GraphQL Analytics（workersInvocationsAdaptiveGroups）
@@ -2188,6 +2233,7 @@ async function handleTgFileRedirect(p, env, ctx) {
     if (!f) return json({ ok: false, error: 'not found' }, 404);
     // 真实 R2/外部直链：302（代理模式下 r2_url 存的是 /file/tg/<id> 自身，跳过不走 302）
     if (f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0 && f.r2_url.indexOf('//') >= 0) {
+      env.D1_DB.prepare('UPDATE files SET view_count = view_count + 1 WHERE id=?').bind(id).run().catch(function(){});
       return new Response(null, { status: 302, headers: { 'Location': f.r2_url, 'Cache-Control': 'public, max-age=86400' } });
     }
     // 代理：优先官方 CDN 直链（tg_file_url，内部 fetch 透传不透出 token），否则实时 getFile 解析
@@ -2209,6 +2255,7 @@ async function handleTgFileRedirect(p, env, ctx) {
         if (ctx && ctx.waitUntil && f.telegram_file_id) {
           ctx.waitUntil(lazyTransferToR2(env, id, f, dlUrl).catch(function(e) { console.error('lazy transfer:', e.message); }));
         }
+        env.D1_DB.prepare('UPDATE files SET view_count = view_count + 1 WHERE id=?').bind(id).run().catch(function(){});
         return new Response(origin.body, { headers: {
           'Content-Type': f.mime_type || origin.headers.get('content-type') || 'application/octet-stream',
           'Cache-Control': 'public, max-age=300',
@@ -4030,6 +4077,38 @@ async function compressCronBatch(env) {
     if (done) console.log('compress cron batch done:', done);
     await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('last_compress_cron', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run();
   } catch (e) { console.error('compressCronBatch:', e.message); }
+}
+
+// 日报：cron "0 1 * * *"（UTC 01:00 = 北京 09:00）推送昨日转存汇总到管理员
+async function sendDailyReport(env) {
+  if (!env.D1_DB || !env.TG_BOT_TOKEN) return;
+  try {
+    let chatId = '';
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'admin_chat_id'").first();
+    if (s && s.value) chatId = String(s.value).trim();
+    if (!chatId && env.ADMIN_CHAT_ID) chatId = String(env.ADMIN_CHAT_ID).trim();
+    if (!chatId) return;
+    const dayStart = new Date(Date.now() - 86400000).toISOString().slice(0, 10) + 'T00:00:00Z';
+    const dayEnd = new Date().toISOString().slice(0, 10) + 'T00:00:00Z';
+    const yNew = await env.D1_DB.prepare('SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE created_at>=? AND created_at<?').bind(dayStart, dayEnd).first();
+    const total = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
+    const trash = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NOT NULL').first();
+    let storageTxt = '';
+    try {
+      const ru = await handleAdminR2Usage(env);
+      if (ru && ru.ok && ru.data) {
+        storageTxt = 'R2 存储 ' + (ru.data.storage_bytes / 1073741824).toFixed(2) + ' GB / 10 GB（' + (ru.data.storage_pct !== null && ru.data.storage_pct !== undefined ? ru.data.storage_pct + '%' : '—') + '）';
+      }
+    } catch (e) {}
+    const dayStr = new Date().toISOString().slice(0, 10);
+    const reqs = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day=?').bind(dayStr).first();
+    const text = '\uD83D\uDCC5 图库日报\n\u2022 昨日新增：' + ((yNew && yNew.c) || 0) + ' 个 / ' + fmtSize((yNew && yNew.s) || 0) + '\n\u2022 文件总数：' + ((total && total.c) || 0) + ' 个\n\u2022 回收站待清：' + ((trash && trash.c) || 0) + ' 个（>30 天自动硬清）\n\u2022 ' + storageTxt + '\n\u2022 今日请求（本地计数）：' + ((reqs && reqs.r) || 0) + ' 次';
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: text, disable_web_page_preview: true })
+    });
+  } catch (e) { console.error('sendDailyReport:', e.message); }
 }
 
 // 回收站自动清理：deleted_at 超过 30 天的文件硬删（含 R2 对象），24 小时最多执行一次。
