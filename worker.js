@@ -117,6 +117,9 @@ export default {
     if (m === 'GET' && p === '/admin/api/usage-forecast') return isAdmin ? handleUsageForecast(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminGetR2Quota(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/r2-quota') return isAdmin ? handleAdminSaveR2Quota(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // Webhook 有效性检查 / 一键修复（getWebhookInfo / setWebhook）
+    if (m === 'GET' && p === '/admin/api/webhook-status') return isAdmin ? handleAdminWebhookStatus(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/webhook-fix') return isAdmin ? handleAdminWebhookFix(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
     if (m === 'GET' && p === '/admin/api/backup') return isAdmin ? handleAdminBackup(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/backup') return isAdmin ? handleAdminBackupSave(env) : json({ok:false,error:'Unauthorized'},401);
@@ -238,11 +241,11 @@ export default {
     } catch (e) {
       console.error('scheduled syncBuiltinCommands:', e.message);
     }
-    // 节目组定时换图：mode='daily_random' 的组每天自动从随机库轮换指定数量
+    // 节目组定时换图：mode='daily_random' 的节目按 roll_time + weekdays 自动从随机库轮换
     try {
-      await rotateShowGroups(env);
+      await rotateProgramImages(env);
     } catch (e) {
-      console.error('scheduled rotateShowGroups:', e.message);
+      console.error('scheduled rotateProgramImages:', e.message);
     }
   },
 };
@@ -1140,7 +1143,10 @@ async function handleWebhook(request, env) {
     const body = await request.text();
     const update = JSON.parse(body);
     const st = request.headers.get('X-Telegram-Bot-Api-Secret-Token');
-    if (env.TG_SECRET && st !== env.TG_SECRET) return json({ error: 'Forbidden' }, 403);
+    // TG_SECRET 校验放宽：只拒绝「带了 secret token 头但值不匹配」的请求。
+    // 旧版本 setWebhook 未带 secret_token（Telegram 不会发该头），若严格校验会把所有
+    // webhook 请求 403 拒收导致消息积压。不带头的请求一律放行，靠 url 白名单兜底。
+    if (env.TG_SECRET && st && st !== env.TG_SECRET) return json({ error: 'Forbidden' }, 403);
     const r = await processUpdateCore(update, env, function(p) { return request.waitUntil(p); });
     return json(r);
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -1154,12 +1160,60 @@ async function ensureWebhook(env, ctx) {
     const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getWebhookInfo', { method: 'POST' });
     const j = await r.json();
     if (j && j.ok && j.result && j.result.url === url) return;
+    const body = { url: url };
+    if (env.TG_SECRET) body.secret_token = env.TG_SECRET;
     await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/setWebhook', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: url })
+      body: JSON.stringify(body)
     });
+    console.log('ensureWebhook: set webhook (secret_token=' + (env.TG_SECRET ? 'on' : 'off') + ')');
   } catch (e) { console.error('ensureWebhook:', e.message); }
+}
+
+// Webhook 状态检查：返回 Telegram getWebhookInfo 关键字段 + 本机配置对比
+async function handleAdminWebhookStatus(env) {
+  try {
+    if (!env.TG_BOT_TOKEN) return json({ ok: true, data: { has_token: false, msg: 'TG_BOT_TOKEN 未配置' } });
+    const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getWebhookInfo', { method: 'POST' });
+    const j = await r.json();
+    const res = (j && j.result) || {};
+    const expectUrl = 'https://telegram-r2-bot.wo58.cn/webhook';
+    const healthy = j.ok && res.url === expectUrl && !res.last_error_message;
+    return json({ ok: true, data: {
+      has_token: true,
+      healthy: healthy ? 1 : 0,
+      url: res.url || '',
+      expect_url: expectUrl,
+      url_match: res.url === expectUrl ? 1 : 0,
+      pending: res.pending_update_count || 0,
+      last_error: res.last_error_message || '',
+      last_error_date: res.last_error_date || 0,
+      max_connections: res.max_connections || 40,
+      ip_address: res.ip_address || '',
+      has_secret_token_configured: !!env.TG_SECRET,
+      api_error: j.description || ''
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 一键修复 webhook：重新 setWebhook（url + secret_token，不丢弃积压）
+async function handleAdminWebhookFix(request, env) {
+  try {
+    if (!env.TG_BOT_TOKEN) return json({ ok: false, error: 'TG_BOT_TOKEN 未配置' }, 400);
+    const url = 'https://telegram-r2-bot.wo58.cn/webhook';
+    const b = await request.json().catch(() => ({}));
+    const drop = b.drop_pending_updates ? true : false; // 默认 false：保留积压让 Telegram 自动重投
+    const body = { url: url, drop_pending_updates: drop };
+    if (env.TG_SECRET) body.secret_token = env.TG_SECRET;
+    const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/setWebhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    return json({ ok: !!j.ok, data: j.result || {}, description: j.description || '', secret_token: env.TG_SECRET ? 'on' : 'off' });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 // Shared: handle one update from webhook or getUpdates polling
@@ -2259,7 +2313,23 @@ async function handleBotSendVideo(request, env) { return proxyBotApi('sendVideo'
 async function handleBotGetFile(request, env) { return proxyBotApi('getFile', request, env); }
 async function handleBotGetMe(request, env) { return proxyBotApi('getMe', request, env); }
 async function handleBotGetWebhookInfo(request, env) { return proxyBotApi('getWebhookInfo', request, env); }
-async function handleBotSetWebhook(request, env) { return proxyBotApi('setWebhook', request, env); }
+// setWebhook 代理：自动注入 secret_token（与本 Worker 的 TG_SECRET 校验保持一致），避免再次踩坑
+async function handleBotSetWebhook(request, env) {
+  try {
+    const raw = await request.text();
+    let body = {};
+    try { body = JSON.parse(raw || '{}'); } catch (e) { body = {}; }
+    if (!body.url) body.url = 'https://telegram-r2-bot.wo58.cn/webhook';
+    if (env.TG_SECRET && !body.secret_token) body.secret_token = env.TG_SECRET;
+    const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/setWebhook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    return json(j);
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
 async function handleBotGetUpdates(request, env) { return proxyBotApi('getUpdates', request, env); }
 async function handleBotGetChat(request, env) { return proxyBotApi('getChat', request, env); }
 async function handleBotGetChatMemberCount(request, env) { return proxyBotApi('getChatMemberCount', request, env); }
@@ -2577,25 +2647,60 @@ async function handleShowGroupRoll(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
-// 每日自动轮换：mode='daily_random' 且今天还没换过的节目组，从随机库抽 daily_count 张替换
-async function rotateShowGroups(env) {
+// 节目定时换图：遍历节目表，mode='daily_random' 的节目按 roll_time + weekdays 自动从随机库抽图
+async function rotateProgramImages(env) {
   if (!env.D1_DB) return 0;
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const groups = await env.D1_DB.prepare("SELECT id, daily_count, updated_at FROM show_groups WHERE mode='daily_random' AND daily_count > 0").all();
+    const raw = await getShowConfig(env);
+    const sched = Array.isArray(raw.schedule) ? raw.schedule : [];
+    if (!sched.length) return 0;
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
+    const dow = now.getDay(); const dow1 = dow === 0 ? 7 : dow;
+    const hm = now.getHours() * 60 + now.getMinutes();
     let rolled = 0;
-    for (const g of (groups.results || [])) {
-      if (g.updated_at && String(g.updated_at).slice(0, 10) >= today) continue; // 今天已换过
-      const n = Math.min(Math.max(parseInt(g.daily_count) || 5, 1), 100);
-      const picked = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE enabled=1 ORDER BY RANDOM() LIMIT ?').bind(n).all();
+    for (let i = 0; i < sched.length; i++) {
+      const pg = sched[i];
+      if (!pg || pg.mode !== 'daily_random') continue;
+      if (!pg.daily_count || pg.daily_count <= 0) continue;
+      // weekdays 检查：今天是否在允许的周期内
+      if (pg.weekdays && pg.weekdays.length && pg.weekdays.indexOf(dow1) === -1) continue;
+      // roll_time 检查：当前时间是否在 roll_time 的 ±2 分钟窗口内（cron 每 2 分钟触发一次）
+      if (pg.roll_time) {
+        const rt = parseHM(pg.roll_time);
+        if (Math.abs(hm - rt) > 2) continue;
+      }
+      // 防重复：检查该节目的 images 是否今天已换过（用 _program_roll_dates 记忆）
+      const rollKey = '_prog_roll_' + i + '_' + today;
+      try {
+        const seen = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind(rollKey).first();
+        if (seen && seen.value === '1') continue;
+      } catch (e) {}
+      // 抽图
+      const n = Math.min(Math.max(parseInt(pg.daily_count) || 5, 1), 100);
+      let pw = 'WHERE enabled=1'; const pp = [];
+      if (pg.source === 'tg') { pw += " AND source='tg'"; }
+      else if (pg.source === 'manual') { pw += " AND source='manual'"; }
+      if (pg.tags) { pw = appendTagFilter(pg.tags, pw, pp); }
+      if (pg.type) { pw += ' AND file_type=?'; pp.push(pg.type); }
+      const picked = await env.D1_DB.prepare('SELECT id FROM random_pool ' + pw + ' ORDER BY RANDOM() LIMIT ?').bind(...pp, n).all();
       const ids = (picked.results || []).map(function(r) { return r.id; });
       if (!ids.length) continue;
-      await env.D1_DB.prepare('UPDATE show_groups SET images=?, updated_at=? WHERE id=?').bind(ids.join(','), new Date().toISOString(), g.id).run();
+      pg.images = ids.join(',');
       rolled++;
+      // 标记今天已换
+      try {
+        await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").bind(rollKey).run();
+      } catch (e) {}
     }
-    if (rolled) { _showCfg = null; console.log('rotateShowGroups: rolled ' + rolled + ' group(s)'); }
+    if (rolled) {
+      // 回写 config
+      await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('show_config', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(raw)).run();
+      _showCfg = null;
+      console.log('rotateProgramImages: rolled ' + rolled + ' program(s)');
+    }
     return rolled;
-  } catch (e) { console.error('rotateShowGroups:', e.message); return 0; }
+  } catch (e) { console.error('rotateProgramImages:', e.message); return 0; }
 }
 
 async function getGroup(env, id) {
@@ -2632,6 +2737,19 @@ async function handleShowConfigSet(request, env) {
   try {
     const b = await request.json().catch(() => null);
     if (!b) return json({ ok: false, error: 'body required' }, 400);
+    // 向后兼容：旧版 group 字段自动迁移到节目内 images
+    const schedule = normalizeSchedule(b.schedule);
+    for (const pg of schedule) {
+      if (pg.group && !pg.images) {
+        try {
+          const g = await env.D1_DB.prepare('SELECT images FROM show_groups WHERE id=?').bind(parseInt(pg.group, 10)).first();
+          if (g && g.images) pg.images = g.images;
+        } catch (e) {}
+        delete pg.group;
+      } else if (pg.group) {
+        delete pg.group; // images 优先，忽略 group
+      }
+    }
     const cfg = {
       enabled: b.enabled ? 1 : 0,
       interval: Math.min(Math.max(parseInt(b.interval) || 5, 1), 60),
@@ -2642,7 +2760,7 @@ async function handleShowConfigSet(request, env) {
       type: String(b.type || '').trim(),
       count: Math.min(Math.max(parseInt(b.count) || 20, 1), 50),
       shuffle: b.shuffle ? 1 : 0,
-      schedule: normalizeSchedule(b.schedule),
+      schedule: schedule,
       autoAdvance: b.autoAdvance ? 1 : 0,
       statsCode: String(b.statsCode || '')
     };
@@ -2675,21 +2793,21 @@ async function handleShowData(request, env) {
   const pgName = pg ? (pg.name || ((pg.start || '') + '-' + (pg.end || ''))) : null;
   // Program with an explicit image list (bound show-group takes priority, then manual urls)
   let explicit = null;
-  if (pg && pg.group) {
-    const g = await getGroup(env, pg.group);
-    if (g && g.images) explicit = g.images;
-  }
-  if (!explicit && pg && pg.images) explicit = pg.images;
+  // 节目内嵌图片（images 字段：random_pool ID 或 URL，优先级最高）
+  if (pg && pg.images) explicit = pg.images;
   if (explicit) {
     try {
-      // Bound group / manual urls win over the pull-count: serve ALL selected images
       const items = await groupItems(env, explicit, 500);
       return json({ ok: true, data: { cfg: cfg, program: pgName ? { name: pgName } : null, items: items } });
     } catch (e) { return json({ ok: false, error: e.message }, 500); }
   }
+  // 按标签/类型/来源从随机库抽图
   let w = 'WHERE enabled=1'; const p = [];
   if (type) { w += ' AND file_type=?'; p.push(type); }
   if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+  // 来源过滤：pg.source = 'tg' / 'manual' / ''(全部)
+  if (pg && pg.source === 'tg') { w += " AND source='tg'"; }
+  else if (pg && pg.source === 'manual') { w += " AND source='manual'"; }
   try {
     const d = await env.D1_DB.prepare('SELECT url, thumb_url, title, tags FROM random_pool ' + w + (shuffle ? ' ORDER BY RANDOM()' : ' ORDER BY id DESC') + ' LIMIT ?').bind(...p, count).all();
     const items = (d.results || []).map(function(r) {
@@ -2700,13 +2818,20 @@ async function handleShowData(request, env) {
 }
 
 // Match current time against the TV-style schedule. Returns the active program or null.
+// 支持 weekdays（周几筛选，1=周一..7=周日，空=每天）
 function matchProgram(cfg, now) {
   const sched = Array.isArray(cfg.schedule) ? cfg.schedule : [];
   if (!sched.length) return null;
   const hm = now.getHours() * 60 + now.getMinutes();
+  const dow = now.getDay(); // 0=Sun..6=Sat
+  const dow1 = dow === 0 ? 7 : dow; // 1=Mon..7=Sun
   for (let i = 0; i < sched.length; i++) {
     const s = sched[i];
     if (!s || !s.start || !s.end) continue;
+    // weekdays 过滤：空=每天，数组=[1,3,5] 表示周一三五
+    if (s.weekdays && s.weekdays.length) {
+      if (s.weekdays.indexOf(dow1) === -1) continue;
+    }
     const st = parseHM(s.start), en = parseHM(s.end);
     if (st <= en) { if (hm >= st && hm < en) return s; }
     else { if (hm >= st || hm < en) return s; } // crosses midnight
@@ -2734,7 +2859,14 @@ function normalizeSchedule(sched) {
   arr.sort(function(a, b) { return parseHM(a.start) - parseHM(b.start); });
   const out = [];
   for (let i = 0; i < arr.length; i++) {
-    const cur = { name: String(arr[i].name || ((arr[i].start || '') + '-' + (arr[i].end || ''))), start: String(arr[i].start).trim(), end: String(arr[i].end).trim(), tags: String(arr[i].tags || '').trim(), type: String(arr[i].type || '').trim(), images: String(arr[i].images || '').trim(), group: String(arr[i].group || '').trim() };
+    const src = arr[i];
+    const cur = { name: String(src.name || ((src.start || '') + '-' + (src.end || ''))), start: String(src.start).trim(), end: String(src.end).trim(), tags: String(src.tags || '').trim(), type: String(src.type || '').trim(), images: String(src.images || '').trim(), group: String(src.group || '').trim() };
+    // 节目级图片规则（每日随机换图）与周期字段
+    if (src.mode) cur.mode = src.mode;
+    if (src.daily_count) cur.daily_count = parseInt(src.daily_count, 10) || 0;
+    if (src.roll_time) cur.roll_time = String(src.roll_time).trim();
+    if (src.source) cur.source = String(src.source).trim();
+    if (Array.isArray(src.weekdays) && src.weekdays.length) cur.weekdays = src.weekdays.map(Number).filter(function(n){ return n >= 1 && n <= 7; });
     if (parseHM(cur.end) < parseHM(cur.start)) { // crosses midnight: keep as-is, do not clip
       out.push(cur); continue;
     }
@@ -3053,7 +3185,8 @@ async function handlePublicFiles(request, env) {
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM ' + table + ' ' + w).bind(...p).first();
     let d;
-    if (random) {
+    if (random || fromPool) {
+      // pool 模式默认随机排序（每次刷新内容不同）；非 pool 加 random=1 才随机
       d = await env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, limit).all();
     } else {
       d = await env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();

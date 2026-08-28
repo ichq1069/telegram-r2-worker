@@ -270,6 +270,11 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
         <div class="card-title"><span class="dot" style="background:#10b981"></span>Worker 运行</div>
         <div class="stats-grid" id="workerStatsGrid"></div>
       </div>
+      <!-- Webhook 状态 -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title"><span class="dot" style="background:#ef4444"></span>Telegram Webhook <span style="font-size:11px;color:var(--text-secondary);font-weight:400">机器人消息接收通道</span></div>
+        <div id="webhookStatusBody" style="font-size:13px;color:var(--text-secondary)">检测中...</div>
+      </div>
       <!-- 用量预测 + 请求趋势 -->
       <div class="card" id="forecastCard" style="display:none;margin-top:16px">
         <div class="card-title"><span class="dot"></span>用量预测 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">基于今日速率线性外推，仅供参考</span></div>
@@ -603,22 +608,12 @@ https://example.com/b.jpg"></textarea></div>
         <div class="fr"><label>标签筛选 (逗号分隔)</label><input class="inp" id="scTags" placeholder="风景,美女"></div>
           <div class="fr"><label>排序</label><select class="inp" id="scShuffle"><option value="1">随机</option><option value="0">按ID倒序</option></select></div>
         </div>
-        <div class="fr" style="margin-top:8px"><label>节目表（电视播放 · 固定时间段固定内容，每行一个节目，可增删）</label>
+        <div class="fr" style="margin-top:8px"><label>节目表（每个节目自带图片规则：固定图片 / 每日随机换图，支持按标签/类型/来源过滤 + 周期选择）</label>
           <div id="scheduleRows" style="display:flex;flex-direction:column;gap:8px"></div>
           <div class="fb" style="margin-top:8px">
             <button class="btn btn-ghost btn-sm" id="scAddProg">+ 添加节目</button>
             <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" id="scAutoAdvance" checked> 自动换节目（到点自动加载新节目内容，无需等用户点击）</label>
           </div>
-        </div>
-        <div class="card" style="margin-top:14px;padding:14px;background:#f8fafc">
-          <div class="fbs" style="margin-bottom:10px">
-            <div style="font-size:13px;font-weight:600">节目组 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">从随机库多选生成，节目可绑定</span></div>
-            <div class="fb">
-              <input class="inp" id="gpName" placeholder="节目组名称" style="width:170px">
-              <button class="btn btn-primary btn-sm" id="gpCreateBtn">创建组</button>
-            </div>
-          </div>
-          <div id="gpList"></div>
         </div>
         <div class="fb" style="margin:12px 0">
           <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" id="scShowTitle" checked> 显示标题</label>
@@ -633,29 +628,8 @@ https://example.com/b.jpg"></textarea></div>
       </div>
     </div>
 
-    <!-- 节目组选图弹窗 -->
-    <div class="modal-bg" id="gpPickBg" style="display:none">
-      <div class="modal" style="max-width:660px">
-        <h3>从随机库选择图片 <span style="font-size:12px;color:var(--text-secondary);font-weight:400" id="gpPickHint"></span></h3>
-        <div class="fbs" style="margin-bottom:8px">
-          <input class="inp" id="gpPickKw" placeholder="关键词搜索" style="width:180px">
-          <button class="btn btn-sm btn-ghost" id="gpPickSearch">搜索</button>
-          <span id="gpPickCount" style="font-size:12px;color:var(--text-secondary)"></span>
-          <span style="flex:1"></span>
-          <button class="btn btn-sm btn-ghost" id="gpPickClear">清空选择</button>
-        </div>
-        <div style="background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px">
-          <div style="font-size:12px;font-weight:600;margin-bottom:8px">已在节目组的图片 (<span id="gpPickedCount">0</span>) <span style="font-weight:400;color:var(--text-secondary)">点 × 移除</span></div>
-          <div id="gpPicked" style="display:flex;flex-wrap:wrap;gap:8px;max-height:190px;overflow:auto"></div>
-        </div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">随机库图片（点击选择，可新增）</div>
-        <div id="gpPickGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;max-height:40vh;overflow:auto"></div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" id="gpPickCancel">取消</button>
-          <button class="btn btn-primary" id="gpPickSave">保存选中</button>
-        </div>
-      </div>
-    </div>
+    <!-- 节目组选图弹窗（已废弃，图片直接在节目内配置） -->
+    <div id="gpPickBg" style="display:none"></div>
 
     <!-- 命令 -->
     <div class="panel" id="panel-cmds">
@@ -1084,50 +1058,7 @@ function init() {
   if (scSave) scSave.addEventListener("click", saveShowConfig);
   var scAdd = document.getElementById("scAddProg");
   if (scAdd) scAdd.addEventListener("click", function() { addProgRow(); });
-  var gpCreate = document.getElementById("gpCreateBtn");
-  if (gpCreate) gpCreate.addEventListener("click", createGroup);
-  var gpPickSearch = document.getElementById("gpPickSearch");
-  if (gpPickSearch) gpPickSearch.addEventListener("click", gpPickLoad);
-  var gpPickCancel = document.getElementById("gpPickCancel");
-  if (gpPickCancel) gpPickCancel.addEventListener("click", closeGroupPick);
-  var gpPickSaveBtn = document.getElementById("gpPickSave");
-  if (gpPickSaveBtn) gpPickSaveBtn.addEventListener("click", gpPickSave);
-  var gpPickClear = document.getElementById("gpPickClear");
-  if (gpPickClear) gpPickClear.addEventListener("click", function(){ gpPickSel.clear(); gpPickedItems = []; refreshPickViews(); });
-  var gpPickKw = document.getElementById("gpPickKw");
-  if (gpPickKw) gpPickKw.addEventListener("keydown", function(e){ if (e.key === "Enter") gpPickLoad(); });
-  var gpPickGrid = document.getElementById("gpPickGrid");
-  if (gpPickGrid) gpPickGrid.addEventListener("click", function(e) {
-    var t = e.target.closest("[data-pk]");
-    if (!t) return;
-    var id = t.getAttribute("data-pk");
-    if (!gpPickSel.has(id)) {
-      gpPickSel.add(id);
-      var it = gpPickItems.find(function(x){ return String(x.id) === id; });
-      if (it && !gpPickedItems.find(function(x){ return String(x.id) === id; })) gpPickedItems.push(it);
-    }
-    refreshPickViews();
-  });
-  var gpPickedBox = document.getElementById("gpPicked");
-  if (gpPickedBox) gpPickedBox.addEventListener("click", function(e) {
-    var t = e.target.closest("[data-gpdel]");
-    if (!t) return;
-    var id = t.getAttribute("data-gpdel");
-    gpPickSel.delete(id);
-    gpPickedItems = gpPickedItems.filter(function(x){ return String(x.id) !== id; });
-    refreshPickViews();
-  });
-  var gpListBox = document.getElementById("gpList");
-  if (gpListBox) gpListBox.addEventListener("click", function(e) {
-    var btn = e.target.closest("[data-gpact]");
-    if (!btn) return;
-    var id = btn.getAttribute("data-gp"), act = btn.getAttribute("data-gpact");
-    if (act === "pick") openGroupPick(id);
-    else if (act === "del") delGroup(id);
-    else if (act === "rename") renameGroup(id);
-    else if (act === "mode") groupModeModal(id);
-    else if (act === "roll") rollGroup(id);
-  });
+  // 节目组已废弃，图片直接在节目内配置
   var scOpen = document.getElementById("scOpenBtn");
   if (scOpen) scOpen.addEventListener("click", function() { window.open(OR + "/show", "_blank"); });
   var pSB = document.getElementById("poolSearchBtn");
@@ -2087,9 +2018,54 @@ async function loadR2UsageCards() {
     warnOnce("r2_class_b", bPct, "B 类操作已达 " + d.class_b_pct + "%", "已用 " + fmtNum(d.class_b) + " / 配额 " + fmtNum(d.class_b_quota) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
     // Worker 用量
     loadWorkerUsage();
+    // Webhook 状态
+    loadWebhookStatus();
     // 用量预测 + 趋势
     loadUsageForecast();
   } catch (e) {}
+}
+
+// Webhook 有效性检查 + 一键修复
+async function loadWebhookStatus() {
+  var body = document.getElementById("webhookStatusBody");
+  if (!body) return;
+  try {
+    const r = await api("GET", "/admin/api/webhook-status");
+    if (!r.ok || !r.data) { body.innerHTML = '无法获取（' + (r.error || '') + '）'; return; }
+    const d = r.data;
+    if (!d.has_token) { body.innerHTML = '⚠️ TG_BOT_TOKEN 未配置，机器人无法收发消息'; return; }
+    var statusColor = d.healthy ? '#16a34a' : '#dc2626';
+    var statusTxt = d.healthy ? '正常' : '异常';
+    var lines = [];
+    lines.push('<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">');
+    lines.push('<span class="badge" style="background:' + (d.healthy ? '#dcfce7' : '#fee2e2') + ';color:' + statusColor + '">' + statusTxt + '</span>');
+    lines.push('<span style="font-size:12px">webhook 地址：<code>' + escStr(d.url || '(未设置)') + '</code></span>');
+    if (!d.url_match) lines.push('<span style="font-size:12px;color:#dc2626">≠ 期望 ' + escStr(d.expect_url) + '</span>');
+    lines.push('</div>');
+    lines.push('<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">');
+    lines.push('· 积压消息：<b style="color:' + (d.pending > 0 ? '#d97706' : '#16a34a') + '">' + d.pending + '</b> 条（Telegram 重试队列）');
+    if (d.last_error) lines.push('· 最近错误：<b style="color:#dc2626">' + escStr(d.last_error) + '</b>（' + (d.last_error_date ? new Date(d.last_error_date * 1000).toLocaleString() : '') + '）');
+    lines.push('· 本地 secret_token：' + (d.has_secret_token_configured ? '已配置' : '未配置（无需）'));
+    if (d.ip_address) lines.push('· 入口 IP：' + escStr(d.ip_address));
+    if (d.api_error) lines.push('· API 响应：' + escStr(d.api_error));
+    lines.push('</div>');
+    lines.push('<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">');
+    lines.push('<button class="btn btn-primary btn-sm" id="whFixBtn">一键修复 Webhook</button>');
+    lines.push('<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" id="whDropPending"> 丢弃积压消息（默认保留自动重投）</label>');
+    lines.push('</div>');
+    body.innerHTML = lines.join('');
+    var fixBtn = document.getElementById("whFixBtn");
+    if (fixBtn) fixBtn.addEventListener("click", function() {
+      var drop = document.getElementById("whDropPending") ? document.getElementById("whDropPending").checked : false;
+      if (!confirm(drop ? "确定丢弃积压消息？积压的消息将无法找回！" : "重新设置 webhook（保留积压，Telegram 会自动重投未处理消息）？")) return;
+      fixBtn.disabled = true; fixBtn.textContent = "修复中...";
+      api("POST", "/admin/api/webhook-fix", { drop_pending_updates: drop }).then(function(r) {
+        fixBtn.disabled = false; fixBtn.textContent = "一键修复 Webhook";
+        if (r.ok) { toast("Webhook 已重新设置，积压消息将自动重投", 1); loadWebhookStatus(); }
+        else toast(r.error || "修复失败", 0);
+      });
+    });
+  } catch (e) { body.innerHTML = '检测失败'; }
 }
 
 // Worker 用量卡（Cloudflare GraphQL 官方统计，CF_API_TOKEN 缺失时本地计数兜底）
@@ -2664,24 +2640,64 @@ function addProgRow(p) {
   if (!box) return;
   var row = document.createElement("div");
   row.className = "prog-row";
-  row.style.cssText = "display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:8px";
-  row.innerHTML = '<input type="time" class="inp prog-start" style="width:105px" value="' + ((p.start||"").replace(/"/g,'&quot;')) + '">'
-    + '<span style="color:var(--text-secondary);font-size:12px">至</span>'
-    + '<input type="time" class="inp prog-end" style="width:105px" value="' + ((p.end||"").replace(/"/g,'&quot;')) + '">'
-    + '<input class="inp prog-tags" placeholder="标签(逗号分隔)" style="width:140px" value="' + ((p.tags||"").replace(/"/g,'&quot;')) + '">'
-    + '<select class="inp prog-type" style="width:100px">'
-    +   '<option value="">类型</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option>'
-    + '</select>'
-    + '<select class="inp prog-group" style="width:120px"><option value="">不绑定组</option></select>'
-    + '<input class="inp prog-name" placeholder="节目名" style="width:130px" value="' + ((p.name||"").replace(/"/g,'&quot;')) + '">'
-    + '<input class="inp prog-images" placeholder="指定图片(URL逗号分隔,优先于标签)" style="flex:1;min-width:200px" value="' + ((p.images||"").replace(/"/g,'&quot;')) + '">'
-    + '<button class="btn btn-danger btn-sm prog-del">删除</button>';
-  var typeSel = row.querySelector(".prog-type");
-  if (p.type) typeSel.value = p.type;
-  var groupSel = row.querySelector(".prog-group");
-  groupSel.innerHTML = '<option value="">不绑定组</option>' + (gpList||[]).map(function(g){ return '<option value="'+g.id+'">'+escStr(g.name)+'</option>'; }).join('');
-  if (p.group) groupSel.value = String(p.group);
+  row.style.cssText = "background:#f8fafc;border:1px solid var(--border);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px";
+  // 第一行：时间 + 节目名
+  var line1 = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  line1 += '<input type="time" class="inp prog-start" style="width:105px" value="' + ((p.start||"").replace(/"/g,'&quot;')) + '">';
+  line1 += '<span style="color:var(--text-secondary);font-size:12px">至</span>';
+  line1 += '<input type="time" class="inp prog-end" style="width:105px" value="' + ((p.end||"").replace(/"/g,'&quot;')) + '">';
+  line1 += '<input class="inp prog-name" placeholder="节目名" style="width:140px" value="' + ((p.name||"").replace(/"/g,'&quot;')) + '">';
+  // weekdays 多选
+  var wdNames = ['一','二','三','四','五','六','日'];
+  var wdVals = [1,2,3,4,5,6,7];
+  var wdSel = p.weekdays || [];
+  line1 += '<span style="font-size:11px;color:var(--text-secondary)">周期</span>';
+  line1 += '<div style="display:flex;gap:3px">';
+  for (var wi = 0; wi < 7; wi++) {
+    var wdOn = wdSel.indexOf(wdVals[wi]) !== -1;
+    line1 += '<label style="display:flex;align-items:center;gap:2px;font-size:11px;cursor:pointer;padding:2px 5px;border-radius:4px;background:' + (wdOn ? '#dbeafe' : '#f1f5f9') + '"><input type="checkbox" class="prog-weekday" value="' + wdVals[wi] + '"' + (wdOn ? ' checked' : '') + ' style="display:none">' + wdNames[wi] + '</label>';
+  }
+  line1 += '</div>';
+  line1 += '<button class="btn btn-danger btn-sm prog-del" style="margin-left:auto">删除</button>';
+  line1 += '</div>';
+  // 第二行：图片规则
+  var line2 = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  line2 += '<select class="inp prog-mode" style="width:110px"><option value="fixed">固定图片</option><option value="daily_random">每日随机换</option></select>';
+  line2 += '<input class="inp prog-daily-count" type="number" min="1" max="100" placeholder="张数" style="width:70px" value="' + (p.daily_count || 10) + '">';
+  line2 += '<input type="time" class="inp prog-roll-time" style="width:105px" value="' + ((p.roll_time||"00:00").replace(/"/g,'&quot;')) + '" title="换图时间（每天此时自动抽新图）">';
+  line2 += '<select class="inp prog-source" style="width:90px"><option value="">全部来源</option><option value="tg">TG导入</option><option value="manual">外链</option></select>';
+  line2 += '<input class="inp prog-tags" placeholder="标签过滤(逗号分隔)" style="width:150px" value="' + ((p.tags||"").replace(/"/g,'&quot;')) + '">';
+  line2 += '<select class="inp prog-type" style="width:90px"><option value="">全部类型</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select>';
+  line2 += '</div>';
+  // 第三行：图片列表（手动指定 / 预览）
+  var line3 = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  line3 += '<input class="inp prog-images" placeholder="指定图片(pool ID 或 URL，逗号分隔，优先于上方过滤规则)" style="flex:1;min-width:300px" value="' + ((p.images||"").replace(/"/g,'&quot;')) + '">';
+  line3 += '</div>';
+  row.innerHTML = line1 + line2 + line3;
+  // 设置下拉值
+  var modeSel = row.querySelector(".prog-mode"); if (p.mode) modeSel.value = p.mode;
+  var typeSel = row.querySelector(".prog-type"); if (p.type) typeSel.value = p.type;
+  var srcSel = row.querySelector(".prog-source"); if (p.source) srcSel.value = p.source;
+  var rcSel = row.querySelector(".prog-daily-count"); if (p.daily_count) rcSel.value = p.daily_count;
+  var rtSel = row.querySelector(".prog-roll-time"); if (p.roll_time) rtSel.value = p.roll_time;
+  // 删除按钮
   row.querySelector(".prog-del").addEventListener("click", function() { row.remove(); });
+  // weekdays 复选框交互
+  var wdChecks = row.querySelectorAll(".prog-weekday");
+  for (var wj = 0; wj < wdChecks.length; wj++) {
+    wdChecks[wj].addEventListener("change", function() {
+      var lbl = this.parentElement;
+      lbl.style.background = this.checked ? '#dbeafe' : '#f1f5f9';
+    });
+  }
+  // 模式切换：daily_random 时高亮相关字段
+  function toggleModeFields() {
+    var isRnd = modeSel.value === 'daily_random';
+    rcSel.style.opacity = isRnd ? '1' : '0.5';
+    rtSel.style.opacity = isRnd ? '1' : '0.5';
+  }
+  modeSel.addEventListener("change", toggleModeFields);
+  toggleModeFields();
   box.appendChild(row);
 }
 function renderSchedule(rows) {
@@ -2699,13 +2715,24 @@ function collectSchedule() {
     var r = rows[i];
     var start = r.querySelector(".prog-start").value;
     var end = r.querySelector(".prog-end").value;
-    var tags = r.querySelector(".prog-tags").value.trim();
-    var type = r.querySelector(".prog-type").value;
     var name = r.querySelector(".prog-name").value.trim();
     var images = r.querySelector(".prog-images").value.trim();
-    var group = r.querySelector(".prog-group").value;
-    if (!start && !end && !tags && !name && !images && !group) continue;
-    out.push({ name: name || (start + "-" + end), start: start, end: end, tags: tags, type: type, images: images, group: group });
+    var mode = r.querySelector(".prog-mode").value;
+    var daily_count = parseInt(r.querySelector(".prog-daily-count").value) || 10;
+    var roll_time = r.querySelector(".prog-roll-time").value || "00:00";
+    var source = r.querySelector(".prog-source").value;
+    var tags = r.querySelector(".prog-tags").value.trim();
+    var type = r.querySelector(".prog-type").value;
+    // 收集 weekdays
+    var wdChecks = r.querySelectorAll(".prog-weekday");
+    var weekdays = [];
+    for (var w = 0; w < wdChecks.length; w++) {
+      if (wdChecks[w].checked) weekdays.push(parseInt(wdChecks[w].value));
+    }
+    if (!start && !end && !name && !images) continue;
+    var pg = { name: name || (start + "-" + end), start: start, end: end, tags: tags, type: type, images: images, mode: mode, daily_count: daily_count, roll_time: roll_time, source: source };
+    if (weekdays.length) pg.weekdays = weekdays;
+    out.push(pg);
   }
   return out;
 }
@@ -2713,7 +2740,6 @@ async function loadShowConfig() {
   var r = await api("GET", "/admin/api/show-config");
   if (!r.ok) { toast(r.error || "加载失败", 0); return; }
   var c = r.data || {};
-  await loadGroups();
   document.getElementById("scEnabled").value = c.enabled ? "1" : "0";
   document.getElementById("scInterval").value = c.interval || 5;
   document.getElementById("scCount").value = c.count || 20;
@@ -2747,176 +2773,9 @@ function saveShowConfig() {
   });
 }
 
-// ===== 节目组 =====
-var gpList = [], gpPickSel = new Set(), gpEditId = null, gpPickItems = [], gpPickedItems = [], pendingRename = null;
-async function loadGroups() {
-  var r = await api("GET", "/admin/api/show-groups");
-  if (!r.ok) { return; }
-  gpList = r.data || [];
-  renderGroups();
-}
-function renderGroups() {
-  var box = document.getElementById("gpList");
-  if (!box) return;
-  if (!gpList.length) { box.innerHTML = '<div class="empty" style="padding:12px">暂无节目组，先创建</div>'; }
-  else {
-    box.innerHTML = gpList.map(function(g) {
-      var modeTag = g.mode === 'daily_random'
-        ? '<span class="badge badge-blue" title="每天自动从随机库换 ' + (g.daily_count || 0) + ' 张">每日随机换 ' + (g.daily_count || 0) + ' 张' + (g.rolled_today ? ' ✓' : '（今日待换）') + '</span>'
-        : '<span class="badge badge-ghost" title="固定图片系列，手动选图不自动更换">固定系列</span>';
-      var rollBtn = g.mode === 'daily_random'
-        ? '<button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="roll" title="立即从随机库抽图替换">立即换图</button>'
-        : '';
-      return '<div class="fb" style="justify-content:space-between;padding:8px 10px;background:#fff;border:1px solid var(--border);border-radius:10px;margin-bottom:6px">'
-        + '<div class="fb"><b style="font-size:13px">' + escStr(g.name) + '</b>' + modeTag + '<span style="font-size:11px;color:var(--text-secondary)">' + g.image_count + ' 张图</span></div>'
-        + '<div class="fb">' + rollBtn + '<button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="mode" title="图片模式设置（固定系列 / 每日随机换图）">模式</button><button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="pick">选图</button><button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="rename">改名</button><button class="btn btn-sm btn-danger" data-gp="' + g.id + '" data-gpact="del">删除</button></div>'
-        + '</div>';
-    }).join('');
-  }
-  renderGroupSelects();
-}
-function renderGroupSelects() {
-  var opts = '<option value="">不绑定组</option>' + (gpList||[]).map(function(g){ return '<option value="'+g.id+'">'+escStr(g.name)+'</option>'; }).join('');
-  var sels = document.querySelectorAll(".prog-group");
-  for (var i = 0; i < sels.length; i++) {
-    var v = sels[i].value;
-    sels[i].innerHTML = opts;
-    sels[i].value = v;
-  }
-}
-function createGroup() {
-  var name = document.getElementById("gpName").value.trim();
-  if (!name) { toast("请输入组名称", 0); return; }
-  var body = { name: name, images: "" };
-  if (pendingRename) {
-    var g = (gpList||[]).find(function(x){ return String(x.id) === pendingRename; });
-    if (!g) { toast("组不存在", 0); return; }
-    body = { id: pendingRename, name: name, images: g.images || "" };
-  }
-  api("POST", "/admin/api/show-groups", body).then(function(r) {
-    if (!r.ok) { toast(r.error || "创建失败", 0); return; }
-    document.getElementById("gpName").value = "";
-    if (pendingRename) { document.getElementById("gpCreateBtn").textContent = "创建组"; pendingRename = null; toast("已改名", 1); }
-    else toast("已创建", 1);
-    loadGroups();
-  });
-}
-function delGroup(id) {
-  if (!confirm("确定删除该节目组？")) return;
-  api("DELETE", "/admin/api/show-groups?id=" + id).then(function(r) {
-    if (r.ok) { toast("已删除", 1); loadGroups(); } else toast(r.error || "删除失败", 0);
-  });
-}
-function renameGroup(id) {
-  var g = (gpList||[]).find(function(x){ return String(x.id) === String(id); });
-  if (!g) return;
-  document.getElementById("gpName").value = g.name;
-  document.getElementById("gpName").focus();
-  pendingRename = String(id);
-  document.getElementById("gpCreateBtn").textContent = "保存改名";
-}
-// 节目组图片模式设置：固定系列 / 每日从随机库自动换图（可设张数）
-function groupModeModal(id) {
-  var g = (gpList||[]).find(function(x){ return String(x.id) === String(id); });
-  if (!g) { toast("组不存在", 0); return; }
-  var rdm = g.mode === 'daily_random';
-  document.getElementById("modalArea").innerHTML =
-    '<div class="modal-mask"><div class="modal"><h3>节目组：' + escStr(g.name) + '</h3>' +
-    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">图片来源模式</label>' +
-    '<select class="inp" id="gmMode"><option value="fixed"' + (rdm ? '' : ' selected') + '>固定图片系列（手动选图，不自动更换）</option>' +
-    '<option value="daily_random"' + (rdm ? ' selected' : '') + '>每日从随机库自动换图</option></select>' +
-    '<div id="gmCountBox"' + (rdm ? '' : ' style="display:none"') + '>' +
-    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">每天随机张数（1-100）</label>' +
-    '<input class="inp" type="number" id="gmCount" min="1" max="100" value="' + (g.daily_count || 5) + '">' +
-    '</div>' +
-    '<p style="font-size:11px;color:var(--text-secondary);margin-top:10px">每日换图：定时任务每天自动从随机库抽取指定张数替换本节目组；也可随时点击「立即换图」。选图/改名不会影响已设置的模式。</p>' +
-    '<div class="modal-actions"><button class="btn btn-ghost" id="gmCancel">取消</button><button class="btn btn-primary" id="gmSave">保存</button></div>' +
-    '</div></div>';
-  document.getElementById("gmMode").onchange = function() {
-    document.getElementById("gmCountBox").style.display = this.value === 'daily_random' ? '' : 'none';
-  };
-  document.getElementById("gmCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
-  document.getElementById("gmSave").onclick = function() {
-    var mode = document.getElementById("gmMode").value;
-    var cnt = parseInt(document.getElementById("gmCount").value) || 5;
-    api("POST", "/admin/api/show-groups", { id: id, name: g.name, images: g.images || "", mode: mode, daily_count: mode === 'daily_random' ? cnt : 0 }).then(function(r) {
-      document.getElementById("modalArea").innerHTML = "";
-      if (r.ok) { toast(mode === 'daily_random' ? '已设为每日自动换图 ' + cnt + ' 张' : '已设为固定图片系列', 1); loadGroups(); }
-      else toast(r.error || "保存失败", 0);
-    });
-  };
-}
-// 立即换图：从随机库抽 daily_count 张替换该节目组
-function rollGroup(id) {
-  var g = (gpList||[]).find(function(x){ return String(x.id) === String(id); });
-  if (!g) return;
-  if (!confirm("立即从随机库抽取 " + (g.daily_count || 5) + " 张替换「" + g.name + "」的当前图片？")) return;
-  api("POST", "/admin/api/show-groups/roll?id=" + id).then(function(r) {
-    if (r.ok) { toast("已换图 " + (r.data && r.data.image_count) + " 张", 1); loadGroups(); }
-    else toast(r.error || "换图失败", 0);
-  });
-}
-function openGroupPick(id) {
-  gpEditId = id;
-  var g = (gpList||[]).find(function(x){ return String(x.id) === String(id); });
-  gpPickSel = new Set((g && g.images ? g.images : "").split(",").map(function(x){ return x.trim(); }).filter(function(x){ return /^\d+$/.test(x); }));
-  document.getElementById("gpPickHint").textContent = "组：" + (g ? g.name : "");
-  document.getElementById("gpPickBg").style.display = "flex";
-  gpPickLoad();
-}
-function closeGroupPick() { document.getElementById("gpPickBg").style.display = "none"; }
-async function gpPickLoad() {
-  var kw = document.getElementById("gpPickKw").value.trim();
-  // 1) images already in the group (by id)
-  var selIds = Array.from(gpPickSel);
-  var r1 = null;
-  if (selIds.length) r1 = await api("GET", "/admin/api/pool?ids=" + selIds.join(","));
-  gpPickedItems = r1 && r1.ok && Array.isArray(r1.data) ? r1.data : [];
-  // 2) random pool images for adding
-  var q = "?limit=100&offset=0";
-  if (kw) q += "&keyword=" + encodeURIComponent(kw);
-  var r2 = await api("GET", "/admin/api/pool" + q);
-  gpPickItems = r2.ok && Array.isArray(r2.data) ? r2.data : [];
-  refreshPickViews();
-}
-function refreshPickViews() {
-  renderPicked();
-  renderPickGrid();
-  var pn = document.getElementById("gpPickedCount");
-  if (pn) pn.textContent = gpPickSel.size;
-}
-function renderPicked() {
-  var box = document.getElementById("gpPicked");
-  if (!box) return;
-  if (!gpPickedItems.length) { box.innerHTML = '<span style="font-size:12px;color:var(--text-secondary)">暂无（在下方随机库点选图片加入）</span>'; return; }
-  box.innerHTML = gpPickedItems.map(function(it) {
-    var src = (it.thumb_url || it.url || "").replace(/"/g, '&quot;');
-    return '<div style="position:relative"><img src="' + src + '" style="width:64px;height:64px;object-fit:cover;border-radius:8px;border:1px solid var(--border)" onerror="this.style.display=&quot;none&quot;">'
-      + '<button class="btn" style="position:absolute;top:-7px;right:-7px;width:18px;height:18px;border-radius:50%;background:var(--danger);color:#fff;border:none;font-size:11px;cursor:pointer;padding:0;line-height:18px" data-gpdel="' + it.id + '" title="移除">×</button></div>';
-  }).join('');
-}
-function renderPickGrid() {
-  var grid = document.getElementById("gpPickGrid");
-  if (!grid) return;
-  var list = gpPickItems.filter(function(it) { return !gpPickSel.has(String(it.id)); });
-  if (!list.length) { grid.innerHTML = '<div class="empty">' + (gpPickSel.size ? "已全部加入节目组" : "无匹配图片") + '</div>'; return; }
-  grid.innerHTML = list.map(function(it) {
-    var u0 = escStr(it.thumb_url || it.url || "");
-    return '<div style="position:relative;border:2px solid var(--border);border-radius:10px;overflow:hidden;cursor:pointer" data-pk="' + it.id + '">'
-      + '<img src="' + u0 + '" style="width:100%;height:84px;object-fit:cover;display:block" onerror="this.style.display=&quot;none&quot;">'
-      + '<div style="position:absolute;top:4px;right:4px;width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,.35);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700">+</div>'
-      + '</div>';
-  }).join('');
-}
-function gpPickSave() {
-  var ids = [];
-  gpPickSel.forEach(function(v){ ids.push(v); });
-  var g = (gpList||[]).find(function(x){ return String(x.id) === String(gpEditId); });
-  if (!g) { toast("组不存在", 0); return; }
-  api("POST", "/admin/api/show-groups", { id: gpEditId, name: g.name, images: ids.join(",") }).then(function(r) {
-    if (r.ok) { toast("已保存", 1); closeGroupPick(); loadGroups(); } else toast(r.error || "保存失败", 0);
-  });
-}
+// ===== 节目组已废弃（图片直接在节目内配置） =====
+var gpList = [];
+function renderGroupSelects() {} // no-op
 // 随机库
 var poolSel = new Set();
 var poolUrlMap = {};
