@@ -2253,6 +2253,7 @@ async function handleFiles(request, env) {
   const st = u.searchParams.get('state') || '';
   const tagsParam = u.searchParams.get('tags') || '';
   const ps2 = u.searchParams.get('pool_state') || '';
+  const src = u.searchParams.get('source') || '';
   const off = (pg - 1) * ps;
   let w = 'WHERE f.deleted_at IS NULL'; const p = [];
   if (tp) { w += ' AND f.file_type=?'; p.push(tp); }
@@ -2263,6 +2264,9 @@ async function handleFiles(request, env) {
   if (ed) { w += ' AND f.created_at<=?'; p.push(ed + ' 23:59:59'); }
   if (st) { w += ' AND f.processing_state=?'; p.push(st); }
   if (tagsParam) { w = appendTagFilter(tagsParam, w, p, 'f.'); }
+  // 来源筛选：r2=已入库 R2（storage_key 非空）；proxy=仅代理直链（未转存 R2）
+  if (src === 'r2') { w += " AND f.storage_key != ''"; }
+  else if (src === 'proxy') { w += " AND (f.r2_url IS NULL OR f.r2_url = '' OR f.r2_url LIKE '/file/tg/%')"; }
   if (ps2 === 'imported') { w += " AND EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) AND (f.pool_status IS NULL OR f.pool_status != 'ignored')"; }
   else if (ps2 === 'ignored') { w += " AND f.pool_status = 'ignored'"; }
   else if (ps2 === 'pending') { w += " AND NOT EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) AND (f.pool_status IS NULL OR f.pool_status != 'ignored')"; }

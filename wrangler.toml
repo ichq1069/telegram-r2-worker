@@ -29,3 +29,21 @@ database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
 # Cron 触发器：scheduled() 兜底轮询 + 未转存自动补齐 + 查重后台化 + webhook 自愈
 [triggers]
 crons = ["*/2 * * * *"]
+
+# 可观测性：Workers Logs（免费额度 200k 事件/天；trace 关闭省额度）
+# 注意：主 [observability] enabled 必须为 true，否则子配置不生效（与面板 Logs 同源）
+[observability]
+enabled = true
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1

@@ -311,7 +311,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             </div>
           </div>
           <div class="toolbar">
-            <input class="inp" style="width:180px" placeholder="搜索文件名..." id="fileSearch">
+            <input class="inp" style="width:180px" placeholder="搜索文件名/Caption/标签..." id="fileSearch">
             <select class="inp" style="width:110px" id="fileType">
               <option value="">全部类型</option>
               <option value="photo">图片</option>
@@ -324,6 +324,11 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
               <option value="pending">未导入随机库</option>
               <option value="imported">已导入随机库</option>
               <option value="ignored">已忽略导入</option>
+            </select>
+            <select class="inp" style="width:110px" id="fileSource">
+              <option value="">全部来源</option>
+              <option value="r2">已入库 R2</option>
+              <option value="proxy">仅代理(不入R2)</option>
             </select>
             <button class="btn btn-primary" id="fileSearchBtn">搜索</button>
             <button class="btn btn-ghost" id="btnSelAll">全选本页</button>
@@ -2069,12 +2074,21 @@ function warnOnce(key, pct, title, desc) {
 
 // 文件
 var currentPage = 1;
-// 标签辅助
+// 标签辅助：按标签名哈希取色板颜色（同一标签颜色稳定），彩色标签便于侧边栏/列表区分
+var TAG_COLORS = ["#2563eb", "#dc2626", "#059669", "#d97706", "#7c3aed", "#db2777", "#0891b2", "#65a30d"];
+function tagColor(name) {
+  var h = 0;
+  for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return TAG_COLORS[h % TAG_COLORS.length];
+}
 function tagHtml(f) {
   var tags = (f && f.tags || "").split(",").map(function(s){ return s.trim(); }).filter(Boolean);
   if (!tags.length) return "";
   var h = "";
-  for (var i = 0; i < tags.length; i++) h += '<span class="badge badge-blue" style="margin-right:3px;font-size:10px">#' + escStr(tags[i]) + '</span>';
+  for (var i = 0; i < tags.length; i++) {
+    var c = tagColor(tags[i]);
+    h += '<span class="badge" style="margin-right:3px;font-size:10px;background:' + c + '1a;color:' + c + ';border:1px solid ' + c + '55">#' + escStr(tags[i]) + '</span>';
+  }
   return h;
 }
 // 群资源编号徽章（如 #3-001：批次号=本次转发总数，序号=批内第几个）：bot 回复、后台列表、搜索均以此编号对应
@@ -3173,10 +3187,12 @@ async function loadFiles(page) {
   var kw = document.getElementById("fileSearch").value;
   var tp = document.getElementById("fileType").value;
   var ps2 = document.getElementById("filePoolState") ? document.getElementById("filePoolState").value : "";
+  var src = document.getElementById("fileSource") ? document.getElementById("fileSource").value : "";
   var u = "/admin/api/files?page=" + page + "&page_size=18";
   if (kw) u += "&keyword=" + encodeURIComponent(kw);
   if (tp) u += "&type=" + tp;
   if (ps2) u += "&pool_state=" + ps2;
+  if (src) u += "&source=" + src;
   var tg = document.getElementById("fileTags").value.trim();
   if (tg) u += "&tags=" + encodeURIComponent(tg);
   u += "&state=completed";
