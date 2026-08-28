@@ -3942,7 +3942,7 @@ async function storageMaintenanceCron(env) {
 async function handleCompressStats(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
-    const r = await env.D1_DB.prepare("SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND mime_type IN ('image/jpeg','image/png')").first();
+    const r = await env.D1_DB.prepare("SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND file_type='photo' AND (mime_type='' OR mime_type IN ('image/jpeg','image/png')) AND (storage_key LIKE '%.jpg' OR storage_key LIKE '%.jpeg' OR storage_key LIKE '%.png')").first();
     return json({ ok: true, data: { files: r?.c || 0, bytes: r?.s || 0, note: '统计转存且为 JPEG/PNG 的图片，压缩为 WebP 预计可省 50~70%。需账号启用 Cloudflare Image Resizing（Pro 或按量开通），未启用时运行会明确提示。' } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
@@ -3951,7 +3951,7 @@ async function handleCompressRun(env) {
   if (!env.D1_DB || !env.R2_BUCKET || !env.R2_PUBLIC_URL) return json({ ok: false, error: 'D1/R2 未配置' });
   try {
     const startT = Date.now();
-    const rows = await env.D1_DB.prepare("SELECT id, storage_key, file_size FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND mime_type IN ('image/jpeg','image/png') ORDER BY file_size DESC LIMIT 3").all();
+    const rows = await env.D1_DB.prepare("SELECT id, storage_key, file_size FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND file_type='photo' AND (mime_type='' OR mime_type IN ('image/jpeg','image/png')) AND (storage_key LIKE '%.jpg' OR storage_key LIKE '%.jpeg' OR storage_key LIKE '%.png') ORDER BY file_size DESC LIMIT 3").all();
     if (!(rows.results || []).length) return json({ ok: true, data: { done: 0, skipped: 0, not_available: false, message: '没有可压缩的 JPEG/PNG 图片。' } });
     let done = 0, skipped = 0, notAvailable = false;
     for (const f of rows.results) {
