@@ -1719,6 +1719,11 @@ function tagHtml(f) {
   for (var i = 0; i < tags.length; i++) h += '<span class="badge badge-blue" style="margin-right:3px;font-size:10px">#' + escStr(tags[i]) + '</span>';
   return h;
 }
+// 群资源编号徽章（如 #440-001）：bot 回复、后台列表、搜索均以此编号对应
+function refBadge(f) {
+  if (!f || !f.group_ref) return "";
+  return '<span class="badge badge-blue" style="margin-right:3px;font-size:10px" title="群资源编号">#' + escStr(f.group_ref) + '</span>';
+}
 // 标签云
 async function loadTagCloud() {
   var el = document.getElementById("tagCloud");
@@ -2787,7 +2792,7 @@ async function loadFiles(page) {
       h += '<div class="cb-wrap"><input type="checkbox" class="fck" data-id="' + f.id + '"></div>';
       h += thumb;
       h += '<div class="info"><div class="name" title="' + nm + '">' + nm + '</div>';
-      h += '<div style="font-size:10px;margin:3px 0">' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div>';
+      h += '<div style="font-size:10px;margin:3px 0">' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div>';
       h += '<div class="meta"><span>' + fmtSize(f.file_size) + '</span><span>' + (f.created_at || "").split("T")[0] + '</span></div></div>';
       h += '<div class="actions"><a href="' + pv + '" target="_blank" class="btn btn-ghost btn-sm">打开</a>';
       h += '<button class="btn btn-ghost btn-sm" data-action="tag-file" data-id="' + f.id + '">标签</button>';
@@ -2811,7 +2816,7 @@ async function loadFiles(page) {
             : '<div class="preview-placeholder" style="cursor:pointer;background:#1e293b;color:#fff;font-size:14px" data-preview="' + pv + '" data-type="video" data-name="' + nm + '">\u25B6</div>')
         : '<div class="preview-placeholder">\uD83D\uDCC4</div>';
       h += '<tr><td><input type="checkbox" class="fck" data-id="' + f.id + '"></td><td>' + img + '</td>';
-      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div></td>';
+      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div></td>';
       h += '<td><span class="badge badge-blue">' + f.file_type + '</span></td>';
       h += '<td>' + fmtSize(f.file_size) + '</td>';
       h += '<td style="font-size:12px">' + escStr(f.chat_title || "") + '</td>';

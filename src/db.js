@@ -14,7 +14,7 @@ export async function ensureTables(db) {
   // Single exec: all CREATE TABLE/INDEX in one round-trip (was 10+ sequential D1 calls,
   // which added seconds to every cold-start request). Column migration below stays as fallback.
   await db.exec(
-    "CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, storage_key TEXT NOT NULL, r2_url TEXT NOT NULL, chat_id TEXT, chat_title TEXT, chat_type TEXT, chat_username TEXT, user_id INTEGER, username TEXT, full_name TEXT, telegram_file_id TEXT, file_name TEXT, file_size INTEGER, file_type TEXT, mime_type TEXT, width INTEGER, height INTEGER, caption TEXT, message_id TEXT, md5_hash TEXT, processing_state TEXT DEFAULT 'completed', created_at TEXT, tg_file_url TEXT, error_msg TEXT, progress_bytes INTEGER DEFAULT 0, total_bytes INTEGER DEFAULT 0, thumb_url TEXT, quick_hash TEXT, tags TEXT DEFAULT '', pool_status TEXT DEFAULT '');" +
+    "CREATE TABLE IF NOT EXISTS files (id INTEGER PRIMARY KEY AUTOINCREMENT, storage_key TEXT NOT NULL, r2_url TEXT NOT NULL, chat_id TEXT, chat_title TEXT, chat_type TEXT, chat_username TEXT, user_id INTEGER, username TEXT, full_name TEXT, telegram_file_id TEXT, file_name TEXT, file_size INTEGER, file_type TEXT, mime_type TEXT, width INTEGER, height INTEGER, caption TEXT, message_id TEXT, md5_hash TEXT, processing_state TEXT DEFAULT 'completed', created_at TEXT, tg_file_url TEXT, error_msg TEXT, progress_bytes INTEGER DEFAULT 0, total_bytes INTEGER DEFAULT 0, thumb_url TEXT, quick_hash TEXT, tags TEXT DEFAULT '', pool_status TEXT DEFAULT '', group_ref TEXT DEFAULT '');" +
     "CREATE INDEX IF NOT EXISTS idx_files_chat ON files(chat_id);" +
     "CREATE INDEX IF NOT EXISTS idx_files_type ON files(file_type);" +
     "CREATE INDEX IF NOT EXISTS idx_files_user ON files(user_id);" +
@@ -46,6 +46,7 @@ export async function ensureTables(db) {
     ["quick_hash", 'ALTER TABLE files ADD COLUMN quick_hash TEXT'],
     ["tags", "ALTER TABLE files ADD COLUMN tags TEXT DEFAULT ''"],
     ["pool_status", "ALTER TABLE files ADD COLUMN pool_status TEXT DEFAULT ''"],
+    ["group_ref", "ALTER TABLE files ADD COLUMN group_ref TEXT DEFAULT ''"],
     ["deleted_at", 'ALTER TABLE files ADD COLUMN deleted_at TEXT']
   ];
   try {
