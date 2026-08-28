@@ -2043,9 +2043,9 @@ async function loadWorkerUsageInto(el, card) {
     const d = r.data;
     var qPct = d.today_quota ? d.today_pct : 0;
     var qTxt = d.today_quota ? d.today_pct + '%' : '—';
-    var qSub = (d.source === 'cf' ? 'CF 官方' : '本地计数') + (d.today_quota ? ' · 配额 ' + fmtNum(d.today_quota) + '/天 · 剩余 ' + fmtNum(Math.max(0, d.today_quota - d.today_requests)) : '付费版不限');
+    var qSub = (d.source === 'cf' ? 'CF 官方' : '本地计数（自部署起）') + (d.today_quota ? ' · 配额 ' + fmtNum(d.today_quota) + '/天 · 剩余 ' + fmtNum(Math.max(0, d.today_quota - d.today_requests)) : '付费版不限');
     var cpuV = (d.cpu_p50 !== undefined && d.cpu_p50 !== null) ? (d.cpu_p50 / 100).toFixed(2) + ' ms' : '—';
-    var cpuSub = (d.cpu_p90 !== undefined && d.cpu_p90 !== null) ? 'p90 ' + (d.cpu_p90 / 100).toFixed(2) + ' ms · 免费版有每日额度' : 'Cloudflare 面板可看总 CPU';
+    var cpuSub = (d.cpu_p50 !== undefined && d.cpu_p50 !== null) ? 'p90 ' + (d.cpu_p90 / 100).toFixed(2) + ' ms · 免费版有每日额度' : '免费版 GraphQL 不提供，CF 面板可看';
     el.innerHTML = el.innerHTML +
       card('今日请求 ' + qTxt, fmtNum(d.today_requests), qSub, qPct) +
       card('本月请求', fmtNum(d.month_requests), '免费版配额 10 万/天', 0) +
