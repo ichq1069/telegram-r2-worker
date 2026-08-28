@@ -26,7 +26,7 @@ export default {
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
     if (m === 'GET' && p === '/favicon.ico') return new Response(null, { status: 204 });
     // File proxy: /file/tg/<id> -> 302 to official Telegram direct link (clean URL, no token exposed)
-    if (m === 'GET' && p.indexOf('/file/tg/') === 0) return handleTgFileRedirect(p, env);
+    if (m === 'GET' && p.indexOf('/file/tg/') === 0) return handleTgFileRedirect(p, env, ctx);
     // Admin API (auth via query param or header)
     const adminKey = url.searchParams.get('api_key') || request.headers.get('X-API-Key');
     const isAdmin = adminKey && adminKey === env.API_KEY;
@@ -1477,12 +1477,12 @@ async function handleBotCopyMessage(request, env) { return proxyBotApi('copyMess
 
 // /file/tg/<id> -> 302 redirect to official Telegram direct link (if present) else R2 URL.
 // Keeps the exposed URL clean (no bot token).
-async function handleTgFileRedirect(p, env) {
+async function handleTgFileRedirect(p, env, ctx) {
   if (!env.D1_DB) return json({ ok: false, error: 'no d1' }, 500);
   const id = parseInt(p.replace('/file/tg/', ''), 10) || 0;
   if (!id) return json({ ok: false, error: 'bad id' }, 400);
   try {
-    const f = await env.D1_DB.prepare('SELECT tg_file_url, r2_url, telegram_file_id, mime_type FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+    const f = await env.D1_DB.prepare('SELECT tg_file_url, r2_url, telegram_file_id, mime_type, file_name FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
     if (!f) return json({ ok: false, error: 'not found' }, 404);
     // 真实 R2/外部直链：302（代理模式下 r2_url 存的是 /file/tg/<id> 自身，跳过不走 302）
     if (f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0 && f.r2_url.indexOf('//') >= 0) {
@@ -1503,15 +1503,39 @@ async function handleTgFileRedirect(p, env) {
       try {
         const origin = await fetch(dlUrl);
         if (!origin.ok) return json({ ok: false, error: 'origin http ' + origin.status }, 502);
+        // 懒转存：返回给用户的同时，异步把文件落到 R2 并更新 D1 直链（之后访问直接走 R2，不再实时拉 TG）
+        if (ctx && ctx.waitUntil && f.telegram_file_id) {
+          ctx.waitUntil(lazyTransferToR2(env, id, f, dlUrl).catch(function(e) { console.error('lazy transfer:', e.message); }));
+        }
         return new Response(origin.body, { headers: {
           'Content-Type': f.mime_type || origin.headers.get('content-type') || 'application/octet-stream',
-          'Cache-Control': 'public, max-age=3600',
+          'Cache-Control': 'public, max-age=300',
           'Access-Control-Allow-Origin': '*'
         } });
       } catch (e) { return json({ ok: false, error: 'proxy fail: ' + e.message }, 502); }
     }
     return json({ ok: false, error: 'no url' }, 404);
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 懒转存：代理模式的文件被访问过一次后，异步把文件落到 R2 并更新 D1 直链，
+// 之后再访问直接 302 到 R2（秒开、永久），不再每次实时拉 Telegram
+async function lazyTransferToR2(env, id, f, dlUrl) {
+  try {
+    const cur = await env.D1_DB.prepare('SELECT r2_url FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+    if (cur && cur.r2_url && cur.r2_url.length > 0 && cur.r2_url.indexOf('//') >= 0 && cur.r2_url.indexOf('/file/tg/') !== 0) return; // 已有真实 R2 直链
+    const resp = await fetch(dlUrl);
+    if (!resp.ok) return;
+    const ct = f.mime_type || resp.headers.get('content-type') || 'application/octet-stream';
+    const buf = await resp.arrayBuffer();
+    if (!buf || buf.byteLength > 100 * 1024 * 1024) return; // 过大不懒转存（避免占满 worker 内存）
+    const now = new Date();
+    const dp = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    const key = dp + '/' + genHash() + '.' + guessExt(ct, f.file_name || '');
+    const url = await putR2(key, buf, ct, env);
+    if (!url) return;
+    await env.D1_DB.prepare("UPDATE files SET storage_key=?, r2_url=?, processing_state='completed' WHERE id=?").bind(key, url, id).run();
+  } catch (e) { console.error('lazyTransferToR2:', e.message); }
 }
 
 async function handleFiles(request, env) {
