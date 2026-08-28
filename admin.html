@@ -3178,16 +3178,17 @@ function copySelected(mode) {
   for (var i = 0; i < ids.length; i++) {
     var f = selFiles[ids[i]];
     if (!f) continue;
+    // 优先用后端已算好的带后缀代理链接（/file/tg/<id>.jpg），兜底再拼
+    var pr = f.proxy_url || (workerOrigin() + '/file/tg/' + f.id + proxyExt(f));
+    var r2l = (f.r2_url && f.r2_url.indexOf('/file/tg/') !== 0) ? f.r2_url : '';
     if (mode === 'both') {
-      var r2l = (f.r2_url && f.r2_url.indexOf('/file/tg/') !== 0) ? f.r2_url : '';
-      var pr = workerOrigin() + '/file/tg/' + f.id;
       links.push(r2l ? (r2l + ' | ' + pr) : pr);
     } else if (mode === 'proxy') {
-      links.push(workerOrigin() + '/file/tg/' + f.id);
+      links.push(pr);
     } else if (PROXY_ONLY === 1) {
-      links.push(workerOrigin() + '/file/tg/' + f.id);
+      links.push(pr);
     } else {
-      links.push(f.r2_url || (workerOrigin() + '/file/tg/' + f.id));
+      links.push(r2l || pr);
     }
   }
   if (!links.length) { toast("没有可复制的链接", 0); return; }
@@ -3195,6 +3196,13 @@ function copySelected(mode) {
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(txt).then(function() { toast("已复制 " + links.length + " 条链接", 1); }, function() { fallbackCopy(txt); });
   } else { fallbackCopy(txt); }
+}
+// 代理链接后缀（与后端 fileExtOf 一致）：优先文件名扩展名，否则按类型推断
+function proxyExt(f) {
+  var m = /\.([a-zA-Z0-9]{1,10})$/.exec(String(f.file_name || ''));
+  if (m) return '.' + m[1].toLowerCase();
+  var map = { photo: '.jpg', video: '.mp4', audio: '.mp3', voice: '.ogg', document: '.bin' };
+  return map[f.file_type] || '.bin';
 }
 // 多选事件绑定
 (function(){
