@@ -2087,7 +2087,7 @@ async function loadUsageForecast() {
       lines.push('R2 存储 <b>' + fmtSize(d.storage_bytes) + '</b>（容量 ' + pct + '%）');
       if (d.days_to_full) lines.push('按今日新增速率，约 <b>' + d.days_to_full + ' 天</b> 后 R2 达 10GB 上限');
     } else {
-      lines.push('R2 存储：CF_API_TOKEN 未配置，无法读取官方用量');
+      lines.push('R2 存储：读取失败（CF_API_TOKEN 缺失或 GraphQL 暂时异常，可稍后刷新重试）');
     }
     b.innerHTML = lines.join('<br>');
     // 趋势条图
