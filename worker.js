@@ -2793,13 +2793,14 @@ async function handleShowData(request, env) {
   const pg = matchProgram(cfg, now);
   const tagsParam = u.searchParams.get('tags') || (pg && pg.tags) || cfg.tags || '';
   const type = u.searchParams.get('type') || (pg && pg.type) || cfg.type || '';
-  const count = clampInt(u.searchParams.get('count') || String((pg && pg.count) || cfg.count) || '20', 20, 1, 50);
+  // 节目张数用 daily_count（前端字段名），兼容旧配置的 count；URL 参数优先
+  const count = clampInt(u.searchParams.get('count') || String((pg && (pg.daily_count || pg.count)) || cfg.count) || '20', 20, 1, 50);
   const shuffle = u.searchParams.get('shuffle') === '1' || (u.searchParams.get('shuffle') === null && cfg.shuffle === 1);
   const pgName = pg ? (pg.name || ((pg.start || '') + '-' + (pg.end || ''))) : null;
-  // Program with an explicit image list (bound show-group takes priority, then manual urls)
+  // 节目内嵌图片：仅固定模式使用；每日随机模式实时按 count+过滤条件抽图，
+  // 避免旧 show_groups 迁移残留的 images 字段劫持导致数量错误（曾出现设置 10 张只播 5 张）
   let explicit = null;
-  // 节目内嵌图片（images 字段：random_pool ID 或 URL，优先级最高）
-  if (pg && pg.images) explicit = pg.images;
+  if (pg && pg.images && pg.mode !== 'daily_random') explicit = pg.images;
   if (explicit) {
     try {
       const items = await groupItems(env, explicit, 500);
