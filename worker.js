@@ -850,7 +850,7 @@ async function aiFileText(env, id) {
     if (!f) return '未找到 id=' + id;
     const realR2 = f.r2_url && f.r2_url.indexOf('/file/tg/') !== 0;
     const tok = await fileTok(f.id, env);
-    return '#' + (f.group_ref || f.id) + ' ' + (f.file_name || '') + '\n类型: ' + (f.file_type || '') + ' | 大小: ' + fmtSize(f.file_size || 0) + '\n状态: ' + (f.processing_state || '') + '\n标签: ' + (f.tags || '（无）') + '\n链接: ' + (realR2 ? f.r2_url : '（未转存，代理: https://telegram-r2-bot.wo58.cn/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type) + '?k=' + tok + '）');
+    return '#' + (f.group_ref || f.id) + ' ' + (f.file_name || '') + '\n类型: ' + (f.file_type || '') + ' | 大小: ' + fmtSize(f.file_size || 0) + '\n状态: ' + (f.processing_state || '') + '\n标签: ' + (f.tags || '（无）') + '\n链接: ' + (realR2 ? f.r2_url : '（未转存，代理: https://telegram-r2-bot.wo58.cn/file/tg/' + tok + '/' + f.id + '.' + fileExtOf(f.file_name, f.file_type) + '）');
   } catch (e) { return '查询失败: ' + e.message; }
 }
 async function triggerRetryN(env, n) {
@@ -2364,10 +2364,17 @@ async function fileTok(id, env) {
     return hex;
   } catch (e) { return ''; }
 }
-// 校验 /file/tg/<id>?k=<token>；缺失或不匹配返回 false
+// 校验 /file/tg/ 访问签名：支持两种格式
+//   新格式（推荐，URL 以扩展名结尾）：/file/tg/<token>/<id>.jpg
+//   旧格式兼容：/file/tg/<id>.jpg?k=<token>
 async function checkFileTok(request, id, env) {
   const u = new URL(request.url);
-  const k = u.searchParams.get('k') || '';
+  let k = u.searchParams.get('k') || '';
+  if (!k) {
+    const rest = u.pathname.replace('/file/tg/', '');
+    const segs = rest.split('/');
+    if (segs.length === 2) k = segs[0];
+  }
   const exp = await fileTok(id, env);
   return !!(k && exp && k === exp);
 }
@@ -2376,11 +2383,15 @@ async function checkFileTok(request, id, env) {
 async function handleTgFileRedirect(request, env, ctx) {
   if (!env.D1_DB) return json({ ok: false, error: 'no d1' }, 500);
   const u = new URL(request.url);
-  const id = parseInt(u.pathname.replace('/file/tg/', ''), 10) || 0;
+  // 路径格式：/file/tg/<token>/<id>.jpg（新）或 /file/tg/<id>.jpg（旧）
+  const rest = u.pathname.replace('/file/tg/', '');
+  const segs = rest.split('/');
+  const idPart = segs.length === 2 ? segs[1] : rest;
+  const id = parseInt(idPart, 10) || 0;
   if (!id) return json({ ok: false, error: 'bad id' }, 400);
   // 签名校验：防枚举遍历（改 id 数字无法访问他人图片），旧的无 token 链接一律 403
   if (!(await checkFileTok(request, id, env))) {
-    return json({ ok: false, error: 'forbidden: 需要有效签名 (?k=...)，请在后台重新复制链接' }, 403);
+    return json({ ok: false, error: 'forbidden: 需要有效签名，请在后台重新复制链接' }, 403);
   }
   try {
     const f = await env.D1_DB.prepare('SELECT tg_file_url, r2_url, telegram_file_id, mime_type, file_name FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
@@ -2488,9 +2499,10 @@ async function handleFiles(request, env) {
 //   link_type   'r2'=已有 R2（同时代理也可用）/ 'proxy'=仅代理 / 'both'=两者都给
 async function decorateLinks(f, origin, proxyOnly, env) {
   const realR2 = f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0;
-  // 代理链接带后缀名 + 访问签名（如 /file/tg/123.jpg?k=xxxx），签名防止递增 id 遍历枚举
+  // 代理链接：签名放路径里，URL 以扩展名结尾（/file/tg/<token>/123.jpg），
+  // 兼容要求 .jpg 结尾的程序；签名防止递增 id 遍历枚举
   const tok = await fileTok(f.id, env);
-  const proxyUrl = origin + '/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type) + '?k=' + tok;
+  const proxyUrl = origin + '/file/tg/' + tok + '/' + f.id + '.' + fileExtOf(f.file_name, f.file_type);
   if (realR2) {
     f.link_type = 'both';          // r2_url + proxy_url 都有
     f.proxy_url = proxyUrl;
