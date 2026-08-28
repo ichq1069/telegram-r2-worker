@@ -44,6 +44,9 @@ export default {
     // 去重行级操作：单文件清理 / 设为保留（keep 保留该行并清理同组其他）
     if (m === 'POST' && p === '/admin/api/dedup/row') return isAdmin ? handleDedupRow(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/dedup/rows') return isAdmin ? handleDedupRows(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 存储压缩：photo 转 WebP 省存储（需账号开通 Image Resizing）
+    if (m === 'GET' && p === '/admin/api/compress/stats') return isAdmin ? handleCompressStats(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/compress/run') return isAdmin ? handleCompressRun(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/processing') return isAdmin ? handleProcessingStatus(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/retry') return isAdmin ? handleRetry(request, env, ctx) : json({ok:false,error:'Unauthorized'},401);
     // 未转存列表（已入库但未完成）+ 批量重试
@@ -204,6 +207,12 @@ export default {
       await runDedupBatch(env, 3, 0, 10000, false);
     } catch (e) {
       console.error('scheduled dedup:', e.message);
+    }
+    // 存储维护：回收站超期文件自动硬清（24h 一次，含 R2 对象）
+    try {
+      await storageMaintenanceCron(env);
+    } catch (e) {
+      console.error('scheduled storage:', e.message);
     }
   },
 };
@@ -1558,7 +1567,13 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
         tgUrl = fd.tgUrl || '';
         ct = fd.ct;
         await updateState('hashing');
-        md5 = await computeMd5(fd.buf);
+        // 隐私与体积：document 上传的原图剥掉 EXIF/GPS 元数据（photo 由 TG 自行压缩已去除；document 保留原始信息）
+        var storeBuf = fd.buf;
+        if (storeBuf && /image\/jpeg/i.test(ct || '')) {
+          const sb = stripExifIfJpeg(storeBuf, ct);
+          if (sb !== storeBuf) storeBuf = sb;
+        }
+        md5 = await computeMd5(storeBuf);
         if (env.D1_DB) {
           try {
             const dup = await env.D1_DB.prepare('SELECT storage_key, r2_url, thumb_url FROM files WHERE md5_hash=? AND processing_state=\'completed\' LIMIT 1').bind(md5).first();
@@ -1570,10 +1585,10 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
           const ext = guessExt(ct, fi.fileName);
           const dp = date.getFullYear() + '/' + String(date.getMonth() + 1).padStart(2, '0');
           key = dp + '/' + genHash() + '.' + ext;
-          url = await putR2(key, fd.buf, ct, env, (fi.fileSize || 0) >= COLD_STORAGE_MIN ? COLD_STORAGE_CLASS : null);
+          url = await putR2(key, storeBuf, ct, env, (fi.fileSize || 0) >= COLD_STORAGE_MIN ? COLD_STORAGE_CLASS : null);
           if (!url) {
             // buf is replayable: simple retry
-            url = await putR2(key, fd.buf, ct, env, (fi.fileSize || 0) >= COLD_STORAGE_MIN ? COLD_STORAGE_CLASS : null);
+            url = await putR2(key, storeBuf, ct, env, (fi.fileSize || 0) >= COLD_STORAGE_MIN ? COLD_STORAGE_CLASS : null);
           }
           if (!url) { await updateState('failed', 'r2_upload_failed' + (lastUploadError ? ' (' + lastUploadError + ')' : '')); return; }
           uploadedNew = true;
@@ -1915,6 +1930,48 @@ async function putR2Stream(key, stream, ct, env, storageClass) {
 async function computeMd5(buf) {
   const hash = await crypto.subtle.digest('MD5', buf);
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// JPEG 二进制清理：剥离 EXIF(APP1) / Photoshop IPTC(APP13) 元数据段，其余字节原样保留。
+// 用于 document 上传的图片（Telegram 对 photo 会自行重压缩去除 EXIF，document 原图会保留 GPS 等隐私）。
+// 纯二进制处理不解析像素，出错时静默返回原 buf。
+function stripExifIfJpeg(buf, ct) {
+  try {
+    if (!buf || !buf.byteLength || buf.byteLength < 4) return buf;
+    const t = String(ct || '').toLowerCase();
+    if (t.indexOf('jpeg') === -1 && t.indexOf('jpg') === -1) return buf;
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    if (u8[0] !== 0xFF || u8[1] !== 0xD8) return buf; // 非 JPEG 头
+    const out = new Uint8Array(u8.length);
+    let oi = 0;
+    out[oi++] = u8[0]; out[oi++] = u8[1]; // SOI
+    let i = 2;
+    const n = u8.length;
+    let stripped = false;
+    while (i + 3 < n) {
+      if (u8[i] !== 0xFF) break;
+      const m = u8[i + 1];
+      if (m === 0xD9 || m === 0xDA) { // EOI / SOS → 剩余压缩数据原样拷贝
+        out[oi++] = u8[i]; out[oi++] = u8[i + 1];
+        out.set(u8.subarray(i + 2, n), oi);
+        oi += n - i - 2;
+        return stripped ? out.slice(0, oi) : buf;
+      }
+      if (m >= 0xD0 && m <= 0xD7) { out[oi++] = u8[i]; out[oi++] = u8[i + 1]; i += 2; continue; } // RSTn 无长度
+      const len = (u8[i + 2] << 8) | u8[i + 3];
+      const segEnd = i + 2 + len;
+      if (segEnd > n) break; // 残缺段，放弃
+      const isMeta = (m === 0xE1) || (m === 0xED); // APP1=EXIF, APP13=Photoshop IPTC
+      if (isMeta) {
+        stripped = true;
+      } else {
+        out.set(u8.subarray(i, segEnd), oi);
+        oi += segEnd - i;
+      }
+      i = segEnd;
+    }
+    return stripped ? out.slice(0, oi) : buf;
+  } catch (e) { return buf; }
 }
 
 async function replyMsg(chatId, replyId, fi, url, env, ref) {
@@ -3852,6 +3909,73 @@ async function purgeFileRows(env, targets, purge) {
     } catch (e) {}
   }
   return cleaned;
+}
+
+// 回收站自动清理：deleted_at 超过 30 天的文件硬删（含 R2 对象），24 小时最多执行一次。
+// 与手动"清空回收站"不同，这里是兜底，防止软删文件无限占 R2 存储。
+async function storageMaintenanceCron(env) {
+  if (!env.D1_DB || !env.R2_BUCKET) return;
+  try {
+    const last = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='last_storage_maintenance'").first();
+    if (last && last.value && (Date.now() - (parseInt(last.value, 10) || 0)) < 86400000) return;
+    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    const rows = await env.D1_DB.prepare('SELECT id, storage_key FROM files WHERE deleted_at IS NOT NULL AND deleted_at < ? LIMIT 500').bind(cutoff).all();
+    let purged = 0;
+    for (const f of rows.results || []) {
+      try {
+        if (f.storage_key) {
+          const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=? AND deleted_at IS NULL').bind(f.storage_key).first();
+          if (!ref || (ref.c || 0) <= 0) { try { await env.R2_BUCKET.delete(f.storage_key); } catch (e) {} }
+        }
+        const r = await env.D1_DB.prepare('DELETE FROM files WHERE id=?').bind(f.id).run();
+        if (r.meta && r.meta.changes) purged++;
+      } catch (e) {}
+    }
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('last_storage_maintenance', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(Date.now())).run();
+    if (purged) console.log('storage maintenance purged:', purged);
+  } catch (e) { console.error('storageMaintenanceCron:', e.message); }
+}
+
+// 存储压缩：photo (JPEG/PNG) → WebP 覆盖写回，省 50~70% 存储。
+// 依赖 Cloudflare Image Resizing（cf.image 参数），账号未启用时明确报错。
+// 分批执行（每批 3 张，限时），只处理 storage_key 唯一引用的文件，避免破坏去重。
+async function handleCompressStats(env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
+  try {
+    const r = await env.D1_DB.prepare("SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND mime_type IN ('image/jpeg','image/png')").first();
+    return json({ ok: true, data: { files: r?.c || 0, bytes: r?.s || 0, note: '统计转存且为 JPEG/PNG 的图片，压缩为 WebP 预计可省 50~70%。需账号启用 Cloudflare Image Resizing（Pro 或按量开通），未启用时运行会明确提示。' } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+
+async function handleCompressRun(env) {
+  if (!env.D1_DB || !env.R2_BUCKET || !env.R2_PUBLIC_URL) return json({ ok: false, error: 'D1/R2 未配置' });
+  try {
+    const startT = Date.now();
+    const rows = await env.D1_DB.prepare("SELECT id, storage_key, file_size FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' AND mime_type IN ('image/jpeg','image/png') ORDER BY file_size DESC LIMIT 3").all();
+    if (!(rows.results || []).length) return json({ ok: true, data: { done: 0, skipped: 0, not_available: false, message: '没有可压缩的 JPEG/PNG 图片。' } });
+    let done = 0, skipped = 0, notAvailable = false;
+    for (const f of rows.results) {
+      if (Date.now() - startT > 25000) break;
+      try {
+        const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
+        if (!ref || (ref.c || 0) > 1) { skipped++; continue; }
+        const url = env.R2_PUBLIC_URL + '/' + f.storage_key;
+        const res = await fetch(url, { cf: { image: { format: 'webp', quality: 80, fit: 'scale-down' } } });
+        if (!res.ok) { skipped++; continue; }
+        const ct = res.headers.get('content-type') || '';
+        if (ct.indexOf('webp') === -1) { notAvailable = true; skipped++; continue; } // Image Resizing 未生效
+        const wbuf = await res.arrayBuffer();
+        if (!wbuf.byteLength || wbuf.byteLength >= (f.file_size || 0)) { skipped++; continue; } // 未变小不覆盖
+        await env.R2_BUCKET.put(f.storage_key, wbuf, { httpMetadata: { contentType: 'image/webp', cacheControl: 'public, max-age=31536000' } });
+        await env.D1_DB.prepare("UPDATE files SET mime_type='image/webp', file_size=?, md5_hash='', quick_hash='' WHERE id=?").bind(wbuf.byteLength, f.id).run();
+        done++;
+      } catch (e) { console.log('compress item fail:', e.message); }
+    }
+    const msg = notAvailable
+      ? 'Cloudflare Image Resizing 未生效（需账号启用，通常为 Pro 套餐或按量开通）。可通过 fetch 加 cf.image 转换的 Worker 验证；未启用时无法转 WebP，可先用回收站清理/去重释放空间。'
+      : ('本轮压缩 ' + done + ' 张为 WebP' + (skipped ? '，跳过 ' + skipped + ' 张（被多行引用/未变小/非图片）' : '') + '。分批执行（每批最多 3 张，限时 25s），可重复点击加速。');
+    return json({ ok: true, data: { done, skipped, not_available: notAvailable, message: msg } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
 // 查重分批执行（手动/定时共用）：算 N 个缺失 MD5，再清理 G 个重复组。

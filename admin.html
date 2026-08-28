@@ -289,6 +289,18 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
         <div style="margin-top:10px"><button class="btn btn-ghost btn-sm" id="dupGroupsBtn">查看重复分组（清理前核对）</button></div>
       </div>
 
+      <!-- 存储压缩（WebP） -->
+      <div class="card" id="compressCard">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>存储压缩（WebP）</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" id="compressRunBtn">压缩为 WebP</button>
+          </div>
+        </div>
+        <div id="compressStats" style="font-size:13px;color:var(--text-secondary)">加载中...</div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">将转存的 JPEG/PNG 图片压缩为 WebP（质量 80，预计省 50~70% 存储）。需要账号启用 <b>Cloudflare Image Resizing</b>；未启用时运行会明确提示。⚠️ 压缩后不可还原原图。另：回收站中超过 30 天的文件由定时任务自动硬清（含 R2 对象），无需手动。</div>
+      </div>
+
       <div class="card">
         <div class="fbs">
           <div style="display:flex;align-items:center;gap:12px">
@@ -1129,6 +1141,8 @@ function init() {
   });
   var dupGroupsBtn = document.getElementById("dupGroupsBtn");
   if (dupGroupsBtn) dupGroupsBtn.addEventListener("click", function() { showDupGroups(); });
+  var compressRunBtn = document.getElementById("compressRunBtn");
+  if (compressRunBtn) compressRunBtn.addEventListener("click", function() { runCompress(); });
 
   // 视图切换
   var viewGrid = document.getElementById("viewGrid");
@@ -1370,6 +1384,7 @@ function init() {
   loadBotInfo();
   loadProgress();
   loadDedupStats();
+  loadCompressStats();
   loadProxyOnlyState();
   startProgressAutoRefresh();
   // Tele文件列表自动刷新（30s，仅当前 tab 可见时）：方便盯着新文件入库
@@ -1445,6 +1460,31 @@ async function runDedup(purge) {
     loadDedupStats();
   } else {
     toast(r.error || "去重失败", 0);
+  }
+}
+
+// 存储压缩（WebP）
+async function loadCompressStats() {
+  var el = document.getElementById("compressStats");
+  var r = await api("GET", "/admin/api/compress/stats");
+  if (!r.ok) { if (el) el.textContent = "加载失败"; return; }
+  var d = r.data;
+  if (el) el.innerHTML = '<div style="display:flex;gap:24px;margin-top:8px"><div><div style="font-size:20px;font-weight:700;color:var(--primary)">' + fmtNum(d.files) + '</div><div style="font-size:11px;color:var(--text-secondary)">可压缩图片</div></div><div><div style="font-size:20px;font-weight:700;color:var(--primary)">' + fmtSize(d.bytes) + '</div><div style="font-size:11px;color:var(--text-secondary)">占用空间（JPEG/PNG）</div></div><div><div style="font-size:20px;font-weight:700;color:var(--success)">≈' + fmtSize(Math.round(d.bytes * 0.5)) + '</div><div style="font-size:11px;color:var(--text-secondary)">压缩后预估（省50%）</div></div></div>';
+}
+
+async function runCompress() {
+  var btn = document.getElementById("compressRunBtn");
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = "压缩中...";
+  var r = await api("POST", "/admin/api/compress/run");
+  btn.disabled = false;
+  btn.textContent = "压缩为 WebP";
+  if (r.ok) {
+    toast(r.data.message, 1);
+    loadCompressStats();
+  } else {
+    toast(r.error || "压缩失败", 0);
   }
 }
 
