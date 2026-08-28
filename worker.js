@@ -88,6 +88,9 @@ export default {
     if (m === 'POST' && p === '/admin/api/settings/pi-key') return isAdmin ? handleAdminSavePiKey(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminGetPoolTags(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminSavePoolTags(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 代理模式：1=入库不转存 R2，直链 /file/tg/<id> 由 worker 实时拉 Telegram（省 R2 存储）
+    if (m === 'GET' && p === '/admin/api/settings/proxy-mode') return isAdmin ? handleAdminGetProxyMode(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/proxy-mode') return isAdmin ? handleAdminSaveProxyMode(request, env) : json({ok:false,error:'Unauthorized'},401);
     // D1 备份 / 失败告警配置 / API 限流配置
     if (m === 'GET' && p === '/admin/api/backup') return isAdmin ? handleAdminBackup(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/backup') return isAdmin ? handleAdminBackupSave(env) : json({ok:false,error:'Unauthorized'},401);
@@ -535,6 +538,13 @@ async function processUpdateCore(update, env, waitFn) {
             body: JSON.stringify({ chat_id: chatId, text: '📥 已入库 #' + rid + (fi.fileName ? ' · ' + String(fi.fileName).slice(0, 40) : '') })
           });
         } catch (e) {}
+      }
+      // 代理模式：≤20MB 不转存 R2，r2_url 存 /file/tg/<id>，访问时 worker 实时拉 TG 直链（省 R2 存储）
+      if (rid && (await getProxyMode(env)) === 1 && (fi.fileSize || 0) <= 20 * 1024 * 1024) {
+        try {
+          await env.D1_DB.prepare("UPDATE files SET r2_url=?, storage_key='', processing_state='completed', progress_bytes=0, total_bytes=? WHERE id=?").bind('/file/tg/' + rid, fi.fileSize || 0, rid).run();
+        } catch (e) { console.error('proxy mark:', e.message); }
+        return { ok: true, queued: true, fileId: rid, proxied: true };
       }
       // Process via Queue (reliable, 15min limit) or fallback to waitUntil
       const task = {
@@ -1472,19 +1482,31 @@ async function handleTgFileRedirect(p, env) {
   const id = parseInt(p.replace('/file/tg/', ''), 10) || 0;
   if (!id) return json({ ok: false, error: 'bad id' }, 400);
   try {
-    const f = await env.D1_DB.prepare('SELECT tg_file_url, r2_url FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+    const f = await env.D1_DB.prepare('SELECT tg_file_url, r2_url, telegram_file_id, mime_type FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
     if (!f) return json({ ok: false, error: 'not found' }, 404);
-    // Never redirect to api.telegram.org (leaks bot token). Prefer R2 CDN; else stream-proxy origin.
-    if (f.r2_url && f.r2_url.length > 0) {
+    // 真实 R2/外部直链：302（代理模式下 r2_url 存的是 /file/tg/<id> 自身，跳过不走 302）
+    if (f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0 && f.r2_url.indexOf('//') >= 0) {
       return new Response(null, { status: 302, headers: { 'Location': f.r2_url, 'Cache-Control': 'public, max-age=86400' } });
     }
-    if (f.tg_file_url && f.tg_file_url.length > 0) {
+    // 代理：优先官方 CDN 直链（tg_file_url，内部 fetch 透传不透出 token），否则实时 getFile 解析
+    let dlUrl = (f.tg_file_url && f.tg_file_url.length > 0) ? f.tg_file_url : '';
+    if (!dlUrl && f.telegram_file_id) {
       try {
-        const origin = await fetch(f.tg_file_url);
+        const gf = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getFile?file_id=' + encodeURIComponent(f.telegram_file_id));
+        const gj = await gf.json();
+        if (gj.ok && gj.result && gj.result.file_path) {
+          dlUrl = 'https://api.telegram.org/file/bot' + env.TG_BOT_TOKEN + '/' + gj.result.file_path;
+        }
+      } catch (e) {}
+    }
+    if (dlUrl) {
+      try {
+        const origin = await fetch(dlUrl);
         if (!origin.ok) return json({ ok: false, error: 'origin http ' + origin.status }, 502);
         return new Response(origin.body, { headers: {
-          'Content-Type': origin.headers.get('content-type') || 'application/octet-stream',
-          'Cache-Control': 'public, max-age=3600'
+          'Content-Type': f.mime_type || origin.headers.get('content-type') || 'application/octet-stream',
+          'Cache-Control': 'public, max-age=3600',
+          'Access-Control-Allow-Origin': '*'
         } });
       } catch (e) { return json({ ok: false, error: 'proxy fail: ' + e.message }, 502); }
     }
@@ -1534,6 +1556,32 @@ async function handleFile(request, env) {
     if (id) f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
     else if (fu) f = await env.D1_DB.prepare('SELECT * FROM files WHERE r2_url=? AND deleted_at IS NULL').bind(fu).first();
     return json({ ok: true, data: f || null });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 代理模式开关（settings 表）：1=入库不转存 R2，直链 /file/tg/<id> 由 worker 实时拉 Telegram
+let _proxyMode = null, _proxyModeAt = 0;
+async function getProxyMode(env) {
+  const now = Date.now();
+  if (_proxyMode !== null && now - _proxyModeAt < 30000) return _proxyMode;
+  _proxyMode = 0;
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='proxy_mode'").first();
+    if (r && r.value) _proxyMode = (String(r.value).trim() === '1') ? 1 : 0;
+  } catch (e) {}
+  _proxyModeAt = now;
+  return _proxyMode;
+}
+async function handleAdminGetProxyMode(env) {
+  return json({ ok: true, data: { proxy_mode: await getProxyMode(env) } });
+}
+async function handleAdminSaveProxyMode(request, env) {
+  try {
+    const b = await request.json().catch(() => ({}));
+    const v = (b.proxy_mode === 1 || b.proxy_mode === true || b.proxy_mode === '1') ? '1' : '0';
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('proxy_mode',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(v).run();
+    _proxyMode = (v === '1') ? 1 : 0; _proxyModeAt = Date.now();
+    return json({ ok: true, data: { proxy_mode: _proxyMode } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

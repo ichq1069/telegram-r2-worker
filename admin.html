@@ -675,6 +675,14 @@ https://example.com/b.jpg"></textarea></div>
         </div>
         <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">告警消息由 bot 直接发给你。首次使用时：先给 @tkxin_bot 发一条消息，再用 @userinfobot 查出你的 ID 填到这里。</div>
       </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>转存模式 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">代理模式：新文件不占用 R2 存储，直链由 worker 实时从 Telegram 拉取（仅 ≤20MB，视频/大文件仍转存 R2）；只影响开关后的新文件</span></div>
+        <div class="fb">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="radio" name="proxyMode" value="0" checked> 转存到 R2（占存储，直链稳定）</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="radio" name="proxyMode" value="1"> 代理模式（省存储，实时拉取）</label>
+          <button class="btn btn-primary" id="proxyModeSaveBtn">保存</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -1912,6 +1920,13 @@ async function loadOpsPage() {
     const r = await api("GET", "/admin/api/settings/notify");
     if (r && r.ok) document.getElementById("notifyChatId").value = (r.data && r.data.chat_id) || "";
   } catch (e) {}
+  try {
+    const rp = await api("GET", "/admin/api/settings/proxy-mode");
+    if (rp && rp.ok) {
+      var radios = document.querySelectorAll('input[name="proxyMode"]');
+      for (var i = 0; i < radios.length; i++) radios[i].checked = (String(radios[i].value) === String(rp.data.proxy_mode));
+    }
+  } catch (e) {}
 }
 
 async function loadBackupList() {
@@ -1978,6 +1993,14 @@ document.getElementById("notifySaveBtn").addEventListener("click", function() {
   var v = document.getElementById("notifyChatId").value.trim();
   api("POST", "/admin/api/settings/notify", { chat_id: v }).then(function(r) {
     if (r && r.ok) toast("告警设置已保存", 1); else toast((r && r.error) || "保存失败", 0);
+  });
+});
+document.getElementById("proxyModeSaveBtn").addEventListener("click", function() {
+  var sel = document.querySelector('input[name="proxyMode"]:checked');
+  var val = sel ? parseInt(sel.value) : 0;
+  api("POST", "/admin/api/settings/proxy-mode", { proxy_mode: val }).then(function(r) {
+    if (r && r.ok) toast("转存模式已保存" + (val === 1 ? "，新文件走代理" : "，新文件转存 R2"), 1);
+    else toast((r && r.error) || "保存失败", 0);
   });
 });
 
@@ -2530,6 +2553,9 @@ function fallbackCopy(txt) {
   catch (e) { toast("复制失败: " + e.message, 0); }
   document.body.removeChild(ta);
 }
+function workerOrigin() {
+  return (location.origin.indexOf('telegram-r2-bot.wo58.cn') >= 0) ? location.origin : 'https://telegram-r2-bot.wo58.cn';
+}
 function copySelected(mode) {
   var ids = Array.from(selSet);
   if (!ids.length) { toast("请先选择文件", 0); return; }
@@ -2538,9 +2564,9 @@ function copySelected(mode) {
     var f = selFiles[ids[i]];
     if (!f) continue;
     if (mode === 'proxy') {
-      links.push(location.origin + '/file/tg/' + f.id);
+      links.push(workerOrigin() + '/file/tg/' + f.id);
     } else {
-      links.push(f.r2_url || (location.origin + '/file/tg/' + f.id));
+      links.push(f.r2_url || (workerOrigin() + '/file/tg/' + f.id));
     }
   }
   if (!links.length) { toast("没有可复制的链接", 0); return; }
