@@ -84,6 +84,8 @@ tr:hover { background: #fafbfd; }
 .badge-green { background: #dcfce7; color: #16a34a; }
 .badge-red { background: #fee2e2; color: #dc2626; }
 .badge-blue { background: #dbeafe; color: #2563eb; }
+.badge-yellow { background: #fef9c3; color: #ca8a04; }
+.badge-ghost { background: #f1f5f9; color: #64748b; }
 
 /* Buttons */
 .btn { padding: 6px 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; transition: all .15s; display: inline-flex; align-items: center; gap: 4px; }
@@ -542,6 +544,7 @@ https://example.com/b.jpg"></textarea></div>
           <div class="card-title"><span class="dot"></span>API 密钥管理</div>
           <div style="display:flex;gap:8px;align-items:center">
             <input class="inp" style="width:220px" id="keyName" placeholder="用途说明，如：我的网站">
+            <input class="inp" type="date" id="keyExpires" title="到期日期（留空 = 永久有效）">
             <button class="btn btn-primary" id="createKeyBtn">+ 生成密钥</button>
           </div>
         </div>
@@ -1104,6 +1107,8 @@ function init() {
     if (act === "pick") openGroupPick(id);
     else if (act === "del") delGroup(id);
     else if (act === "rename") renameGroup(id);
+    else if (act === "mode") groupModeModal(id);
+    else if (act === "roll") rollGroup(id);
   });
   var scOpen = document.getElementById("scOpenBtn");
   if (scOpen) scOpen.addEventListener("click", function() { window.open(OR + "/show", "_blank"); });
@@ -1278,6 +1283,11 @@ function init() {
       return;
     }
     // 密钥操作
+    var keyEdit = t.closest("[data-action='edit-key']");
+    if (keyEdit) {
+      editKeyModal(keyEdit.getAttribute("data-id"), keyEdit.getAttribute("data-name") || "", keyEdit.getAttribute("data-expires") || "");
+      return;
+    }
     var keyToggle = t.closest("[data-action='toggle-key']");
     if (keyToggle) {
       var kid = keyToggle.getAttribute("data-id");
@@ -2714,9 +2724,15 @@ function renderGroups() {
   if (!gpList.length) { box.innerHTML = '<div class="empty" style="padding:12px">暂无节目组，先创建</div>'; }
   else {
     box.innerHTML = gpList.map(function(g) {
+      var modeTag = g.mode === 'daily_random'
+        ? '<span class="badge badge-blue" title="每天自动从随机库换 ' + (g.daily_count || 0) + ' 张">每日随机换 ' + (g.daily_count || 0) + ' 张' + (g.rolled_today ? ' ✓' : '（今日待换）') + '</span>'
+        : '<span class="badge badge-ghost" title="固定图片系列，手动选图不自动更换">固定系列</span>';
+      var rollBtn = g.mode === 'daily_random'
+        ? '<button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="roll" title="立即从随机库抽图替换">立即换图</button>'
+        : '';
       return '<div class="fb" style="justify-content:space-between;padding:8px 10px;background:#fff;border:1px solid var(--border);border-radius:10px;margin-bottom:6px">'
-        + '<div class="fb"><b style="font-size:13px">' + escStr(g.name) + '</b><span style="font-size:11px;color:var(--text-secondary)">' + g.image_count + ' 张图</span></div>'
-        + '<div class="fb"><button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="pick">选图</button><button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="rename">改名</button><button class="btn btn-sm btn-danger" data-gp="' + g.id + '" data-gpact="del">删除</button></div>'
+        + '<div class="fb"><b style="font-size:13px">' + escStr(g.name) + '</b>' + modeTag + '<span style="font-size:11px;color:var(--text-secondary)">' + g.image_count + ' 张图</span></div>'
+        + '<div class="fb">' + rollBtn + '<button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="mode" title="图片模式设置（固定系列 / 每日随机换图）">模式</button><button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="pick">选图</button><button class="btn btn-sm btn-ghost" data-gp="' + g.id + '" data-gpact="rename">改名</button><button class="btn btn-sm btn-danger" data-gp="' + g.id + '" data-gpact="del">删除</button></div>'
         + '</div>';
     }).join('');
   }
@@ -2761,6 +2777,47 @@ function renameGroup(id) {
   document.getElementById("gpName").focus();
   pendingRename = String(id);
   document.getElementById("gpCreateBtn").textContent = "保存改名";
+}
+// 节目组图片模式设置：固定系列 / 每日从随机库自动换图（可设张数）
+function groupModeModal(id) {
+  var g = (gpList||[]).find(function(x){ return String(x.id) === String(id); });
+  if (!g) { toast("组不存在", 0); return; }
+  var rdm = g.mode === 'daily_random';
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-mask"><div class="modal"><h3>节目组：' + escStr(g.name) + '</h3>' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">图片来源模式</label>' +
+    '<select class="inp" id="gmMode"><option value="fixed"' + (rdm ? '' : ' selected') + '>固定图片系列（手动选图，不自动更换）</option>' +
+    '<option value="daily_random"' + (rdm ? ' selected' : '') + '>每日从随机库自动换图</option></select>' +
+    '<div id="gmCountBox"' + (rdm ? '' : ' style="display:none"') + '>' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">每天随机张数（1-100）</label>' +
+    '<input class="inp" type="number" id="gmCount" min="1" max="100" value="' + (g.daily_count || 5) + '">' +
+    '</div>' +
+    '<p style="font-size:11px;color:var(--text-secondary);margin-top:10px">每日换图：定时任务每天自动从随机库抽取指定张数替换本节目组；也可随时点击「立即换图」。选图/改名不会影响已设置的模式。</p>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="gmCancel">取消</button><button class="btn btn-primary" id="gmSave">保存</button></div>' +
+    '</div></div>';
+  document.getElementById("gmMode").onchange = function() {
+    document.getElementById("gmCountBox").style.display = this.value === 'daily_random' ? '' : 'none';
+  };
+  document.getElementById("gmCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("gmSave").onclick = function() {
+    var mode = document.getElementById("gmMode").value;
+    var cnt = parseInt(document.getElementById("gmCount").value) || 5;
+    api("POST", "/admin/api/show-groups", { id: id, name: g.name, images: g.images || "", mode: mode, daily_count: mode === 'daily_random' ? cnt : 0 }).then(function(r) {
+      document.getElementById("modalArea").innerHTML = "";
+      if (r.ok) { toast(mode === 'daily_random' ? '已设为每日自动换图 ' + cnt + ' 张' : '已设为固定图片系列', 1); loadGroups(); }
+      else toast(r.error || "保存失败", 0);
+    });
+  };
+}
+// 立即换图：从随机库抽 daily_count 张替换该节目组
+function rollGroup(id) {
+  var g = (gpList||[]).find(function(x){ return String(x.id) === String(id); });
+  if (!g) return;
+  if (!confirm("立即从随机库抽取 " + (g.daily_count || 5) + " 张替换「" + g.name + "」的当前图片？")) return;
+  api("POST", "/admin/api/show-groups/roll?id=" + id).then(function(r) {
+    if (r.ok) { toast("已换图 " + (r.data && r.data.image_count) + " 张", 1); loadGroups(); }
+    else toast(r.error || "换图失败", 0);
+  });
 }
 function openGroupPick(id) {
   gpEditId = id;
@@ -3011,17 +3068,26 @@ async function loadKeys() {
   if (!r.ok) { el.innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
   var d = r.data || [];
   if (!d.length) { el.innerHTML = '<div class="empty">暂无密钥，点击右上角生成</div>'; return; }
-  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>权限</th><th>状态</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>权限</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+  var today = new Date().toISOString().slice(0, 10);
   for (var i = 0; i < d.length; i++) {
     var k = d[i];
+    var expTxt = "";
+    if (k.expires_at) {
+      expTxt = k.expired ? '<span class="badge badge-red" title="已到期，密钥已失效">已过期 ' + escStr(k.expires_at) + '</span>' : '<span class="badge badge-yellow" title="到期日">' + escStr(k.expires_at) + '</span>';
+    } else {
+      expTxt = '<span style="font-size:11px;color:var(--text-secondary)">永久</span>';
+    }
     h += '<tr><td>' + escStr(k.name || "-") + '</td>';
     h += '<td><code style="font-size:11px">' + escStr(k.key) + '</code> <button class="btn btn-ghost btn-sm" data-action="copy-key" data-key="' + escStr(k.key) + '">复制</button></td>';
     h += '<td>' + escStr(k.scopes || "files:read") + '</td>';
     h += '<td>' + (k.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>') + '</td>';
+    h += '<td>' + expTxt + '</td>';
     h += '<td>' + (k.usage_count || 0) + '</td>';
     h += '<td class="file-date">' + (k.last_used_at ? String(k.last_used_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
     h += '<td class="file-date">' + (k.created_at ? String(k.created_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
-    h += '<td><button class="btn btn-ghost btn-sm" data-action="toggle-key" data-id="' + k.id + '" data-enabled="' + k.enabled + '">' + (k.enabled ? "停用" : "启用") + '</button> ';
+    h += '<td><button class="btn btn-ghost btn-sm" data-action="edit-key" data-id="' + k.id + '" data-name="' + escStr(k.name || "") + '" data-expires="' + (k.expires_at || "") + '">编辑</button> ';
+    h += '<button class="btn btn-ghost btn-sm" data-action="toggle-key" data-id="' + k.id + '" data-enabled="' + k.enabled + '">' + (k.enabled ? "停用" : "启用") + '</button> ';
     h += '<button class="btn btn-danger btn-sm" data-action="delete-key" data-id="' + k.id + '">删除</button></td></tr>';
   }
   h += '</tbody></table>';
@@ -3029,14 +3095,37 @@ async function loadKeys() {
 }
 function createKey() {
   var name = document.getElementById("keyName").value.trim();
-  api("POST", "/admin/api/keys", { name: name }).then(function(r) {
+  var expires_at = document.getElementById("keyExpires") ? document.getElementById("keyExpires").value : "";
+  api("POST", "/admin/api/keys", { name: name, expires_at: expires_at }).then(function(r) {
     if (r.ok) {
-      toast("密钥已生成", 1);
+      toast("密钥已生成" + (expires_at ? "，到期 " + expires_at : "（永久有效）"), 1);
       document.getElementById("keyName").value = "";
+      if (document.getElementById("keyExpires")) document.getElementById("keyExpires").value = "";
       loadKeys();
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(r.data.key);
     } else toast(r.error || "生成失败", 0);
   });
+}
+// 编辑密钥（名称 / 到期时间）
+function editKeyModal(id, name, expires) {
+  var today = new Date().toISOString().slice(0, 10);
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-mask"><div class="modal"><h3>编辑密钥</h3>' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">用途名称</label>' +
+    '<input class="inp" id="ekName" value="' + escStr(name) + '" placeholder="用途说明">' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">到期日期（留空 = 永久有效）</label>' +
+    '<input class="inp" type="date" id="ekExpires" value="' + escStr(expires) + '" min="' + today + '">' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="ekCancel">取消</button><button class="btn btn-primary" id="ekSave">保存</button></div>' +
+    '</div></div>';
+  document.getElementById("ekCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("ekSave").onclick = function() {
+    var nm = document.getElementById("ekName").value.trim();
+    var ex = document.getElementById("ekExpires").value;
+    api("PATCH", "/admin/api/keys?id=" + id, { name: nm, expires_at: ex }).then(function(r) {
+      document.getElementById("modalArea").innerHTML = "";
+      if (r.ok) { toast("已保存", 1); loadKeys(); } else toast(r.error || "保存失败", 0);
+    });
+  };
 }
 // 用户统计
 async function loadUsers() {
@@ -3341,8 +3430,10 @@ async function loadCmds() {
   for (var i = 0; i < d.length; i++) {
     var c = d[i];
     var hasMenu = c.menu && c.menu.indexOf('"label"') !== -1;
-    h += '<tr><td><code style="background:#f1f5f9;padding:2px 8px;border-radius:4px;font-size:12px">' + escStr(c.command) + '</code></td>';
-    h += '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text-secondary)">' + escStr(c.response) + '</td>';
+    var builtinTag = c.builtin ? '<span class="badge badge-blue" title="内置命令：可直接停用，编辑回复内容后变为自定义">内置</span> ' : '';
+    var respTxt = (c.response === '__BUILTIN__') ? '（内置逻辑，编辑后生效自定义回复）' : String(c.response || '');
+    h += '<tr><td><code style="background:#f1f5f9;padding:2px 8px;border-radius:4px;font-size:12px">' + escStr(c.command) + '</code> ' + builtinTag + '</td>';
+    h += '<td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text-secondary)">' + escStr(respTxt) + '</td>';
     h += '<td>' + (hasMenu ? '<span class="badge badge-blue">数字菜单</span>' : '<span style="color:var(--text-secondary);font-size:11px">无</span>') + '</td>';
     h += '<td>' + (c.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">禁用</span>') + '</td>';
     h += '<td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" data-action="edit-cmd" data-id="' + c.id + '">编辑</button> ';

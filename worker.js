@@ -68,6 +68,7 @@ export default {
     // API key management (for third-party programs)
     if (m === 'GET' && p === '/admin/api/keys') return isAdmin ? handleAdminKeys(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'PATCH' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysUpdate(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/keys/toggle') return isAdmin ? handleAdminKeysToggle(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
     // User stats
@@ -81,6 +82,7 @@ export default {
     if (m === 'GET' && p === '/admin/api/show-groups') return isAdmin ? handleShowGroupsList(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/show-groups') return isAdmin ? handleShowGroupsSave(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/show-groups') return isAdmin ? handleShowGroupsDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/show-groups/roll') return isAdmin ? handleShowGroupRoll(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/pool') return isAdmin ? handleAdminPoolCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/pool/import-page') return isAdmin ? handleAdminPoolImportPage(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/pool/upload') return isAdmin ? handleAdminPoolUpload(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -229,6 +231,18 @@ export default {
       await compressCronBatch(env);
     } catch (e) {
       console.error('scheduled compress:', e.message);
+    }
+    // 内置命令入库同步：把代码里的内置命令登记到 bot_commands（INSERT OR IGNORE，不覆盖用户修改）
+    try {
+      await syncBuiltinCommands(env);
+    } catch (e) {
+      console.error('scheduled syncBuiltinCommands:', e.message);
+    }
+    // 节目组定时换图：mode='daily_random' 的组每天自动从随机库轮换指定数量
+    try {
+      await rotateShowGroups(env);
+    } catch (e) {
+      console.error('scheduled rotateShowGroups:', e.message);
     }
   },
 };
@@ -851,18 +865,26 @@ async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   // Check custom commands in DB
   if (env.D1_DB) {
     try {
-      const custom = await env.D1_DB.prepare('SELECT response, enabled, menu FROM bot_commands WHERE command = ?').bind(cmd).first();
-      if (custom && custom.enabled) {
-        const citems = parseMenu(custom.menu);
-        if (citems.length) {
-          await replyCommandMenu(chatId, msgId, cmd, custom.response, citems, env);
-          return { ok: true, custom: true, menu: true };
+      const custom = await env.D1_DB.prepare('SELECT response, enabled, menu, builtin FROM bot_commands WHERE command = ?').bind(cmd).first();
+      if (custom) {
+        // 后台停用的命令（含内置）直接拒绝
+        if (!custom.enabled) {
+          await replyText(chatId, msgId, '该命令已在后台停用，如需使用请在后台「命令」页启用。', env);
+          return { ok: true, disabled: true };
         }
-        if (custom.response === '__STATS__') {
-          return await handleStatsCommand(chatId, env);
+        // 仅当有实际自定义响应时才拦截；内置占位符（__BUILTIN__）走代码内置逻辑
+        if (custom.response && custom.response !== '__BUILTIN__') {
+          const citems = parseMenu(custom.menu);
+          if (citems.length) {
+            await replyCommandMenu(chatId, msgId, cmd, custom.response, citems, env);
+            return { ok: true, custom: true, menu: true };
+          }
+          if (custom.response === '__STATS__') {
+            return await handleStatsCommand(chatId, env);
+          }
+          await replyText(chatId, msgId, custom.response, env);
+          return { ok: true, custom: true };
         }
-        await replyText(chatId, msgId, custom.response, env);
-        return { ok: true, custom: true };
       }
     } catch (e) {}
   }
@@ -918,6 +940,32 @@ async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   }
 
   return null; // Not a command
+}
+
+// 内置命令清单：同步入库后后台可见/可停用/可自定义响应（见 syncBuiltinCommands）
+var BUILTIN_COMMANDS = [
+  { command: '/start', description: '欢迎与使用说明' },
+  { command: '/help', description: '帮助' },
+  { command: '/stats', description: '转存统计' },
+  { command: '/file', description: '按编号取文件：/file 123' },
+  { command: '/search', description: '按关键词搜索：/search cat' },
+  { command: '/count', description: '现有数量统计' },
+  { command: '/pending', description: '未转存数量' },
+  { command: '/retry', description: '继续完成未转存（数字菜单）' },
+  { command: '/health', description: '健康检查' }
+];
+
+// 把内置命令同步进 bot_commands（INSERT OR IGNORE，不覆盖用户已修改的），后台统一管理
+async function syncBuiltinCommands(env) {
+  if (!env.D1_DB) return;
+  try {
+    await ensureTablesOnce(env.D1_DB);
+    for (const c of BUILTIN_COMMANDS) {
+      try {
+        await env.D1_DB.prepare("INSERT OR IGNORE INTO bot_commands (command, response, description, enabled, menu, builtin) VALUES (?, '__BUILTIN__', ?, 1, '', 1)").bind(c.command, c.description).run();
+      } catch (e) {}
+    }
+  } catch (e) { console.error('syncBuiltinCommands:', e.message); }
 }
 
 // 命令：查询现有数量（中文版）
@@ -2457,10 +2505,11 @@ async function handleShowConfigGet(env) {
 // ==================== Show groups (image playlists for schedule programs) ====================
 async function handleShowGroupsList(env) {
   try {
-    const d = await env.D1_DB.prepare('SELECT id, name, images, created_at FROM show_groups ORDER BY id DESC').all();
+    const d = await env.D1_DB.prepare('SELECT id, name, images, mode, daily_count, updated_at, created_at FROM show_groups ORDER BY id DESC').all();
+    const today = new Date().toISOString().slice(0, 10);
     return json({ ok: true, data: (d.results || []).map(function(g) {
       const arr = String(g.images || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean);
-      return { id: g.id, name: g.name, images: g.images || '', image_count: arr.length, created_at: g.created_at };
+      return { id: g.id, name: g.name, images: g.images || '', image_count: arr.length, mode: g.mode || 'fixed', daily_count: g.daily_count || 0, last_roll: g.updated_at || '', rolled_today: (g.updated_at || '').slice(0, 10) === today ? 1 : 0, created_at: g.created_at };
     }) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -2471,11 +2520,19 @@ async function handleShowGroupsSave(request, env) {
     if (!b || !b.name) return json({ ok: false, error: 'name required' }, 400);
     const name = String(b.name).trim().slice(0, 60);
     const images = String(b.images || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean).slice(0, 200).join(',');
+    const mode = b.mode === 'daily_random' ? 'daily_random' : 'fixed';
+    const daily_count = Math.min(Math.max(parseInt(b.daily_count) || 0, 0), 100);
     const id = parseInt(b.id, 10) || 0;
     if (id) {
-      await env.D1_DB.prepare('UPDATE show_groups SET name=?, images=? WHERE id=?').bind(name, images, id).run();
+      if (b.mode !== undefined) {
+        // 显式提交模式（每日随机/固定）时同时更新模式与数量
+        await env.D1_DB.prepare('UPDATE show_groups SET name=?, images=?, mode=?, daily_count=? WHERE id=?').bind(name, images, mode, daily_count, id).run();
+      } else {
+        // 仅选图/改名时不改动已配置的模式与每日数量
+        await env.D1_DB.prepare('UPDATE show_groups SET name=?, images=? WHERE id=?').bind(name, images, id).run();
+      }
     } else {
-      await env.D1_DB.prepare('INSERT INTO show_groups (name, images, created_at) VALUES (?,?,?)').bind(name, images, new Date().toISOString()).run();
+      await env.D1_DB.prepare('INSERT INTO show_groups (name, images, mode, daily_count, created_at) VALUES (?,?,?,?,?)').bind(name, images, mode, daily_count, new Date().toISOString()).run();
     }
     _showCfg = null; // schedules may reference groups
     return json({ ok: true });
@@ -2491,6 +2548,45 @@ async function handleShowGroupsDelete(request, env) {
     _showCfg = null;
     return json({ ok: true });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 立即换图：从随机库抽 daily_count 张替换该节目组图片（返回本次结果）
+async function handleShowGroupRoll(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = parseInt(u.searchParams.get('id') || '0', 10);
+    if (!id) return json({ ok: false, error: 'id required' }, 400);
+    const g = await env.D1_DB.prepare('SELECT id, mode, daily_count FROM show_groups WHERE id=?').bind(id).first();
+    if (!g) return json({ ok: false, error: 'group not found' }, 404);
+    const n = Math.min(Math.max(parseInt(g.daily_count) || 5, 1), 100);
+    const picked = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE enabled=1 ORDER BY RANDOM() LIMIT ?').bind(n).all();
+    const ids = (picked.results || []).map(function(r) { return r.id; });
+    if (!ids.length) return json({ ok: false, error: '随机库为空，无法换图（请先在随机库添加图片）' }, 400);
+    await env.D1_DB.prepare('UPDATE show_groups SET images=?, updated_at=? WHERE id=?').bind(ids.join(','), new Date().toISOString(), id).run();
+    _showCfg = null;
+    return json({ ok: true, data: { image_count: ids.length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 每日自动轮换：mode='daily_random' 且今天还没换过的节目组，从随机库抽 daily_count 张替换
+async function rotateShowGroups(env) {
+  if (!env.D1_DB) return 0;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const groups = await env.D1_DB.prepare("SELECT id, daily_count, updated_at FROM show_groups WHERE mode='daily_random' AND daily_count > 0").all();
+    let rolled = 0;
+    for (const g of (groups.results || [])) {
+      if (g.updated_at && String(g.updated_at).slice(0, 10) >= today) continue; // 今天已换过
+      const n = Math.min(Math.max(parseInt(g.daily_count) || 5, 1), 100);
+      const picked = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE enabled=1 ORDER BY RANDOM() LIMIT ?').bind(n).all();
+      const ids = (picked.results || []).map(function(r) { return r.id; });
+      if (!ids.length) continue;
+      await env.D1_DB.prepare('UPDATE show_groups SET images=?, updated_at=? WHERE id=?').bind(ids.join(','), new Date().toISOString(), g.id).run();
+      rolled++;
+    }
+    if (rolled) { _showCfg = null; console.log('rotateShowGroups: rolled ' + rolled + ' group(s)'); }
+    return rolled;
+  } catch (e) { console.error('rotateShowGroups:', e.message); return 0; }
 }
 
 async function getGroup(env, id) {
@@ -2889,7 +2985,7 @@ async function checkApiKey(request, env) {
   const k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
   if (!k) return null;
   try {
-    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 LIMIT 1').bind(k).first();
+    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
     if (!rec) return null;
     // usage bump (fire and forget)
     env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
@@ -3047,8 +3143,14 @@ function genApiKey() {
 
 async function handleAdminKeys(env) {
   try {
-    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,enabled,created_at,last_used_at,usage_count FROM api_keys ORDER BY id DESC').all();
-    return json({ ok: true, data: d.results || [] });
+    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,enabled,expires_at,created_at,last_used_at,usage_count FROM api_keys ORDER BY id DESC').all();
+    const today = new Date().toISOString().slice(0, 10);
+    const out = (d.results || []).map(function(k) {
+      const exp = k.expires_at || '';
+      k.expired = exp ? (exp < today ? 1 : 0) : 0;
+      return k;
+    });
+    return json({ ok: true, data: out });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -3057,9 +3159,27 @@ async function handleAdminKeysCreate(request, env) {
     const b = await request.json().catch(function() { return {}; });
     const name = String(b.name || '').slice(0, 60);
     const scopes = String(b.scopes || 'files:read').slice(0, 120);
+    const expires_at = String(b.expires_at || '').trim().slice(0, 10); // YYYY-MM-DD，空=永久
     const key = genApiKey();
-    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,enabled,created_at,usage_count) VALUES (?,?,?,1,?,0)').bind(key, name, scopes, new Date().toISOString()).run();
-    return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, name: name, scopes: scopes } });
+    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,enabled,created_at,usage_count,expires_at) VALUES (?,?,?,1,?,0,?)').bind(key, name, scopes, new Date().toISOString(), expires_at).run();
+    return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, name: name, scopes: scopes, expires_at: expires_at } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 编辑密钥：改名称 / 改到期时间（PATCH /admin/api/keys?id=xxx）
+async function handleAdminKeysUpdate(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = parseInt(u.searchParams.get('id') || '0', 10);
+    if (!id) return json({ ok: false, error: 'id required' });
+    const b = await request.json().catch(function() { return {}; });
+    const fields = [], vals = [];
+    if (b.name !== undefined) { fields.push('name = ?'); vals.push(String(b.name).slice(0, 60)); }
+    if (b.expires_at !== undefined) { fields.push('expires_at = ?'); vals.push(String(b.expires_at || '').trim().slice(0, 10)); }
+    if (!fields.length) return json({ ok: false, error: 'nothing to update' });
+    vals.push(id);
+    await env.D1_DB.prepare('UPDATE api_keys SET ' + fields.join(', ') + ' WHERE id = ?').bind(...vals).run();
+    return json({ ok: true });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -4294,7 +4414,11 @@ async function handleAdminUpdateCommand(request, env) {
     const fields = [];
     const vals = [];
     if (in2.command !== undefined) { fields.push('command = ?'); vals.push(in2.command.trim().toLowerCase()); }
-    if (in2.response !== undefined) { fields.push('response = ?'); vals.push(in2.response.trim()); }
+    if (in2.response !== undefined) {
+      fields.push('response = ?'); vals.push(in2.response.trim());
+      // 编辑内置命令的响应内容后视为用户自定义（脱离内置占位），不再走代码内置逻辑
+      if (String(in2.response).trim() !== '__BUILTIN__') { fields.push('builtin = 0'); }
+    }
     if (in2.description !== undefined) { fields.push('description = ?'); vals.push(in2.description.trim()); }
     if (in2.menu !== undefined) { fields.push('menu = ?'); vals.push(String(in2.menu).trim()); }
     if (in2.enabled !== undefined) { fields.push('enabled = ?'); vals.push(in2.enabled ? 1 : 0); }

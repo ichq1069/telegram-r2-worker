@@ -27,7 +27,7 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);" +
     "CREATE TABLE IF NOT EXISTS bot_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT UNIQUE, response TEXT, description TEXT, enabled INTEGER, created_at TEXT, menu TEXT DEFAULT '');" +
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);" +
-    "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0);" +
+    "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0, expires_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS random_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, thumb_url TEXT, title TEXT, tags TEXT DEFAULT '', file_type TEXT DEFAULT 'photo', width INTEGER, height INTEGER, file_size INTEGER, source TEXT DEFAULT 'manual', tg_file_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT);" +
     "CREATE INDEX IF NOT EXISTS idx_pool_url ON random_pool(url);" +
     "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
@@ -78,7 +78,29 @@ export async function ensureTables(db) {
         await db.exec("ALTER TABLE bot_commands ADD COLUMN menu TEXT DEFAULT ''");
         console.log('migrated: bot_commands.menu column');
       }
+      if (bcn.indexOf('builtin') === -1) {
+        await db.exec("ALTER TABLE bot_commands ADD COLUMN builtin INTEGER DEFAULT 0");
+        console.log('migrated: bot_commands.builtin column');
+      }
     } catch (e3) { console.error('bot_commands menu migration:', e3.message); }
+    // api_keys.expires_at：到期时间（旧库无此列则补加）
+    try {
+      const ak = await db.prepare("PRAGMA table_info(api_keys)").all();
+      const akn = (ak.results || []).map(function(c) { return c.name; });
+      if (akn.indexOf('expires_at') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN expires_at TEXT");
+        console.log('migrated: api_keys.expires_at column');
+      }
+    } catch (e4) { console.error('api_keys expires migration:', e4.message); }
+    // show_groups.mode / daily_count / updated_at：节目组定时换图（旧库无此列则补加）
+    try {
+      const sg = await db.prepare("PRAGMA table_info(show_groups)").all();
+      const sgn = (sg.results || []).map(function(c) { return c.name; });
+      if (sgn.indexOf('mode') === -1) await db.exec("ALTER TABLE show_groups ADD COLUMN mode TEXT DEFAULT 'fixed'");
+      if (sgn.indexOf('daily_count') === -1) await db.exec("ALTER TABLE show_groups ADD COLUMN daily_count INTEGER DEFAULT 0");
+      if (sgn.indexOf('updated_at') === -1) await db.exec("ALTER TABLE show_groups ADD COLUMN updated_at TEXT");
+      console.log('migrated: show_groups mode/daily_count/updated_at columns');
+    } catch (e5) { console.error('show_groups migration:', e5.message); }
   } catch(e) { console.error('column migration:', e.message); throw e; }
   return true;
 }
