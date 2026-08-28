@@ -255,7 +255,10 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
       <div class="card" style="margin-bottom:16px">
         <div class="card-title"><span class="dot" style="background:#8b5cf6"></span>D1 数据库</div>
         <div class="stats-grid" id="d1StatsGrid"></div>
-        <div id="d1TableRows" style="margin-top:12px;padding-top:10px;border-top:1px solid #f1f5f9;font-size:11px;color:var(--text-secondary)"></div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid #f1f5f9">
+          <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:8px">表行数</div>
+          <div id="d1TableRows"><span style="font-size:11px;color:var(--text-secondary)">加载中...</span></div>
+        </div>
       </div>
       <!-- R2 对象存储 -->
       <div class="card" style="margin-bottom:16px">
@@ -2012,12 +2015,20 @@ async function loadStats() {
     '<div class="stat-card" style="border-color:#a78bfa;background:#f3e8ff"><div class="value" style="color:#8b5cf6">' + (d.pool_enabled || 0) + '</div><div class="label">随机库启用</div></div>' +
     '<div class="stat-card" style="border-color:#c4b5fd;background:#ede9fe"><div class="value" style="color:#8b5cf6">' + (d.pool_tg || 0) + '</div><div class="label">随机库 · TG导入</div></div>' +
     '<div class="stat-card" style="border-color:#ddd6fe;background:#faf5ff"><div class="value" style="color:#8b5cf6">' + (d.pool_manual || 0) + '</div><div class="label">随机库 · 外链</div></div>';
-  // D1 表行数
+  // D1 表行数（表格显示）
   var tr = d.table_rows || {};
   var trKeys = Object.keys(tr);
   var trEl = document.getElementById("d1TableRows");
   if (trEl && trKeys.length) {
-    trEl.innerHTML = '<b>D1 表行数</b>：' + trKeys.map(function(k) { return k + ' ' + fmtNum(tr[k]); }).join(' · ');
+    var thtml = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    thtml += '<thead><tr><th style="text-align:left;padding:6px 10px;background:#faf5ff;color:#8b5cf6;border-bottom:1px solid #e9d5ff">表名</th><th style="text-align:right;padding:6px 10px;background:#faf5ff;color:#8b5cf6;border-bottom:1px solid #e9d5ff">行数</th></tr></thead><tbody>';
+    for (var ti = 0; ti < trKeys.length; ti++) {
+      var tn = trKeys[ti], tv = tr[tn];
+      var rowBg = ti % 2 === 0 ? '#fff' : '#faf5ff';
+      thtml += '<tr style="background:' + rowBg + '"><td style="padding:5px 10px;border-bottom:1px solid #f3e8ff"><code style="background:#ede9fe;padding:1px 6px;border-radius:4px;font-size:11px;color:#7c3aed">' + tn + '</code></td><td style="text-align:right;padding:5px 10px;border-bottom:1px solid #f3e8ff;font-weight:600;color:#6d28d9">' + fmtNum(tv) + '</td></tr>';
+    }
+    thtml += '</tbody></table>';
+    trEl.innerHTML = thtml;
   }
 
   var bt = "";
