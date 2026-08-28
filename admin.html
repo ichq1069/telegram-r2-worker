@@ -1930,22 +1930,45 @@ function startProgressAutoRefresh() {
   progressTimer = setInterval(function() { loadProgress(); loadProcessing(); }, 5000);
 }
 
-// 概览
-async function loadStats() {
-  var r = await api("GET", "/admin/api/stats");
-  if (!r.ok) return;
-  var d = r.data;
-  document.getElementById("d1StatsGrid").innerHTML =
-    '<div class="stat-card" style="border-color:#8b5cf6;background:#f5f3ff"><div class="value" style="color:#8b5cf6">' + d.total_files + '</div><div class="label">入库总数 (含未转存)</div></div>' +
-    '<div class="stat-card" style="border-color:#c7d2fe;background:#eef2ff"><div class="value" style="color:#8b5cf6">' + (d.completed_files||0) + ' / ' + d.total_files + '</div><div class="label">已转存 / 总数</div></div>' +
-    '<div class="stat-card" style="border-color:#ddd6fe;background:#faf5ff"><div class="value" style="color:#8b5cf6">' + (d.unsaved_files||0) + '</div><div class="label">未转存</div></div>' +
-    '<div class="stat-card" style="border-color:#c4b5fd;background:#ede9fe"><div class="value" style="color:#8b5cf6">' + d.total_size_formatted + '</div><div class="label">库内文件合计 (Σ大小，含代理/重复)</div></div>' +
-    '<div class="stat-card" style="border-color:#a78bfa;background:#f3e8ff"><div class="value" style="color:#8b5cf6">' + d.today_uploads + '</div><div class="label">今日上传</div></div>' +
-    '<div class="stat-card" style="border-color:#c4b5fd;background:#ede9fe"><div class="value" style="color:#8b5cf6">' + d.month_uploads + '</div><div class="label">本月上传</div></div>' +
-    '<div class="stat-card" style="border-color:#8b5cf6;background:#f5f3ff"><div class="value" style="color:#8b5cf6">' + (d.pool_total || 0) + '</div><div class="label">随机库总数</div></div>' +
-    '<div class="stat-card" style="border-color:#a78bfa;background:#f3e8ff"><div class="value" style="color:#8b5cf6">' + (d.pool_enabled || 0) + '</div><div class="label">随机库启用</div></div>' +
-    '<div class="stat-card" style="border-color:#c4b5fd;background:#ede9fe"><div class="value" style="color:#8b5cf6">' + (d.pool_tg || 0) + '</div><div class="label">随机库 · TG导入</div></div>' +
-    '<div class="stat-card" style="border-color:#ddd6fe;background:#faf5ff"><div class="value" style="color:#8b5cf6">' + (d.pool_manual || 0) + '</div><div class="label">随机库 · 外链</div></div>';
+// 概览：骨架 + 填充模式（框架渲染一次后不再重建，刷新只更新数值，避免白屏闪动）
+var d1SkeletonRendered = false;
+var r2SkeletonRendered = false;
+var workerSkeletonRendered = false;
+
+function renderD1Skeleton() {
+  var defs = [
+    ['入库总数 (含未转存)', '#8b5cf6', '#f5f3ff'],
+    ['已转存 / 总数', '#c7d2fe', '#eef2ff'],
+    ['未转存', '#ddd6fe', '#faf5ff'],
+    ['库内文件合计 (Σ大小，含代理/重复)', '#c4b5fd', '#ede9fe'],
+    ['今日上传', '#a78bfa', '#f3e8ff'],
+    ['本月上传', '#c4b5fd', '#ede9fe'],
+    ['随机库总数', '#8b5cf6', '#f5f3ff'],
+    ['随机库启用', '#a78bfa', '#f3e8ff'],
+    ['随机库 · TG导入', '#c4b5fd', '#ede9fe'],
+    ['随机库 · 外链', '#ddd6fe', '#faf5ff']
+  ];
+  var h = '';
+  for (var i = 0; i < defs.length; i++) {
+    h += '<div class="stat-card" style="border-color:' + defs[i][1] + ';background:' + defs[i][2] + '"><div class="value" style="color:#8b5cf6" id="d1v' + i + '">…</div><div class="label">' + defs[i][0] + '</div></div>';
+  }
+  document.getElementById("d1StatsGrid").innerHTML = h;
+  var trEl = document.getElementById("d1TableRows");
+  if (trEl) trEl.innerHTML = '<span style="font-size:11px;color:var(--text-secondary)">加载中...</span>';
+}
+
+function fillD1Stats(d) {
+  var setV = function(i, txt) { var el = document.getElementById("d1v" + i); if (el) el.textContent = txt; };
+  setV(0, d.total_files);
+  setV(1, (d.completed_files||0) + ' / ' + d.total_files);
+  setV(2, d.unsaved_files||0);
+  setV(3, d.total_size_formatted);
+  setV(4, d.today_uploads);
+  setV(5, d.month_uploads);
+  setV(6, d.pool_total||0);
+  setV(7, d.pool_enabled||0);
+  setV(8, d.pool_tg||0);
+  setV(9, d.pool_manual||0);
   // D1 表行数（表格显示）
   var tr = d.table_rows || {};
   var trKeys = Object.keys(tr);
@@ -1961,6 +1984,15 @@ async function loadStats() {
     thtml += '</tbody></table>';
     trEl.innerHTML = thtml;
   }
+}
+
+// 概览
+async function loadStats() {
+  if (!d1SkeletonRendered) { renderD1Skeleton(); d1SkeletonRendered = true; }
+  var r = await api("GET", "/admin/api/stats");
+  if (!r.ok) { return; }
+  var d = r.data;
+  fillD1Stats(d);
 
   var bt = "";
   for (var i = 0; i < d.by_type.length; i++) {
@@ -1987,16 +2019,32 @@ function fmtNum(n) {
 }
 function r2Color(pct) { return pct >= 90 ? "#dc2626" : (pct >= 50 ? "#d97706" : "#16a34a"); }
 function r2Bg(pct) { return pct >= 90 ? "#fee2e2" : (pct >= 50 ? "#fffbeb" : "#f0fdf4"); }
+function renderR2Skeleton() {
+  var defs = [
+    ['R2 存储用量', '…'],
+    ['库内文件合计', '…'],
+    ['A 类操作', '…'],
+    ['B 类操作', '…']
+  ];
+  var h = '';
+  for (var i = 0; i < defs.length; i++) {
+    h += '<div class="stat-card"><div class="value" id="r2v' + i + '" style="color:var(--text-secondary)">…</div><div class="label" id="r2l' + i + '">' + defs[i][0] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px" id="r2s' + i + '">&nbsp;</div></div>';
+  }
+  document.getElementById("r2StatsGrid").innerHTML = h;
+}
 async function loadR2UsageCards() {
   try {
+    if (!r2SkeletonRendered) { renderR2Skeleton(); r2SkeletonRendered = true; }
     const r = await api("GET", "/admin/api/r2-usage");
     if (!r.ok || !r.data) return;
     const d = r.data;
     const gb = function(b) { return (b / 1073741824).toFixed(2) + " GB"; };
-    var card = function(title, val, sub, pct) {
-      return '<div class="stat-card" style="border-color:' + r2Color(pct) + ';background:' + r2Bg(pct) + '"><div class="value" style="color:' + r2Color(pct) + '">' + val + '</div><div class="label">' + title + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">' + sub + '</div></div>';
+    var set = function(i, val, sub, pct, title) {
+      var ev = document.getElementById("r2v" + i), es = document.getElementById("r2s" + i), el = document.getElementById("r2l" + i);
+      if (ev) { ev.textContent = val; ev.style.color = r2Color(pct); ev.parentNode.style.borderColor = r2Color(pct); ev.parentNode.style.background = r2Bg(pct); }
+      if (es) es.innerHTML = sub;
+      if (el && title) el.textContent = title;
     };
-    var el = document.getElementById("r2StatsGrid");
     var capTxt = d.capacity_bytes ? gb(d.capacity_bytes) : '不限';
     var capPctTxt = d.capacity_bytes ? d.storage_pct + '%' : '—';
     var capPct = d.capacity_bytes ? d.storage_pct : 0;
@@ -2007,11 +2055,10 @@ async function loadR2UsageCards() {
     if (d.est_r2_files) estSub += ' · 转存 ' + fmtNum(d.est_r2_files) + ' 个';
     if (d.est_proxy_files) estSub += ' · 代理 ' + fmtNum(d.est_proxy_files) + ' 个(不入R2)';
     if (d.dup_files) estSub += ' · 重复 ' + fmtNum(d.dup_files) + ' 份';
-    el.innerHTML = el.innerHTML +
-      card('R2 存储用量 ' + capPctTxt, gb(d.storage_bytes), capSub, capPct) +
-      card('库内文件合计', gb(d.storage_estimate), estSub, 0) +
-      card('A 类操作 ' + (d.class_a_quota ? d.class_a_pct + '%' : '—'), fmtNum(d.class_a), d.class_a_quota ? '配额 ' + fmtNum(d.class_a_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_a_quota - d.class_a)) : '付费版不限', aPct) +
-      card('B 类操作 ' + (d.class_b_quota ? d.class_b_pct + '%' : '—'), fmtNum(d.class_b), d.class_b_quota ? '配额 ' + fmtNum(d.class_b_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_b_quota - d.class_b)) : '付费版不限', bPct);
+    set(0, gb(d.storage_bytes), capSub, capPct, 'R2 存储用量 ' + capPctTxt);
+    set(1, gb(d.storage_estimate), estSub, 0, '库内文件合计');
+    set(2, fmtNum(d.class_a), d.class_a_quota ? '配额 ' + fmtNum(d.class_a_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_a_quota - d.class_a)) : '付费版不限', aPct, 'A 类操作 ' + (d.class_a_quota ? d.class_a_pct + '%' : '—'));
+    set(3, fmtNum(d.class_b), d.class_b_quota ? '配额 ' + fmtNum(d.class_b_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_b_quota - d.class_b)) : '付费版不限', bPct, 'B 类操作 ' + (d.class_b_quota ? d.class_b_pct + '%' : '—'));
     // 超过 50% / 90% 弹窗提示（每个阈值只弹一次，localStorage 记忆；付费版不限不提示）
     warnOnce("r2_storage", capPct, "R2 存储用量已达 " + d.storage_pct + "%", "已用 " + gb(d.storage_bytes) + " / 容量 " + gb(d.capacity_bytes) + "，剩余 " + gb(d.storage_remaining) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
     warnOnce("r2_class_a", aPct, "A 类操作已达 " + d.class_a_pct + "%", "已用 " + fmtNum(d.class_a) + " / 配额 " + fmtNum(d.class_a_quota) + "。<br>可在 后台 → 运维 → R2 套餐 切换到付费版。");
@@ -2044,7 +2091,11 @@ async function loadWebhookStatus() {
     lines.push('</div>');
     lines.push('<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">');
     lines.push('· 积压消息：<b style="color:' + (d.pending > 0 ? '#d97706' : '#16a34a') + '">' + d.pending + '</b> 条（Telegram 重试队列）');
-    if (d.last_error) lines.push('· 最近错误：<b style="color:#dc2626">' + escStr(d.last_error) + '</b>（' + (d.last_error_date ? new Date(d.last_error_date * 1000).toLocaleString() : '') + '）');
+    if (d.last_error) {
+      var errTxt = escStr(d.last_error) + '（' + (d.last_error_date ? new Date(d.last_error_date * 1000).toLocaleString() : '') + '）';
+      if (d.healthy) lines.push('· 最近错误（历史记录，已恢复）：<span style="color:var(--text-secondary)">' + errTxt + '</span>');
+      else lines.push('· 最近错误：<b style="color:#dc2626">' + errTxt + '</b>');
+    }
     lines.push('· 本地 secret_token：' + (d.has_secret_token_configured ? '已配置' : '未配置（无需）'));
     if (d.ip_address) lines.push('· 入口 IP：' + escStr(d.ip_address));
     if (d.api_error) lines.push('· API 响应：' + escStr(d.api_error));
@@ -2069,25 +2120,35 @@ async function loadWebhookStatus() {
 }
 
 // Worker 用量卡（Cloudflare GraphQL 官方统计，CF_API_TOKEN 缺失时本地计数兜底）
+function renderWorkerSkeleton() {
+  var defs = ['今日请求', '本月请求', '今日错误', 'CPU p50'];
+  var h = '';
+  for (var i = 0; i < defs.length; i++) {
+    h += '<div class="stat-card"><div class="value" id="wkv' + i + '" style="color:var(--text-secondary)">…</div><div class="label" id="wkl' + i + '">' + defs[i] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px" id="wks' + i + '">&nbsp;</div></div>';
+  }
+  document.getElementById("workerStatsGrid").innerHTML = h;
+}
 async function loadWorkerUsage() {
   try {
+    if (!workerSkeletonRendered) { renderWorkerSkeleton(); workerSkeletonRendered = true; }
     const r = await api("GET", "/admin/api/worker-usage");
     if (!r.ok || !r.data) return;
     const d = r.data;
-    const el = document.getElementById("workerStatsGrid");
-    var card = function(title, val, sub, pct) {
-      return '<div class="stat-card" style="border-color:' + r2Color(pct) + ';background:' + r2Bg(pct) + '"><div class="value" style="color:' + r2Color(pct) + '">' + val + '</div><div class="label">' + title + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">' + sub + '</div></div>';
+    var set = function(i, val, sub, pct, title) {
+      var ev = document.getElementById("wkv" + i), es = document.getElementById("wks" + i), el = document.getElementById("wkl" + i);
+      if (ev) { ev.textContent = val; ev.style.color = r2Color(pct); ev.parentNode.style.borderColor = r2Color(pct); ev.parentNode.style.background = r2Bg(pct); }
+      if (es) es.innerHTML = sub;
+      if (el && title) el.textContent = title;
     };
     var qPct = d.today_quota ? d.today_pct : 0;
     var qTxt = d.today_quota ? d.today_pct + '%' : '—';
     var qSub = (d.source === 'cf' ? 'CF 官方' : '本地计数（自部署起）') + (d.today_quota ? ' · 配额 ' + fmtNum(d.today_quota) + '/天 · 剩余 ' + fmtNum(Math.max(0, d.today_quota - d.today_requests)) : '付费版不限');
     var cpuV = (d.cpu_p50 !== undefined && d.cpu_p50 !== null) ? (d.cpu_p50 / 100).toFixed(2) + ' ms' : '—';
     var cpuSub = (d.cpu_p50 !== undefined && d.cpu_p50 !== null) ? 'p90 ' + (d.cpu_p90 / 100).toFixed(2) + ' ms · 免费版有每日额度' : '免费版 GraphQL 不提供，CF 面板可看';
-    el.innerHTML =
-      card('今日请求 ' + qTxt, fmtNum(d.today_requests), qSub, qPct) +
-      card('本月请求', fmtNum(d.month_requests), '免费版配额 10 万/天', 0) +
-      card('今日错误', fmtNum(d.errors_today), d.source === 'cf' ? 'CF 官方统计' : '本地未统计', 0) +
-      card('CPU p50', cpuV, cpuSub, 0);
+    set(0, fmtNum(d.today_requests), qSub, qPct, '今日请求 ' + qTxt);
+    set(1, fmtNum(d.month_requests), '免费版配额 10 万/天', 0, '本月请求');
+    set(2, fmtNum(d.errors_today), d.source === 'cf' ? 'CF 官方统计' : '本地未统计', 0, '今日错误');
+    set(3, cpuV, cpuSub, 0, 'CPU p50');
   } catch (e) {}
 }
 
