@@ -1476,7 +1476,12 @@ async function showDupGroups() {
   if (!r.ok) { body.innerHTML = escStr(r.error || "加载失败"); return; }
   var d = r.data;
   if (!d.groups || !d.groups.length) { body.innerHTML = '<div class="empty">暂无重复文件</div>'; return; }
-  var h = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">共 <b>' + d.total_groups + '</b> 组重复。每组 MD5 相同（内容一致），★ 为将保留项；「池引用」的文件不会被清理。</div>';
+  renderDupBody(body, d);
+}
+
+// 重复分组 + 一键清理（清理后再次渲染刷新）
+function renderDupBody(body, d) {
+  var h = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">共 <b>' + d.total_groups + '</b> 组重复。每组 MD5 相同（内容一致），★ 为将保留项；「池引用」的文件不会被清理。去重为分批执行，下方按钮可立即多清理一批。</div>';
   for (var g = 0; g < d.groups.length; g++) {
     var grp = d.groups[g];
     h += '<div style="border:1px solid #e5e7eb;border-radius:10px;margin-bottom:12px;padding:12px">';
@@ -1498,7 +1503,40 @@ async function showDupGroups() {
     }
     h += '</tbody></table></div>';
   }
+  h += '<div style="display:flex;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb;align-items:center">';
+  h += '<button class="btn btn-primary" id="dupCleanBtn">一键清理重复（移入回收站）</button>';
+  h += '<button class="btn btn-danger" id="dupPurgeAllBtn">一键彻底删除重复</button>';
+  h += '<span id="dupCleanMsg" style="font-size:12px;color:var(--text-secondary)"></span>';
+  h += '</div>';
   body.innerHTML = h;
+  document.getElementById("dupCleanBtn").addEventListener("click", function() { dupCleanAll(false, body); });
+  document.getElementById("dupPurgeAllBtn").addEventListener("click", function() {
+    if (confirm("彻底删除重复文件？将直接删除 R2 对象且不可恢复，请先确认！")) dupCleanAll(true, body);
+  });
+}
+
+async function dupCleanAll(purge, body) {
+  var btn = purge ? document.getElementById("dupPurgeAllBtn") : document.getElementById("dupCleanBtn");
+  var msg = document.getElementById("dupCleanMsg");
+  if (!btn) return;
+  btn.disabled = true;
+  msg.textContent = "处理中...";
+  var r = await api("POST", "/admin/api/dedup" + (purge ? "?purge=1" : ""));
+  btn.disabled = false;
+  if (r.ok) {
+    msg.textContent = r.data.message;
+    toast(r.data.message, 1);
+    loadDedupStats();
+  } else {
+    msg.textContent = r.error || "清理失败";
+    toast(r.error || "清理失败", 0);
+  }
+  // 清理后刷新分组视图
+  var r2 = await api("GET", "/admin/api/dedup/groups");
+  if (r2.ok && r2.data) {
+    if (!r2.data.groups || !r2.data.groups.length) { body.innerHTML = '<div class="empty">暂无重复文件</div>'; return; }
+    renderDupBody(body, r2.data);
+  }
 }
 
 // Lightbox
