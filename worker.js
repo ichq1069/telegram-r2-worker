@@ -255,6 +255,50 @@ async function allocTgRef(env) {
   return ref;
 }
 
+// ==================== 批量编号（批次号 = 本次转发总数 N，如 3-001 ~ 3-003） ====================
+// 同一 chat 3 秒内到达的文件消息视为一批；批确定后统一编号再回复。
+// 编号规则：批内第 k 个文件 = N-00k（N = 批内文件总数），用户一眼可看出本次共转发几个。
+async function getFileRef(env, dbId) {
+  if (!env.D1_DB || !dbId) return '';
+  try {
+    const r = await env.D1_DB.prepare('SELECT group_ref FROM files WHERE id=?').bind(dbId).first();
+    return (r && r.group_ref) || '';
+  } catch (e) { return ''; }
+}
+async function scheduleBatchRef(env, chatId, dbId, waitFn) {
+  if (!env.D1_DB || !chatId || !dbId) return;
+  const p = (async () => {
+    try {
+      // 等 3 秒让"这一批"的其余消息到齐（TG 批量转发/相册消息间隔 <1s）
+      await new Promise(function(res) { setTimeout(res, 3000); });
+      const win = new Date(Date.now() - 6000).toISOString();
+      const rows = await env.D1_DB.prepare('SELECT id, message_id, file_name FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC').bind(chatId, win).all();
+      const list = (rows.results || []).filter(function(r) { return r.id; });
+      if (!list.length) return;
+      const N = list.length;
+      // 统一编号：批次号 = 本次总数 N，序号 = 批内位置（可重复执行，值稳定）
+      for (var i = 0; i < list.length; i++) {
+        const ref = N + '-' + String(i + 1).padStart(3, '0');
+        try { await env.D1_DB.prepare('UPDATE files SET group_ref=? WHERE id=?').bind(ref, list[i].id).run(); } catch (e) {}
+      }
+      // 由批内最后一条统一回复（最后唤醒者拿到最终批号，避免中途编号变化/重复回复）
+      if (list[list.length - 1].id !== dbId || !env.TG_BOT_TOKEN) return;
+      for (var k = 0; k < list.length; k++) {
+        const ref = N + '-' + String(k + 1).padStart(3, '0');
+        const nm = String(list[k].file_name || '').slice(0, 40);
+        try {
+          await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(list[k].message_id, 10) || undefined, text: '📥 已入库 #' + ref + (nm ? ' · ' + nm : '') })
+          });
+        } catch (e) {}
+      }
+    } catch (e) { console.error('batchRef:', e.message); }
+  })();
+  if (waitFn) waitFn(p); else p;
+}
+
 // ==================== DB ====================
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
@@ -365,6 +409,40 @@ async function handleAdminSaveAI(request, env) {
 }
 
 // ==================== R2 用量与套餐配额 ====================
+// 官方用量：Cloudflare GraphQL Analytics API（r2BucketStorage/r2BucketOperations）
+// 需要 secret CF_API_TOKEN（权限：Account.R2 Storage:Read）与 var CF_ACCOUNT_ID
+async function cfR2Usage(env) {
+  if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return null;
+  const gql = function(q) {
+    return fetch('https://api.cloudflare.com/client/v4/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + env.CF_API_TOKEN },
+      body: JSON.stringify({ query: q })
+    }).then(function(r) { return r.json(); });
+  };
+  try {
+    // 真实存储字节数（R2 Dashboard 同源数据）
+    const q1 = 'query { viewer { accounts(filter:{accountTag:"' + env.CF_ACCOUNT_ID + '"}) { r2BucketStorage(filter:{bucketName:"bot-telegram"},limit:1){ bucketName bytesStored } } } }';
+    const j1 = await gql(q1);
+    const a1 = j1 && j1.data && j1.data.viewer && j1.data.viewer.accounts && j1.data.viewer.accounts[0];
+    const st = a1 && a1.r2BucketStorage && a1.r2BucketStorage[0];
+    if (!st || st.bytesStored === undefined || st.bytesStored === null) return null;
+    const out = { storage_bytes: st.bytesStored, source: 'cf' };
+    // 近 30 天 A/B 类操作（字段不存在时忽略，回退本地计数）
+    try {
+      const start = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      const q2 = 'query { viewer { accounts(filter:{accountTag:"' + env.CF_ACCOUNT_ID + '"}) { r2BucketOperations(filter:{bucketName:"bot-telegram", datetimeMinute_geq:"' + start + '"}){ sum { classARequests classBRequests } } } } }';
+      const j2 = await gql(q2);
+      const a2 = j2 && j2.data && j2.data.viewer && j2.data.viewer.accounts && j2.data.viewer.accounts[0];
+      const ops = a2 && a2.r2BucketOperations && a2.r2BucketOperations[0] && a2.r2BucketOperations[0].sum;
+      if (ops && ops.classARequests !== undefined) {
+        out.class_a = ops.classARequests || 0;
+        out.class_b = ops.classBRequests || 0;
+      }
+    } catch (e) {}
+    return out;
+  } catch (e) { return null; }
+}
 async function handleAdminR2Usage(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
@@ -373,21 +451,29 @@ async function handleAdminR2Usage(env) {
     const map = {};
     const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('r2_class_a','r2_class_b','r2_capacity_gb','r2_class_a_quota','r2_class_b_quota')").all();
     (q.results || []).forEach(function(r) { map[r.key] = r.value; });
-    const storageBytes = (s && s.s) || 0;
+    const estBytes = (s && s.s) || 0;
     const capacityBytes = (parseFloat(map.r2_capacity_gb) || 10) * 1024 * 1024 * 1024;
-    const classA = parseInt(map.r2_class_a) || 0;
-    const classB = parseInt(map.r2_class_b) || 0;
+    const localA = parseInt(map.r2_class_a) || 0;
+    const localB = parseInt(map.r2_class_b) || 0;
+    // 优先官方用量，失败回退本地估算
+    const cf = await cfR2Usage(env);
+    const storageBytes = (cf && cf.storage_bytes !== undefined) ? cf.storage_bytes : estBytes;
+    const classA = (cf && cf.class_a !== undefined) ? cf.class_a : localA;
+    const classB = (cf && cf.class_b !== undefined) ? cf.class_b : localB;
     const quotaA = parseInt(map.r2_class_a_quota) || 1000000;
     const quotaB = parseInt(map.r2_class_b_quota) || 10000000;
     return json({ ok: true, data: {
       storage_bytes: storageBytes,
+      storage_estimate: estBytes,
+      storage_source: cf ? 'cf' : 'estimate',
       capacity_bytes: capacityBytes,
       storage_pct: capacityBytes ? Math.round(storageBytes / capacityBytes * 1000) / 10 : 0,
       storage_remaining: Math.max(0, capacityBytes - storageBytes),
       class_a: classA, class_a_quota: quotaA,
       class_a_pct: quotaA ? Math.round(classA / quotaA * 1000) / 10 : 0,
       class_b: classB, class_b_quota: quotaB,
-      class_b_pct: quotaB ? Math.round(classB / quotaB * 1000) / 10 : 0
+      class_b_pct: quotaB ? Math.round(classB / quotaB * 1000) / 10 : 0,
+      ops_source: (cf && cf.class_a !== undefined) ? 'cf' : 'local'
     } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
@@ -868,7 +954,8 @@ async function processUpdateCore(update, env, waitFn) {
       const date = msg.date ? new Date(msg.date * 1000) : new Date();
       const dp = date.getFullYear() + '/' + String(date.getMonth() + 1).padStart(2, '0');
       const tempKey = dp + '/pending_' + genHash() + '.' + guessExt('', fi.fileName);
-      const ref = await allocTgRef(env);
+      // 编号延迟到"这一批"确定后统一分配（scheduleBatchRef，批次号 = 本次转发总数）
+      const ref = '';
       let rid = null;
       if (env.D1_DB) {
         try {
@@ -878,23 +965,16 @@ async function processUpdateCore(update, env, waitFn) {
           rid = r.meta?.last_row_id;
         } catch (e) { console.error('D1 pending:', e.message); }
       }
-      // 入库确认（秒回，不 @ 用户）：让用户知道编号与入库数；转存异步进行
-      if (rid && env.TG_BOT_TOKEN) {
-        try {
-          await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, text: '📥 已入库 #' + (ref || rid) + (fi.fileName ? ' · ' + String(fi.fileName).slice(0, 40) : '') })
-          });
-        } catch (e) {}
-      }
       // 代理模式：≤20MB 不转存 R2，r2_url 存 /file/tg/<id>，访问时 worker 实时拉 TG 直链（省 R2 存储）
       if (rid && (await getProxyMode(env)) === 1 && (fi.fileSize || 0) <= 20 * 1024 * 1024) {
         try {
           await env.D1_DB.prepare("UPDATE files SET r2_url=?, storage_key='', processing_state='completed', progress_bytes=0, total_bytes=? WHERE id=?").bind('/file/tg/' + rid, fi.fileSize || 0, rid).run();
         } catch (e) { console.error('proxy mark:', e.message); }
+        scheduleBatchRef(env, chatId, rid, waitFn);
         return { ok: true, queued: true, fileId: rid, proxied: true };
       }
+      // 延迟批量编号：3 秒后按"本次总数 N"统一编号并确认回复（与转存并行）
+      if (rid) scheduleBatchRef(env, chatId, rid, waitFn);
       // Process via Queue (reliable, 15min limit) or fallback to waitUntil
       const task = {
         dbId: rid, fi: fi, chatId: chatId, msgId: msgId, ref: ref || '',
@@ -1270,7 +1350,8 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
         if (dup && dup.r2_url) {
           await env.D1_DB.prepare("UPDATE files SET storage_key=?, r2_url=?, md5_hash=?, mime_type=?, processing_state='completed', file_name=?, tg_file_url=?, thumb_url=?, progress_bytes=?, total_bytes=?, quick_hash=? WHERE id=?")
             .bind(dup.storage_key, dup.r2_url, dup.md5_hash || '', dup.mime_type || '', fi.fileName, '', dup.thumb_url || '', fi.fileSize || 0, fi.fileSize || 0, '', dbIdNum).run();
-          await replyMsg(chatId, parseInt(msgId), fi, dup.r2_url, env, ref || '');
+          const rr1 = await getFileRef(env, dbIdNum);
+          await replyMsg(chatId, parseInt(msgId), fi, dup.r2_url, env, rr1 || ref || String(dbIdNum));
           return;
         }
       } catch (e) { console.log('file_id dedup check fail:', e.message); }
@@ -1461,7 +1542,10 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
         ).bind(key, url, md5, ct, 'completed', fi.fileName, tgUrl, thumbUrl, fi.fileSize || 0, fi.fileSize || 0, quickHash, dbId).run();
       } catch (e) { console.error('D1 update:', e.message); }
     }
-    await replyMsg(chatId, parseInt(msgId), fi, url, env, ref || '');
+    await updateProgress('completed', fi.fileSize || 0, fi.fileSize || 0).catch(function(){});
+    // 用最终编号（延迟批量编号已分配，如 3-001）；历史/重试文件兜底用原 ref 或文件 id
+    const rr2 = await getFileRef(env, dbId);
+    await replyMsg(chatId, parseInt(msgId), fi, url, env, rr2 || ref || String(dbId));
   } catch (e) {
     console.error('processFileAsync:', e.message);
     await updateState('failed', e.message);

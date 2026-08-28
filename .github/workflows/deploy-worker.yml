@@ -7,6 +7,8 @@
 #   CLOUDFLARE_ACCOUNT_ID: Cloudflare 账号 ID（77fc93b832a9f816ee841c3a321b57b5）
 #   TG_BOT_TOKEN         : Telegram Bot Token（每次部署自动写入 Worker 的 Secret，不再依赖 Dashboard）
 #   API_KEY              : Worker Admin API Key（同上）
+#   CF_API_TOKEN         : （可选）Cloudflare API Token（权限：Account.R2 Storage:Read）——
+#                          后台 R2 用量显示官方真实数据（GraphQL Analytics）；不配则回退本地估算
 #   TG_SECRET            : Webhook Secret —— 暂不自动部署（webhook 未配 secret_token 时不需要；
 #                          若以后要启用，在 GitHub Secrets 加 TG_SECRET 并在此列表补一行）
 name: Deploy Worker
@@ -35,16 +37,18 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
 
-      # 部署后写入 2 个 Secret，一劳永逸避免部署丢 token。
+      # 部署后写入 3 个 Secret，一劳永逸避免部署丢 token。
       - name: Set worker secrets
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           API_KEY: ${{ secrets.API_KEY }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
         run: |
           echo "$TG_BOT_TOKEN" | npx --yes wrangler secret put TG_BOT_TOKEN
           echo "$API_KEY" | npx --yes wrangler secret put API_KEY
+          echo "$CF_API_TOKEN" | npx --yes wrangler secret put CF_API_TOKEN
 
       # secrets 写入后再次部署，确保机密随最新版本一起上线
       - name: Redeploy with secrets

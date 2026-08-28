@@ -11,6 +11,8 @@ compatibility_date = "2026-08-01"   # 若线上运行正常，可从 Dashboard �
 # 公开变量（非密钥）
 [vars]
 R2_PUBLIC_URL = "https://telegramup.wo58.cn"
+# Cloudflare 账号 ID（GraphQL Analytics 查 R2 官方用量用；机密 Token 见 secret CF_API_TOKEN）
+CF_ACCOUNT_ID = "77fc93b832a9f816ee841c3a321b57b5"
 
 # R2 存储桶绑定
 [[r2_buckets]]

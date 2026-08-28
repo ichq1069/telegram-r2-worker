@@ -1839,7 +1839,7 @@ async function loadR2UsageCards() {
     };
     var el = document.getElementById("statsGrid");
     el.innerHTML = el.innerHTML +
-      card('R2 存储用量 ' + d.storage_pct + '%', gb(d.storage_bytes), '容量 ' + gb(d.capacity_bytes) + ' · 剩余 ' + gb(d.storage_remaining), d.storage_pct) +
+      card('R2 存储用量 ' + d.storage_pct + '%', gb(d.storage_bytes), (d.storage_source === 'cf' ? 'CF 官方实时 · 容量 ' : '估算(Σ文件大小) · 容量 ') + gb(d.capacity_bytes) + ' · 剩余 ' + gb(d.storage_remaining), d.storage_pct) +
       card('A 类操作 ' + d.class_a_pct + '%', fmtNum(d.class_a), '配额 ' + fmtNum(d.class_a_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_a_quota - d.class_a)), d.class_a_pct) +
       card('B 类操作 ' + d.class_b_pct + '%', fmtNum(d.class_b), '配额 ' + fmtNum(d.class_b_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_b_quota - d.class_b)), d.class_b_pct);
     // 超过 50% / 90% 弹窗提示（每个阈值只弹一次，localStorage 记忆）
