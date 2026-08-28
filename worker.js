@@ -634,7 +634,7 @@ async function aiFileText(env, id) {
     const f = await env.D1_DB.prepare("SELECT * FROM files WHERE id=? AND deleted_at IS NULL").bind(id).first();
     if (!f) return '未找到 id=' + id;
     const realR2 = f.r2_url && f.r2_url.indexOf('/file/tg/') !== 0;
-    return '#' + (f.group_ref || f.id) + ' ' + (f.file_name || '') + '\n类型: ' + (f.file_type || '') + ' | 大小: ' + fmtSize(f.file_size || 0) + '\n状态: ' + (f.processing_state || '') + '\n标签: ' + (f.tags || '（无）') + '\n链接: ' + (realR2 ? f.r2_url : '（未转存，代理: https://telegram-r2-bot.wo58.cn/file/tg/' + f.id + '）');
+    return '#' + (f.group_ref || f.id) + ' ' + (f.file_name || '') + '\n类型: ' + (f.file_type || '') + ' | 大小: ' + fmtSize(f.file_size || 0) + '\n状态: ' + (f.processing_state || '') + '\n标签: ' + (f.tags || '（无）') + '\n链接: ' + (realR2 ? f.r2_url : '（未转存，代理: https://telegram-r2-bot.wo58.cn/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type) + '）');
   } catch (e) { return '查询失败: ' + e.message; }
 }
 async function triggerRetryN(env, n) {
@@ -968,7 +968,8 @@ async function processUpdateCore(update, env, waitFn) {
       // 代理模式：≤20MB 不转存 R2，r2_url 存 /file/tg/<id>，访问时 worker 实时拉 TG 直链（省 R2 存储）
       if (rid && (await getProxyMode(env)) === 1 && (fi.fileSize || 0) <= 20 * 1024 * 1024) {
         try {
-          await env.D1_DB.prepare("UPDATE files SET r2_url=?, storage_key='', processing_state='completed', progress_bytes=0, total_bytes=? WHERE id=?").bind('/file/tg/' + rid, fi.fileSize || 0, rid).run();
+          // 代理 URL 带后缀名（如 /file/tg/123.jpg），方便识别类型/下载文件名
+          await env.D1_DB.prepare("UPDATE files SET r2_url=?, storage_key='', processing_state='completed', progress_bytes=0, total_bytes=? WHERE id=?").bind('/file/tg/' + rid + '.' + fileExtOf(fi.fileName, fi.type), fi.fileSize || 0, rid).run();
         } catch (e) { console.error('proxy mark:', e.message); }
         scheduleBatchRef(env, chatId, rid, waitFn);
         return { ok: true, queued: true, fileId: rid, proxied: true };
@@ -2075,7 +2076,8 @@ async function handleFiles(request, env) {
 //   link_type   'r2'=已有 R2（同时代理也可用）/ 'proxy'=仅代理 / 'both'=两者都给
 function decorateLinks(f, origin, proxyOnly) {
   const realR2 = f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0;
-  const proxyUrl = origin + '/file/tg/' + f.id;
+  // 代理链接带后缀名（如 /file/tg/123.jpg），便于识别类型与下载文件名
+  const proxyUrl = origin + '/file/tg/' + f.id + '.' + fileExtOf(f.file_name, f.file_type);
   if (realR2) {
     f.link_type = 'both';          // r2_url + proxy_url 都有
     f.proxy_url = proxyUrl;
@@ -3920,3 +3922,11 @@ async function handleDashboard(env) {
 // json/cors/fmtSize/genHash 已移入 src/util.js（顶部 import）
 
 function guessExt(ct, fn) { const e = fn.split('.').pop().toLowerCase(); if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'mp3', 'ogg', 'pdf', 'zip', 'txt'].includes(e)) return e; if (ct?.includes('jpeg')) return 'jpg'; if (ct?.includes('png')) return 'png'; if (ct?.includes('gif')) return 'gif'; if (ct?.includes('webp')) return 'webp'; if (ct?.includes('video')) return 'mp4'; if (ct?.includes('audio')) return 'mp3'; if (ct?.includes('pdf')) return 'pdf'; return 'bin'; }
+
+// 宽松扩展名推断（任意扩展名都保留，用于代理 URL 带后缀，如 /file/tg/123.jpg）
+function fileExtOf(fileName, type) {
+  const m = /\.([a-zA-Z0-9]{1,10})$/.exec(String(fileName || ''));
+  if (m) return m[1].toLowerCase();
+  const map = { photo: 'jpg', video: 'mp4', audio: 'mp3', voice: 'ogg', document: 'bin' };
+  return map[type] || 'bin';
+}
