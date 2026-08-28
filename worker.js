@@ -512,6 +512,7 @@ async function aiComplete(env, userText) {
   for (let round = 0; round < 3; round++) {
     const resp = await fetchAI(cfg, msgs);
     if (!resp) return { ok: false, error: 'AI 服务调用失败，请检查后台 AI 配置（Base/Key/模型）' };
+    if (resp._err) return { ok: false, error: 'AI 服务调用失败：' + resp._err };
     const choice = resp.choices && resp.choices[0];
     const m = choice && choice.message;
     if (!m) return { ok: false, error: 'AI 返回异常' };
@@ -541,7 +542,7 @@ async function callAIManage(chatId, msgId, text, env) {
   const parts = finalText.match(/[\s\S]{1,3800}/g) || [finalText];
   for (const pt of parts) await replyTextPlain(chatId, msgId, pt, env);
 }
-// 后台测试：让 AI 给指定 chat 发一条测试消息
+// 后台测试：先验证 AI 可用（具体错误直接返回前端），成功再把 AI 回复发到目标 chat
 async function handleAdminTestAI(request, env) {
   try {
     const cfg = await getAIConfig(env);
@@ -549,8 +550,12 @@ async function handleAdminTestAI(request, env) {
     const b = await request.json().catch(function(){ return {}; });
     const chatId = String(b.chat_id || '').trim();
     if (!chatId) return json({ ok: false, error: '缺少 chat_id（测试目标）' });
-    const p = callAIManage(chatId, 0, '测试消息：请用一句话介绍你自己，并说明你可以帮管理员做什么。', env).catch(function(e){ console.error('ai test:', e.message); });
-    if (b.wait) await p; // 测试默认等待完成（前端可传 wait=true）
+    const r = await aiComplete(env, '测试消息：请用一句话介绍你自己，并说明你可以帮管理员做什么。');
+    if (!r.ok) return json({ ok: false, error: r.error }); // 透传具体错误（HTTP 状态码/模型/配额问题）
+    if (env.TG_BOT_TOKEN && r.text) {
+      const parts = String(r.text).match(/[\s\S]{1,3800}/g) || [r.text];
+      for (const pt of parts) await replyTextPlain(chatId, 0, pt, env);
+    }
     return json({ ok: true, data: { sent: true, chat_id: chatId } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -573,9 +578,14 @@ async function fetchAI(cfg, msgs) {
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
       body: JSON.stringify({ model: cfg.model || 'deepseek-chat', messages: msgs, tools: AI_TOOLS, tool_choice: 'auto' })
     });
-    if (!r.ok) { console.log('ai http:', r.status, String(await r.text()).slice(0, 200)); return null; }
+    if (!r.ok) {
+      const tb = String(await r.text()).slice(0, 220);
+      console.log('ai http:', r.status, tb);
+      // 返回具体错误（HTTP 状态码 + 响应体），供测试/会话定位 key、模型、配额问题
+      return { _err: 'HTTP ' + r.status + ' ' + tb };
+    }
     return await r.json();
-  } catch (e) { console.log('ai fetch:', e.message); return null; }
+  } catch (e) { console.log('ai fetch:', e.message); return { _err: '网络错误 ' + e.message }; }
 }
 async function aiRunTool(name, args, env) {
   if (name === 'get_stats') return await aiGetStatsText(env);

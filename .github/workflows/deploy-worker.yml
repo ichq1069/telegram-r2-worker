@@ -48,8 +48,10 @@ jobs:
         run: |
           echo "$TG_BOT_TOKEN" | npx --yes wrangler secret put TG_BOT_TOKEN
           echo "$API_KEY" | npx --yes wrangler secret put API_KEY
-          # CF_API_TOKEN 可选（R2 官方用量）；未配置时跳过，避免 secret put 读空值失败
-          if [ -n "$CF_API_TOKEN" ]; then echo "$CF_API_TOKEN" | npx --yes wrangler secret put CF_API_TOKEN; else echo "CF_API_TOKEN not set, skip (R2 usage falls back to estimate)"; fi
+          # CF_API_TOKEN（R2 官方用量查询）未单独配置时复用 CLOUDFLARE_API_TOKEN（权限包含 R2 Read）
+          if [ -n "$CF_API_TOKEN" ]; then echo "$CF_API_TOKEN" | npx --yes wrangler secret put CF_API_TOKEN;
+          elif [ -n "$CLOUDFLARE_API_TOKEN" ]; then echo "$CLOUDFLARE_API_TOKEN" | npx --yes wrangler secret put CF_API_TOKEN;
+          else echo "CF_API_TOKEN not set, skip (R2 usage falls back to estimate)"; fi
 
       # secrets 写入后再次部署，确保机密随最新版本一起上线
       - name: Redeploy with secrets
