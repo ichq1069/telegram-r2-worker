@@ -463,6 +463,11 @@ async function handleAdminR2Usage(env) {
     const q = await env.D1_DB.prepare("SELECT key, value FROM settings WHERE key IN ('r2_class_a','r2_class_b','r2_plan')").all();
     (q.results || []).forEach(function(r) { map[r.key] = r.value; });
     const estBytes = (s && s.s) || 0;
+    // 拆解估算：代理文件（不入 R2，仅存直链）与去重可省（同 storage_key 多引用）
+    const estProxy = await env.D1_DB.prepare("SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL AND r2_url LIKE '/file/tg/%'").first();
+    const estR2 = await env.D1_DB.prepare("SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed'").first();
+    const dupRows = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM (SELECT storage_key FROM files WHERE deleted_at IS NULL AND storage_key!='' AND processing_state='completed' GROUP BY storage_key HAVING COUNT(*)>1)").all();
+    const dupFileN = (dupRows && dupRows.results && dupRows.results[0]) ? dupRows.results[0].c : 0;
     const localA = parseInt(map.r2_class_a) || 0;
     const localB = parseInt(map.r2_class_b) || 0;
     // 套餐决定配额：free=CF 免费版（10GB 存储 / 100 万 A 类 / 1000 万 B 类）；paid=付费版（不限，0 表示不限）
@@ -480,6 +485,10 @@ async function handleAdminR2Usage(env) {
       plan: plan,
       storage_bytes: storageBytes,
       storage_estimate: estBytes,
+      est_proxy_bytes: (estProxy && estProxy.s) || 0,
+      est_proxy_files: (estProxy && estProxy.c) || 0,
+      est_r2_files: (estR2 && estR2.c) || 0,
+      dup_files: dupFileN,
       object_count: cfOk && cf.object_count !== undefined ? cf.object_count : null,
       storage_source: cfOk ? 'cf' : 'estimate',
       cf_error: cfOk ? '' : ((cf && cf._err) || 'cf unavailable'),

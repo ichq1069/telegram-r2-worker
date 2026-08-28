@@ -1805,7 +1805,7 @@ async function loadStats() {
     '<div class="stat-card"><div class="value">' + d.total_files + '</div><div class="label">入库总数 (含未转存)</div></div>' +
     '<div class="stat-card" style="border-color:#dcfce7;background:#f0fdf4"><div class="value">' + (d.completed_files||0) + ' / ' + d.total_files + '</div><div class="label">已转存 / 总数</div></div>' +
     '<div class="stat-card"><div class="value">' + (d.unsaved_files||0) + '</div><div class="label">未转存</div></div>' +
-    '<div class="stat-card"><div class="value">' + d.total_size_formatted + '</div><div class="label">存储空间</div></div>' +
+    '<div class="stat-card"><div class="value">' + d.total_size_formatted + '</div><div class="label">库内文件合计 (Σ大小，含代理/重复)</div></div>' +
     '<div class="stat-card"><div class="value">' + d.today_uploads + '</div><div class="label">今日上传</div></div>' +
     '<div class="stat-card"><div class="value">' + d.month_uploads + '</div><div class="label">本月上传</div></div>' +
     '<div class="stat-card" style="border-color:#c7d2fe;background:#eef2ff"><div class="value">' + (d.pool_total || 0) + '</div><div class="label">随机库总数</div></div>' +
@@ -1854,8 +1854,13 @@ async function loadR2UsageCards() {
     var capSub = (d.storage_source === 'cf' ? 'CF 官方实时' : '估算(Σ文件大小)') + (d.capacity_bytes ? ' · 容量 ' + capTxt + ' · 剩余 ' + gb(d.storage_remaining) : ' · 付费版不限容量');
     var aPct = d.class_a_quota ? d.class_a_pct : 0;
     var bPct = d.class_b_quota ? d.class_b_pct : 0;
+    var estSub = 'Σ库内文件';
+    if (d.est_r2_files) estSub += ' · 转存 ' + fmtNum(d.est_r2_files) + ' 个';
+    if (d.est_proxy_files) estSub += ' · 代理 ' + fmtNum(d.est_proxy_files) + ' 个(不入R2)';
+    if (d.dup_files) estSub += ' · 重复 ' + fmtNum(d.dup_files) + ' 份';
     el.innerHTML = el.innerHTML +
       card('R2 存储用量 ' + capPctTxt, gb(d.storage_bytes), capSub, capPct) +
+      card('库内文件合计', gb(d.storage_estimate), estSub, 0) +
       card('A 类操作 ' + (d.class_a_quota ? d.class_a_pct + '%' : '—'), fmtNum(d.class_a), d.class_a_quota ? '配额 ' + fmtNum(d.class_a_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_a_quota - d.class_a)) : '付费版不限', aPct) +
       card('B 类操作 ' + (d.class_b_quota ? d.class_b_pct + '%' : '—'), fmtNum(d.class_b), d.class_b_quota ? '配额 ' + fmtNum(d.class_b_quota) + ' · 剩余 ' + fmtNum(Math.max(0, d.class_b_quota - d.class_b)) : '付费版不限', bPct);
     // 超过 50% / 90% 弹窗提示（每个阈值只弹一次，localStorage 记忆；付费版不限不提示）
