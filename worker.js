@@ -1,5 +1,5 @@
 /**
- * Telegram Bot → R2 + D1 Worker v6
+ * Telegram Bot → R2 + D1 Worker v7
  * Features: Bot commands, Custom API, Webhook, Dashboard, Large file support
  * 拆模块：工具/db/告警/备份/限流在 src/ 目录，主体逻辑仍在本文件
  */
@@ -36,7 +36,7 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname;
     const m = request.method;
-    if (m === 'GET' && p === '/health') return json({ ok: true, time: new Date().toISOString(), version: 'v6' });
+    if (m === 'GET' && p === '/health') return json({ ok: true, time: new Date().toISOString(), version: 'v7' });
     if (m === 'POST' && p === '/webhook') return handleWebhook(request, env, ctx);
     if (m === 'GET' && p === '/dashboard') return handleDashboard(env);
     if (m === 'GET' && p === '/docs') return handleDocs();
@@ -1197,7 +1197,7 @@ async function handleRetryCommand(chatId, env, waitFn, limit) {
 // 命令：服务状态
 async function handleHealthCommand(chatId, env) {
   let lines = ['🛰 **服务状态**'];
-  lines.push('· Worker 版本: v6');
+  lines.push('· Worker 版本: v7');
   if (env.D1_DB) {
     try { const c = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files').first(); lines.push('· 数据库 D1: ✅ 正常（' + (c?.c || 0) + ' 条）'); }
     catch (e) { lines.push('· 数据库 D1: ❌ ' + e.message); }
@@ -5596,7 +5596,7 @@ async function handleDashboard(env) {
       + '<div class="card"><div class="ct2">Month</div><div class="sv">' + (mo?.c || 0) + '</div></div>';
   } catch (e) {}
   return new Response('<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dashboard</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:system-ui;background:#0f172a;color:#e2e8f0}.hd{background:linear-gradient(135deg,#1e3a5f,#0f172a);padding:20px 30px;border-bottom:1px solid #1e293b}.hd h1{font-size:22px}.hd p{color:#94a3b8;margin-top:5px}.ct{max-width:1200px;margin:0 auto;padding:20px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:15px;margin-bottom:20px}.card{background:#1e293b;border-radius:10px;padding:18px;border:1px solid #334155}.ct2{font-size:13px;color:#94a3b8;text-transform:uppercase;margin-bottom:10px}.sv{font-size:28px;font-weight:700;color:#60a5fa}.btn{background:#3b82f6;color:#fff;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px}.btn:hover{background:#2563eb}.sg{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}.si{display:flex;align-items:center;gap:10px;padding:12px;background:#0f172a;border-radius:8px}.dot{width:10px;height:10px;border-radius:50%}.dot.ok{background:#22c55e}.dot.err{background:#ef4444}.dot.ld{background:#f59e0b;animation:p 1s infinite}@keyframes p{0%,100%{opacity:1}50%{opacity:.5}}.si h3{font-size:13px}.si p{font-size:11px;color:#64748b;margin-top:2px}.lg{background:#0f172a;border-radius:8px;padding:12px;max-height:200px;overflow-y:auto;font-family:monospace;font-size:11px;line-height:1.8}.le{color:#94a3b8}.le.ok{color:#22c55e}.le.err{color:#ef4444}.lt{color:#475569}</style></head><body>'
-    + '<div class="hd"><h1>TG Bot Dashboard v6</h1><p>R2 + D1 + Custom Bot API</p></div>'
+    + '<div class="hd"><h1>TG Bot Dashboard v7</h1><p>R2 + D1 + Custom Bot API</p></div>'
     + '<div class="ct"><div class="grid">' + sh + '</div>'
     + '<div class="card" style="margin-bottom:20px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><h3 style="font-size:16px">Status</h3><button class="btn" onclick="go()" id="rb">Refresh</button></div>'
     + '<div class="sg"><div class="si"><div class="dot ld" id="d-h"></div><div><h3>Health</h3><p id="m-h">...</p></div></div>'
