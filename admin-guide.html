@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>管理员使用手册 · Bot Admin</title>
+<style>
+:root {
+  --bg: #f0f2f5;
+  --card: #ffffff;
+  --primary: #4f6ef7;
+  --primary-hover: #3b5de7;
+  --text: #1e293b;
+  --text-secondary: #64748b;
+  --border: #e2e8f0;
+  --success: #22c55e;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.65; }
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Header */
+.hd { background: linear-gradient(135deg, #4f6ef7, #7c3aed); color: #fff; padding: 34px 24px 26px; position: relative; }
+.hd-in { max-width: 1080px; margin: 0 auto; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.hd .logo { width: 52px; height: 52px; background: rgba(255,255,255,.18); border-radius: 14px; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; }
+.hd h1 { font-size: 22px; font-weight: 700; }
+.hd p { font-size: 13px; opacity: .88; margin-top: 2px; }
+.hd .back { margin-left: auto; background: rgba(255,255,255,.16); color: #fff; padding: 8px 16px; border-radius: 8px; font-size: 13px; border: none; cursor: pointer; }
+.hd .back:hover { background: rgba(255,255,255,.28); }
+
+.layout { max-width: 1080px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 220px 1fr; gap: 20px; }
+
+/* Side nav */
+.sidenav { position: sticky; top: 20px; align-self: start; background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px; max-height: calc(100vh - 40px); overflow-y: auto; }
+.sidenav .nav-title { font-size: 11px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .5px; padding: 8px 10px 4px; }
+.sidenav a { display: block; padding: 7px 10px; border-radius: 8px; font-size: 13px; color: var(--text-secondary); }
+.sidenav a:hover { background: #f1f5f9; color: var(--text); text-decoration: none; }
+.sidenav a.sec { font-weight: 600; color: var(--text); margin-top: 4px; }
+
+/* Content */
+.content { min-width: 0; }
+.section { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); padding: 24px; margin-bottom: 20px; scroll-margin-top: 16px; }
+.section h2 { font-size: 19px; font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+.section h2 .no { width: 28px; height: 28px; border-radius: 8px; background: var(--primary); color: #fff; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.section .desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; }
+.section h3 { font-size: 15px; font-weight: 600; margin: 20px 0 8px; padding-top: 14px; border-top: 1px solid #f1f5f9; }
+.section h3:first-of-type { border-top: none; padding-top: 0; }
+.section p { font-size: 13.5px; margin-bottom: 8px; }
+.section ul, .section ol { margin: 0 0 10px 20px; font-size: 13.5px; }
+.section li { margin-bottom: 4px; }
+.section li b { font-weight: 600; }
+code { background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 5px; padding: 1px 6px; font-size: 12.5px; font-family: 'SF Mono', 'Fira Code', Consolas, monospace; }
+pre { background: #1e293b; color: #e2e8f0; border-radius: 8px; padding: 14px; font-size: 12.5px; overflow-x: auto; margin: 10px 0; line-height: 1.6; font-family: 'SF Mono', 'Fira Code', Consolas, monospace; }
+pre code { background: none; border: none; color: inherit; padding: 0; }
+
+/* Callout */
+.note { border-radius: 8px; padding: 12px 14px; font-size: 13px; margin: 12px 0; }
+.note.blue { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+.note.green { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+.note.yellow { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+.note.red { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+.note b { font-weight: 600; }
+
+/* Table */
+.tbl-wrap { overflow-x: auto; margin: 10px 0; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 9px 12px; color: var(--text-secondary); font-weight: 600; font-size: 12px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+td { padding: 9px 12px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+td code { white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.badge-blue { background: #dbeafe; color: #2563eb; }
+.badge-green { background: #dcfce7; color: #16a34a; }
+.badge-yellow { background: #fef9c3; color: #ca8a04; }
+.badge-red { background: #fee2e2; color: #dc2626; }
+.badge-ghost { background: #f1f5f9; color: #64748b; }
+.badge-purple { background: #ede9fe; color: #7c3aed; }
+
+.footer { text-align: center; color: var(--text-secondary); font-size: 12px; padding: 20px 0 40px; }
+
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  .sidenav { position: static; max-height: none; display: flex; flex-wrap: wrap; gap: 2px; padding: 8px; }
+  .sidenav .nav-title, .sidenav a { display: inline-block; padding: 6px 10px; }
+  .hd .back { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+
+<div class="hd">
+  <div class="hd-in">
+    <div class="logo">B</div>
+    <div>
+      <h1>管理员使用手册</h1>
+      <p>Telegram 图库 Bot · 后台功能全面说明</p>
+    </div>
+    <button class="back" onclick="location.href='/admin'">返回管理后台</button>
+  </div>
+</div>
+
+<div class="layout">
+  <nav class="sidenav">
+    <div class="nav-title">目录</div>
+    <a href="#s1">1. 快速上手</a>
+    <a href="#s2">2. 级别体系</a>
+    <a href="#s3">3. 概览</a>
+    <a href="#s4">4. Tele 文件</a>
+    <a href="#s5">5. 快速打标</a>
+    <a href="#s6">6. 回收站与孤儿</a>
+    <a href="#s7">7. 未转存</a>
+    <a href="#s8">8. 共享库</a>
+    <a href="#s9">9. 私密库</a>
+    <a href="#s10">10. 标签库</a>
+    <a href="#s11">11. 接口生成</a>
+    <a href="#s12">12. 密钥与限流</a>
+    <a href="#s13">13. 用户统计</a>
+    <a href="#s14">14. 轮播展示页</a>
+    <a href="#s15">15. 机器人命令</a>
+    <a href="#s16">16. Bot API 与快捷键盘</a>
+    <a href="#s17">17. 运维设置</a>
+    <a href="#s18">18. 机器人使用</a>
+    <a href="#s19">19. 公开 API</a>
+    <a href="#s20">20. 部署与版本</a>
+  </nav>
+
+  <div class="content">
+
+    <!-- 1 快速上手 -->
+    <div class="section" id="s1">
+      <h2><span class="no">1</span>快速上手</h2>
+      <p class="desc">从打开后台到完成第一个管理动作，全程不到一分钟。</p>
+      <ol>
+        <li><b>访问地址</b>：在浏览器打开 <code>https://&lt;worker域名&gt;/admin</code>。</li>
+        <li><b>登录</b>：输入后台 API Key（部署时配置的 <code>API_KEY</code>，即 GitHub Secret 中的 <code>API_KEY</code>）。Key 也可以写成 URL 参数 <code>/admin?api_key=xxx</code> 自动登录。</li>
+        <li><b>查看状态</b>：登录后默认进入「概览」，可看到 D1 数据库、R2 存储、Worker 运行与 Webhook 状态。</li>
+        <li><b>日常维护</b>：Tele 群里的文件会自动入库并转存，管理员的日常工作主要是「快速打标」给文件分类、在「共享库」维护对外展示的图片。</li>
+      </ol>
+      <div class="note blue"><b>入口提示</b>：后台每个顶部标签页对应一个功能模块，共 15 个。本手册按标签页顺序逐一说明，并补充机器人侧使用与公开 API 说明。</div>
+    </div>
+
+    <!-- 2 级别体系 -->
+    <div class="section" id="s2">
+      <h2><span class="no">2</span>级别体系</h2>
+      <p class="desc">整个系统的内容权限模型基于「级别对等」，理解它才能正确使用共享库、私密库与密钥。</p>
+      <table>
+        <thead><tr><th>级别</th><th>含义</th><th>谁可访问</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge badge-ghost">pt</span></td><td>普通</td><td>所有密钥（默认）</td></tr>
+          <tr><td><span class="badge badge-blue">vip</span></td><td>会员</td><td>vip 及以上密钥</td></tr>
+          <tr><td><span class="badge badge-purple">svip</span></td><td>超级会员</td><td>svip 及以上密钥</td></tr>
+          <tr><td><span class="badge badge-yellow">vvip</span></td><td>最高级（含私密库）</td><td>仅 vvip 密钥</td></tr>
+        </tbody>
+      </table>
+      <div class="note green"><b>级别对等原则</b>：低级别密钥看不到高级别内容。例如 <code>vip</code> 密钥请求公开接口时，只会返回 <code>pt</code> 和 <code>vip</code> 级别的文件，绝不会输出 <code>svip</code>/<code>vvip</code> 内容。</div>
+      <div class="note yellow"><b>私密库</b>：私密库内容等同 <code>vvip</code>，只出现在私密库页面，不进入共享库，也不参与任何公开接口 / 画廊 / 轮播输出，仅 vvip 密钥可访问。</div>
+    </div>
+
+    <!-- 3 概览 -->
+    <div class="section" id="s3">
+      <h2><span class="no">3</span>概览</h2>
+      <p class="desc">系统运行状态的一站式看板，包含四大块。</p>
+      <h3>D1 数据库</h3>
+      <p>文件、共享库、密钥等全部元数据的存储情况：总记录数、各表行数分布。</p>
+      <h3>R2 对象存储</h3>
+      <p>实际文件存储：已用容量、对象数量、按套餐配额的使用比例。若配置了 <code>CF_API_TOKEN</code>（R2 读取权限），这里显示 Cloudflare 官方真实用量；未配置则用本地估算。</p>
+      <h3>Worker 运行</h3>
+      <p>Worker 请求计数、今日处理量、请求趋势（最近 14 天），以及用量预测（基于今日速率线性外推，仅供参考）。</p>
+      <h3>Telegram Webhook</h3>
+      <p>机器人消息接收通道状态。显示 webhook 是否挂载、URL 是否正确、待处理更新数。<b>若显示未挂载，点「修复」按钮自动重新设置 webhook。</b></p>
+      <div class="note blue"><b>提示</b>：文件类型分布与热门群组两块卡片能快速了解内容构成与来源分布。</div>
+    </div>
+
+    <!-- 4 Tele 文件 -->
+    <div class="section" id="s4">
+      <h2><span class="no">4</span>Tele 文件</h2>
+      <p class="desc">Telegram 群/频道里发过来的原始文件库，是共享库和私密库的内容来源。</p>
+      <h3>传输进度</h3>
+      <p>实时显示正在转存的文件队列、进度条、成功/失败统计。文件消息先秒回 <code>#id</code> 收据，下载上传在后台异步完成。</p>
+      <h3>存储去重</h3>
+      <p>对文件计算 MD5，把内容完全相同的重复文件识别出来。</p>
+      <ul>
+        <li><b>扫描并清理</b>：重复文件移入回收站（可恢复），R2 对象仍保留。</li>
+        <li><b>扫描并彻底删除</b>：直接删除重复文件及其 R2 对象，<b>不可恢复</b>，务必先「查看重复分组」核对。</li>
+      </ul>
+      <p>查重已后台化：定时任务每 5 分钟自动扫描一批，点按钮可立即多扫一批加速，不会超时。</p>
+      <h3>存储压缩（WebP）</h3>
+      <p>把已转存的 JPEG/PNG 图片压缩为 WebP（质量 80，预计省 50-70% 存储）。需要账号启用 Cloudflare Image Resizing，未启用时运行会明确提示。<span class="badge badge-red">注意</span> 压缩后不可还原原图。回收站中超过 30 天的文件由定时任务自动硬清（含 R2 对象），无需手动。</p>
+      <h3>上传 / 导入</h3>
+      <p>手动给文件库加内容：选择入库级别与标签后，可本地上传（R2）、或粘贴外链 URL 逐行导入（重复自动跳过）。入库后文件参与公开 API 输出（按级别对等过滤）。</p>
+      <h3>文件管理</h3>
+      <p>网格/列表两种视图，支持按文件名/Caption/标签搜索、按类型 / 导入状态 / 来源筛选。勾选后可批量操作：</p>
+      <ul>
+        <li><b>删除选中</b>：移入回收站（可恢复）。</li>
+        <li><b>复制直链 / 代理链接 / 双链接</b>：一键复制 R2 直链或 <code>/file/tg/&lt;id&gt;</code> 代理链接。</li>
+        <li><b>打标签</b>：批量给文件加标签。</li>
+        <li><b>加入共享库</b>：把 Telegram 文件转入共享库（自动带原级别与标签）。</li>
+        <li><b>转入私密库</b>：复制到私密库（等同 vvip）。</li>
+        <li><b>忽略导入 / 取消忽略</b>：批量导入时跳过或恢复。</li>
+      </ul>
+    </div>
+
+    <!-- 5 快速打标 -->
+    <div class="section" id="s5">
+      <h2><span class="no">5</span>快速打标</h2>
+      <p class="desc">给尚未分类的文件快速补标签的高效工具，是全系统最常用的日常操作。</p>
+      <p>队列 = Tele 文件库中未入共享库/私密库的全部文件。界面为「中间大图 + 左右各两张半显预览」，鼠标键盘可连续操作：</p>
+      <ul>
+        <li><b>点标签</b>：给当前文件打上对应标签。</li>
+        <li><b>已打标 · 下一张</b>：确认并跳到下一张。</li>
+        <li><b>跳过</b>：不处理当前文件（从队列移除）。</li>
+        <li><b>转入私密库</b>：当前文件复制到私密库。</li>
+      </ul>
+      <p>下方可给当前文件移除已有标签、点候选标签打标，或添加自定义标签（新增标签会进入候选列表供后续复用）。</p>
+      <div class="note green"><b>自动入共享库</b>：虚线边框的标签是「自动入共享库」标签。文件一旦被打上这类标签，就自动转入共享库，无需手动操作。</div>
+    </div>
+
+    <!-- 6 回收站与孤儿 -->
+    <div class="section" id="s6">
+      <h2><span class="no">6</span>回收站与孤儿</h2>
+      <p class="desc">软删除与存储残留的清理中心。</p>
+      <h3>回收站（软删除，可恢复）</h3>
+      <p>从任何位置删除的文件都会先进回收站。支持「全部恢复」或「清空回收站」。超过 30 天的回收站文件由定时任务自动硬删（含 R2 对象）。</p>
+      <h3>R2 孤儿对象</h3>
+      <p>R2 中存在但 D1 无任何引用的残留对象（通常是删除流程中断造成的）。「扫描孤儿」列出，核对后「清理孤儿」删除，<b>清理不可恢复</b>。</p>
+    </div>
+
+    <!-- 7 未转存 -->
+    <div class="section" id="s7">
+      <h2><span class="no">7</span>未转存</h2>
+      <p class="desc">已入库但转存未完成的记录。</p>
+      <p>消息先入库（秒回 <code>#id</code>），文件下载/上传异步进行。这里列出所有已入库但未完成的记录：</p>
+      <ul>
+        <li><b>全部重试</b>：手动重试所有失败/未完成项。</li>
+        <li>定时任务每 5 分钟也会自动重试 <code>pending</code> / <code>failed</code> 记录。</li>
+        <li>超过 20MB 且未配置本地 Bot API 的文件会直接失败。</li>
+      </ul>
+    </div>
+
+    <!-- 8 共享库 -->
+    <div class="section" id="s8">
+      <h2><span class="no">8</span>共享库</h2>
+      <p class="desc">对外展示的核心图库，供公开接口 / 画廊 / 轮播 / Inline 搜图使用。</p>
+      <h3>添加图片</h3>
+      <p>支持四种存储源，先选源再上传或导入：</p>
+      <table>
+        <thead><tr><th>存储源</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge badge-green">本地上传 (R2)</span></td><td>图片存入你自己的 R2，无数量限制、永不过期，推荐首选。</td></tr>
+          <tr><td><span class="badge badge-blue">Zupimages</span></td><td>用挂件上传到 Zupimages 后，粘贴图库页/直链一键抓取导入。</td></tr>
+          <tr><td><span class="badge badge-purple">Postimages</span></td><td>填入 Postimages API Key，上传到外部图床（免费每月 1000 次）。</td></tr>
+          <tr><td><span class="badge badge-ghost">外链链接</span></td><td>直接粘贴图片 URL 导入，支持预设标签点选、标题。</td></tr>
+        </tbody>
+      </table>
+      <p>所有来源都可设置入库级别（默认 pt），标签通用。来源与外链图分开管理。</p>
+      <h3>共享库内容</h3>
+      <p>按标题/标签/来源/启用状态筛选。勾选后可批量：打标签、设置级别、转入私密库、批量启用/停用、复制链接、批量删除。停用的图片不会出现在任何对外输出中。</p>
+      <div class="note blue"><b>来源说明</b>：<code>manual</code> = 手动上传/外链导入；<code>tg</code> = 从 Telegram 文件「加入共享库」导入。</div>
+    </div>
+
+    <!-- 9 私密库 -->
+    <div class="section" id="s9">
+      <h2><span class="no">9</span>私密库</h2>
+      <p class="desc">最高级别（vvip）专属内容，严格与公开渠道隔离。</p>
+      <p>支持与共享库相同的四种存储源上传。内容仅私密库页面可见：</p>
+      <ul>
+        <li>不进入共享库，不参与公开接口 / 画廊 / 轮播 / Inline 搜图。</li>
+        <li>仅 <code>vvip</code> 密钥可访问。</li>
+      </ul>
+      <p>勾选后支持批量操作：<b>移入共享库</b>（转为公开内容）、复制链接、批量删除。</p>
+      <div class="note yellow"><b>入口</b>：也可在「文件」页勾选文件点「转入私密库」，或「加入共享库」弹窗里选「加入私密库」。</div>
+    </div>
+
+    <!-- 10 标签库 -->
+    <div class="section" id="s10">
+      <h2><span class="no">10</span>标签库</h2>
+      <p class="desc">标签是内容的组织核心，这里统一维护。</p>
+      <ul>
+        <li><b>预设标签</b>：上传时一键点选的常用标签，保证命名统一。可添加、移除。</li>
+        <li><b>全部已用标签</b>：系统里出现过的所有标签及关联图片数。可把常用标签「加入预设」。</li>
+        <li><b>⚡ 自动入共享库</b>：给标签开启后，文件被打上该标签即自动进入共享库（快速打标页对应虚线标签）。</li>
+      </ul>
+    </div>
+
+    <!-- 11 接口生成 -->
+    <div class="section" id="s11">
+      <h2><span class="no">11</span>接口生成</h2>
+      <p class="desc">可视化生成公开 JSON 接口 URL，复制即可对接第三方。</p>
+      <p>点选条件自动拼出接口地址：</p>
+      <ul>
+        <li><b>API 密钥</b>：选择「密钥」页生成好的密钥。</li>
+        <li><b>文件类型 / 数量 / 模式</b>：模式支持共享库列表、随机取图、上传文件。</li>
+        <li><b>关键词 / 标签筛选</b>：进一步收窄返回内容（多标签 = 命中任意一个即可）。</li>
+      </ul>
+      <p>生成后可直接复制、打开测试，或「生成文档」得到接口调用示例。</p>
+    </div>
+
+    <!-- 12 密钥与限流 -->
+    <div class="section" id="s12">
+      <h2><span class="no">12</span>密钥与限流</h2>
+      <p class="desc">第三方程序访问公开接口的凭证与保护。</p>
+      <h3>API 密钥管理</h3>
+      <p>生成密钥时填写用途说明、到期日期（留空 = 永久）、密钥级别。密钥级别决定可获取内容级别（级别对等，见第 2 节）。密钥列表可复制、停用/启用、删除、改级别与有效期。</p>
+      <p>密钥典型用法：</p>
+      <pre>GET /api/v1/files?api_key=密钥&tags=风景,美女&type=photo&limit=20
+GET /api/v1/random?api_key=密钥&tags=风景&count=1
+GET /gallery?api_key=密钥
+POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</pre>
+      <h3>公开接口限流</h3>
+      <p>设置每分钟每个密钥最多请求数，防止密钥被滥用打爆 Worker 免费额度。超过限制返回 <code>429</code>；关闭限流则所有密钥不限流。</p>
+    </div>
+
+    <!-- 13 用户统计 -->
+    <div class="section" id="s13">
+      <h2><span class="no">13</span>用户统计</h2>
+      <p class="desc">Telegram 用户维度统计：用户 ID、用户名、昵称、文件数、总大小、最近活跃。了解谁在用、贡献了多少内容。</p>
+    </div>
+
+    <!-- 14 轮播展示页 -->
+    <div class="section" id="s14">
+      <h2><span class="no">14</span>轮播展示页</h2>
+      <p class="desc">控制 <code>/show</code> 展示页（共享库大屏展示）。</p>
+      <ul>
+        <li><b>基础</b>：展示页开关、自动切换秒数、每次拉取数量、类型、标签筛选、排序（随机 / ID 倒序）。</li>
+        <li><b>节目表</b>：每个节目自带图片规则（固定图片 / 每日随机换图），支持按标签/类型/来源过滤 + 周期选择；可勾选「自动换节目」到点自动加载。</li>
+        <li><b>显示项</b>：标题 / 标签 / 序号开关。</li>
+        <li><b>统计代码</b>：注入百度统计 / Google Analytics 等脚本到展示页底部。</li>
+      </ul>
+      <p>保存后点「打开展示页」预览效果。</p>
+    </div>
+
+    <!-- 15 机器人命令 -->
+    <div class="section" id="s15">
+      <h2><span class="no">15</span>机器人命令</h2>
+      <p class="desc">集中管理机器人的命令：启用/停用、自定义回复内容、配置菜单按钮。</p>
+      <p>内置命令与自定义命令统一在这里维护：</p>
+      <ul>
+        <li>停用的命令（含内置）机器人在群里直接拒绝。</li>
+        <li>自定义命令可设置触发命令、回复内容、菜单按钮、是否启用。</li>
+        <li>菜单按钮支持内置操作（<code>retry_all</code> 重试全部 / <code>retry_recent</code> / <code>unsaved_count</code> / <code>count</code> / <code>stats</code> / <code>health</code> / <code>help</code> / <code>pending</code>）或直接回复文本（<code>text:xxx</code>）。</li>
+      </ul>
+      <p>机器人内置命令一览（见第 18 节「机器人使用」）。</p>
+    </div>
+
+    <!-- 16 Bot API 与快捷键盘 -->
+    <div class="section" id="s16">
+      <h2><span class="no">16</span>Bot API 与快捷键盘</h2>
+      <p class="desc">后台直接调用 Telegram Bot API 的调试面板，以及输入栏快捷键盘配置。</p>
+      <h3>Bot API 测试</h3>
+      <p>选择请求方法（发送 / 查询 / 管理 / Inline 搜图，共 21 个方法），填写 JSON 参数后发送。两种模式：</p>
+      <ul>
+        <li><b>Worker 代理</b>：经 <code>/bot/&lt;method&gt;</code> 走 worker 内置代理，无需填 Token。</li>
+        <li><b>官方 API</b>：填 Bot Token 直连 <code>api.telegram.org</code>（Token 仅存浏览器本地）。</li>
+      </ul>
+      <p>常用场景：<code>sendMediaGroup</code> 发相册、<code>answerInlineQuery</code> 测试 Inline 搜图、<code>pinChatMessage</code> 置顶、<code>getWebhookInfo</code> 查 webhook。</p>
+      <h3>快捷回复键盘</h3>
+      <p>输入栏下方的纯文本按钮，点按钮等价于发送对应文字。配置按钮文字、启用开关后保存；点「广播到全部聊天」可推送到所有私聊。用户 <code>/start</code> 时自动下发。</p>
+    </div>
+
+    <!-- 17 运维设置 -->
+    <div class="section" id="s17">
+      <h2><span class="no">17</span>运维设置</h2>
+      <p class="desc">数据安全、告警、通知与运行模式，全部在「运维」标签页。</p>
+      <h3>D1 数据备份</h3>
+      <p>「立即备份到 R2」把数据库快照存到 R2 的 <code>backups/</code> 目录，自动保留最近 20 份；或「导出并下载」直接拉到本地。可查看备份列表、删除旧备份。建议定期备份。</p>
+      <h3>转存失败告警</h3>
+      <p>转存失败时 bot 发消息提醒你（5 分钟最多 1 条防刷屏）。填入你的 Telegram 用户 ID 并保存，可发送测试。首次使用：先给 bot 发一条消息，再用 <code>@userinfobot</code> 查出自己的 ID。</p>
+      <h3>事件 Webhook 通知</h3>
+      <p>入库 / 删除 / 转存失败时 POST JSON 到外部 URL，供第三方系统实时联动。可勾选触发事件（空 = 全部）。载荷格式：<code>{"event":"file_imported","ts":"...","data":{...}}</code>。发送失败静默跳过。</p>
+      <h3>转存模式</h3>
+      <ul>
+        <li><b>转存到 R2</b>：占存储，直链稳定（推荐默认）。</li>
+        <li><b>代理模式</b>：新文件不占 R2，直链由 worker 实时从 Telegram 拉取（仅 ≤20MB，视频/大文件仍转存 R2）。只影响开关后的新文件。</li>
+        <li><b>前端仅用代理链接</b>：API <code>display_url</code> / 复制链接一律给 <code>/file/tg/&lt;id&gt;</code> 代理链接，不再给 R2 直链。</li>
+      </ul>
+      <h3>AI 管理助手</h3>
+      <p>开启后，群里普通文本消息（非命令、非文件）交给大模型处理，可问统计、搜索文件、触发重试转存。配置 OpenAI 兼容的 API Base / 模型 / Key / 系统提示词，可向指定 chat 发送测试消息验证 Key 可用。</p>
+      <div class="note yellow"><b>说明</b>：AI 仅在纯文本且呈提问/请求意图时触发，纯媒体消息一律不触发，避免群内刷图反复调 AI 导致 429 限流。</div>
+      <h3>R2 套餐</h3>
+      <p>选择免费版（10GB 存储 + 100 万 A 类 + 1000 万 B 类 / 月）或付费版（不限按量计费），用于概览页配额与超限提醒。A 类 = 写入（上传/转存），B 类 = 读取（访问直链）。</p>
+    </div>
+
+    <!-- 18 机器人使用 -->
+    <div class="section" id="s18">
+      <h2><span class="no">18</span>机器人使用</h2>
+      <p class="desc">面向群成员的日常功能与全部内置命令。</p>
+      <h3>自动入库</h3>
+      <p>往群里发任意文件（图片/视频/文档/音频）即自动入库并转存，秒回 <code>#id</code> 收据，完成后回执更新为永久直链。多张连发（相册）合并为一条收据列出全部编号，单张完成后原地更新。</p>
+      <h3>内置命令</h3>
+      <table>
+        <thead><tr><th>命令</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>/start</code></td><td>欢迎语 + 下发快捷回复键盘</td></tr>
+          <tr><td><code>/help</code></td><td>命令帮助</td></tr>
+          <tr><td><code>/count</code></td><td>查询现有数量</td></tr>
+          <tr><td><code>/pending</code></td><td>查询未转存数量</td></tr>
+          <tr><td><code>/retry</code></td><td>继续完成未转存入库（默认批 8 条，限频 60s）</td></tr>
+          <tr><td><code>/health</code></td><td>服务状态</td></tr>
+          <tr><td><code>/stats</code></td><td>完整统计</td></tr>
+          <tr><td><code>/file &lt;id&gt;</code></td><td>按 ID 获取文件</td></tr>
+          <tr><td><code>/search &lt;关键词&gt;</code></td><td>搜索文件</td></tr>
+          <tr><td><code>/img &lt;标签1,标签2 或 关键词&gt;</code></td><td>从共享库随机抽图发到群里</td></tr>
+        </tbody>
+      </table>
+      <h3>Inline 全局搜图</h3>
+      <p>在任意聊天输入 <code>@机器人 关键词</code>，从共享库全局搜索（标题/标签/URL 模糊匹配），点结果即发图。无结果时自动引导去后台添加。</p>
+      <h3>置顶日报</h3>
+      <p>每日日报自动置顶到群内，并解除旧的置顶日报。</p>
+      <h3>消息撤回</h3>
+      <p>24 小时内撤回已入库的消息，对应文件自动软删、收据消息同步删除。</p>
+      <div class="note green"><b>点按钮 = 发消息</b>：快捷键盘的「查看图库」「帮助」按钮是纯文本按钮，点按等价于输入对应文字（图库 = 查数量，帮助 = 帮助文本）。</div>
+    </div>
+
+    <!-- 19 公开 API -->
+    <div class="section" id="s19">
+      <h2><span class="no">19</span>公开 API</h2>
+      <p class="desc">面向第三方对接的接口汇总。</p>
+      <h3>鉴权</h3>
+      <p>请求头 <code>X-API-Key: your_key</code> 或参数 <code>?api_key=your_key</code>（密钥在后台「密钥」页生成，级别决定可见内容）。</p>
+      <h3>接口列表</h3>
+      <table>
+        <thead><tr><th>接口</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>GET /api/files</code></td><td>文件列表（分页、按类型/群/用户/关键词/日期筛选）</td></tr>
+          <tr><td><code>GET /api/file?id=1</code></td><td>单文件详情（可用 id 或 url）</td></tr>
+          <tr><td><code>GET /api/stats</code></td><td>统计（总量、大小、今日、按类型/群分布）</td></tr>
+          <tr><td><code>GET /api/latest</code></td><td>最新文件</td></tr>
+          <tr><td><code>GET /api/search?q=xxx</code></td><td>搜索文件</td></tr>
+          <tr><td><code>GET /api/by-chat</code></td><td>按群组查询</td></tr>
+          <tr><td><code>GET /api/by-user</code></td><td>按用户查询</td></tr>
+          <tr><td><code>GET /api/by-date</code></td><td>按日期查询</td></tr>
+          <tr><td><code>GET /api/stream?id=1</code></td><td>文件流（二进制）</td></tr>
+          <tr><td><code>GET /api/v1/files</code></td><td>共享库列表（密钥级别过滤）</td></tr>
+          <tr><td><code>GET /api/v1/random</code></td><td>共享库随机取图</td></tr>
+          <tr><td><code>POST /api/v1/upload</code></td><td>multipart 上传（字段 <code>file</code>，上限 19MB，可入共享库）</td></tr>
+          <tr><td><code>GET /gallery</code></td><td>画廊瀑布流页（带 key 鉴权）</td></tr>
+          <tr><td><code>GET /show</code></td><td>轮播展示页（后台「轮播」配置）</td></tr>
+          <tr><td><code>GET /file/tg/&lt;id&gt;</code></td><td>代理直链（302 到官方链接或 R2，不暴露 token）</td></tr>
+          <tr><td><code>POST /bot/*</code></td><td>Telegram Bot API 代理（body = Bot API 参数）</td></tr>
+          <tr><td><code>GET /health</code></td><td>健康检查</td></tr>
+          <tr><td><code>POST /webhook</code></td><td>Telegram 回调入口</td></tr>
+        </tbody>
+      </table>
+      <p>完整参数说明见 <code>GET /docs</code>（API Docs 页）。</p>
+    </div>
+
+    <!-- 20 部署与版本 -->
+    <div class="section" id="s20">
+      <h2><span class="no">20</span>部署与版本</h2>
+      <p class="desc">代码如何上线，版本号如何变化。</p>
+      <h3>自动部署</h3>
+      <p>推送 <code>main</code> 分支即触发 GitHub Actions：语法检查 → wrangler 部署 Worker → 写入 Secrets（<code>TG_BOT_TOKEN</code> / <code>API_KEY</code> / <code>CF_API_TOKEN</code>）→ 二次部署 → 自动注入后台版本号 → 上传 <code>admin.html</code> 与 <code>admin-guide.html</code> 到 R2。</p>
+      <h3>版本号</h3>
+      <ul>
+        <li><b>后台版本号</b>：部署时由脚本自动注入为 <code>v1.0.&lt;GitHub run 号&gt;</code>，显示在后台右上角，每次部署自动递增，无需手动改。</li>
+        <li><b>Worker 代码版本</b>：<code>/health</code> 与 <code>/stats</code> 返回的 <code>version</code> 字段（当前 <code>v7</code>），需在 <code>worker.js</code> 中手动修改。</li>
+      </ul>
+      <h3>验证部署</h3>
+      <pre>curl https://&lt;worker域名&gt;/health
+# {"ok":true,"time":"...","version":"v7"}</pre>
+      <p>打开后台确认右上角版本号已变为新的 <code>v1.0.&lt;run#&gt;</code>，即可确认本次部署生效。</p>
+      <div class="note red"><b>重要</b>：后台 <code>admin.html</code> 与 <code>admin-guide.html</code> 是从 R2 读取的静态页。部署工作流会自动上传最新版；若本地手改过这两个文件，必须 commit + push 才会随部署更新。</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="footer">Bot Admin · 管理员使用手册 · 后台版本号由部署自动注入</div>
+
+</body>
+</html>

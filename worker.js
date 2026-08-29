@@ -46,6 +46,8 @@ export default {
     if (m === 'GET' && p === '/gallery') return handleGalleryPage();
     if (m === 'GET' && p === '/gallery/data') return handleGalleryData(request, env);
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
+    // 管理员使用手册（R2 静态页，与 admin.html 同源发布）
+    if (m === 'GET' && p === '/admin/guide') return handleAdminGuideFromR2(env);
     if (m === 'GET' && p === '/favicon.ico') return new Response(null, { status: 204 });
     // File proxy: /file/tg/<id> -> 302 to official Telegram direct link (clean URL, no token exposed)
     if (m === 'GET' && p.indexOf('/file/tg/') === 0) return handleTgFileRedirect(request, env, ctx);
@@ -5530,6 +5532,20 @@ async function handleAdminFromR2(env) {
     return new Response(obj.body, { headers });
   } catch (e) {
     return new Response('Error loading admin page: ' + e.message, { status: 500 });
+  }
+}
+
+// 管理员使用手册：从 R2 读取 admin-guide.html 静态页（含部分内链图片 URL，缓存较短）
+async function handleAdminGuideFromR2(env) {
+  try {
+    const obj = await env.R2_BUCKET.get('admin-guide.html');
+    if (!obj) return new Response('admin-guide.html not found in R2. Please upload admin-guide.html to R2 bucket.', { status: 404 });
+    const headers = new Headers();
+    headers.set('Content-Type', 'text/html; charset=utf-8');
+    headers.set('Cache-Control', 'no-cache');
+    return new Response(obj.body, { headers });
+  } catch (e) {
+    return new Response('Error loading admin guide: ' + e.message, { status: 500 });
   }
 }
 
