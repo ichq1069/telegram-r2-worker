@@ -120,6 +120,9 @@ export default {
     if (m === 'POST' && p === '/admin/api/settings/pi-key') return isAdmin ? handleAdminSavePiKey(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminGetPoolTags(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/pool-tags') return isAdmin ? handleAdminSavePoolTags(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 自动入共享库标签：命中即自动转入共享库
+    if (m === 'GET' && p === '/admin/api/settings/auto-pool-tags') return isAdmin ? handleAdminGetAutoPoolTags(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/auto-pool-tags') return isAdmin ? handleAdminSaveAutoPoolTags(request, env) : json({ok:false,error:'Unauthorized'},401);
     // 代理模式：1=入库不转存 R2，直链 /file/tg/<id> 由 worker 实时拉 Telegram（省 R2 存储）
     if (m === 'GET' && p === '/admin/api/settings/proxy-mode') return isAdmin ? handleAdminGetProxyMode(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/proxy-mode') return isAdmin ? handleAdminSaveProxyMode(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -3347,19 +3350,30 @@ async function handleSetFileTags(request, env) {
     if (!ids.length) return json({ ok: false, error: 'ids required' });
     const mode = b.mode || 'set';
     const tagsArr = (b.tags || []).map(function(s) { return String(s).trim(); }).filter(Boolean);
+    const autoTags = await getAutoPoolTags(env);
     let updated = 0;
     for (const id of ids) {
       if (mode === 'set') {
         await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(Array.from(new Set(tagsArr)).join(','), id).run();
+        // set 全量语义：命中自动入共享库标签即触发（去重由 importFileToPool 保证）
+        if (autoTags.length && tagsArr.some(function(t){ return autoTags.indexOf(t) !== -1; })) {
+          const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+          if (f) await importFileToPool(f, { level: f.level, isPrivate: 0 }, env);
+        }
       } else {
-        const f = await env.D1_DB.prepare('SELECT tags FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
-        let cur = (f && f.tags) ? f.tags.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+        const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+        const oldArr = (f && f.tags) ? f.tags.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+        const cur = oldArr.slice();
+        let hitAuto = false;
         if (mode === 'append') {
           tagsArr.forEach(function(t) { if (cur.indexOf(t) === -1) cur.push(t); });
+          // 仅「本次实际新增」的标签参与自动入共享库判定
+          hitAuto = autoTags.length && tagsArr.some(function(t){ return autoTags.indexOf(t) !== -1 && oldArr.indexOf(t) === -1; });
         } else if (mode === 'remove') {
           cur = cur.filter(function(t) { return tagsArr.indexOf(t) === -1; });
         }
         await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(Array.from(new Set(cur)).join(','), id).run();
+        if (f && hitAuto) await importFileToPool(f, { level: f.level, isPrivate: 0 }, env);
       }
       updated++;
     }
@@ -3966,6 +3980,52 @@ async function handleSetFilePoolStatus(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+async function handleAdminGetAutoPoolTags(env) {
+  const tags = await getAutoPoolTags(env);
+  return json({ ok: true, data: { tags: tags } });
+}
+
+async function handleAdminSaveAutoPoolTags(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const tags = Array.isArray(b && b.tags)
+      ? b.tags.map(String).map(function(t){ return t.trim(); }).filter(Boolean)
+      : [];
+    const uniq = Array.from(new Set(tags)).slice(0, 200);
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('auto_pool_tags', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(uniq)).run();
+    _autoPoolTagsCache = uniq; _autoPoolTagsAt = Date.now();
+    return json({ ok: true, data: { tags: uniq } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 自动入共享库标签集合（settings 键 auto_pool_tags，JSON 数组，30s 缓存）
+let _autoPoolTagsCache = null, _autoPoolTagsAt = 0;
+async function getAutoPoolTags(env) {
+  const now = Date.now();
+  if (_autoPoolTagsCache !== null && now - _autoPoolTagsAt < 30000) return _autoPoolTagsCache;
+  _autoPoolTagsCache = [];
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'auto_pool_tags'").first();
+    if (s && s.value) {
+      try { const v = JSON.parse(s.value); if (Array.isArray(v)) _autoPoolTagsCache = v.map(String).map(function(t){ return t.trim(); }).filter(Boolean); } catch (e) {}
+    }
+  } catch (e) {}
+  _autoPoolTagsAt = now;
+  return _autoPoolTagsCache;
+}
+
+// 从 files 行导入共享库/私密库：以 tg_file_id 去重；支持 level/isPrivate 覆盖
+async function importFileToPool(f, opts, env) {
+  const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE tg_file_id = ?').bind(f.id).first();
+  if (ex) return false;
+  const level = (opts && opts.level) || sanitizeLevel(f.level);
+  const isPrivate = (opts && opts.isPrivate) ? 1 : 0;
+  const useTags = (opts && opts.tags) || f.tags || '';
+  await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, width, height, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
+    .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, level, isPrivate, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, f.id, new Date().toISOString()).run();
+  return true;
+}
+
 async function handleAdminPoolFromTg(request, env) {
   try {
     const b = await request.json().catch(() => null);
@@ -3980,13 +4040,10 @@ async function handleAdminPoolFromTg(request, env) {
     for (const id of b.ids) {
       const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags, level FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
       if (!f) { skipped++; continue; }
-      const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE tg_file_id = ?').bind(id).first();
-      if (ex) continue;
-      const now = new Date().toISOString();
       const useTags = finalTags || f.tags || '';
       const useLevel = b.level !== undefined ? levelOverride : sanitizeLevel(f.level);
-      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, width, height, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
-        .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, useLevel, isPrivate, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, id, now).run();
+      const ok = await importFileToPool(f, { level: useLevel, isPrivate: isPrivate, tags: useTags }, env);
+      if (!ok) continue; // 已存在（含私密副本），跳过
       if (finalTags) {
         // 同步文件标签，保证标签计数一致（files 与 pool 同标签）
         await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(finalTags, id).run();
@@ -4033,15 +4090,12 @@ async function handleAdminPrivatePoolFromTg(request, env) {
     const finalTags = tagsOverride.length ? Array.from(new Set(tagsOverride)).join(',') : '';
     let added = 0, skipped = 0;
     for (const id of b.ids) {
-      const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
+      const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags, level FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
       if (!f) { skipped++; continue; }
-      const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE tg_file_id = ? AND is_private=1').bind(id).first();
-      if (ex) continue;
-      const now = new Date().toISOString();
       const useTags = finalTags || f.tags || '';
       // 私密内容级别固定为 vvip（最高级）
-      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, width, height, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, \'vvip\', 1, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
-        .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, id, now).run();
+      const ok = await importFileToPool(f, { level: 'vvip', isPrivate: 1, tags: useTags }, env);
+      if (!ok) continue; // 已存在（含共享库副本），跳过
       if (finalTags) {
         await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(finalTags, id).run();
       }

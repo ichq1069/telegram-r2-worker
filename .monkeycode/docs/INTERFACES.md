@@ -47,8 +47,9 @@
 | `/admin/api/files` | DELETE | 删除文件(软删到回收站) |
 | `/admin/api/files/upload` | POST | 本地上传文件到 Tele 库(base64 → R2 `files/` → `files` 表) |
 | `/admin/api/files/import` | POST | 外链 URL 直链入库 `files` 表(storage_key 占位 `external`,按扩展名推断类型) |
-| `/admin/api/files/tags` | POST | 批量设置文件标签 |
+| `/admin/api/files/tags` | POST | 批量设置文件标签(set/append/remove)；若本次实际新增的标签命中「自动入共享库」标签，自动将该文件转入共享库(级别继承文件) |
 | `/admin/api/files/pool-status` | POST | 设置文件是否入池 |
+| `/admin/api/files` | GET | 文件列表；不传 `pool_state` 时默认仅返回未导入共享库/私密库的文件(`pool_state=pending` 额外排除已忽略；`imported`/`ignored` 查看已导入/已忽略) |
 | `/admin/api/stats` | GET | 总览统计 |
 | `/admin/api/trash` | GET | 回收站列表 |
 | `/admin/api/trash/restore` | POST | 回收站恢复 |
@@ -114,6 +115,7 @@
 |---|---|---|
 | `/admin/api/settings/pi-key` | GET/POST | Postimages API Key(存 D1,跨端共享) |
 | `/admin/api/settings/pool-tags` | GET/POST | 池标签预设 |
+| `/admin/api/settings/auto-pool-tags` | GET/POST | 自动入共享库标签集合(JSON 数组；命中即自动转入共享库) |
 | `/admin/api/settings/proxy-mode` | GET/POST | 代理模式(入库不转存 R2) |
 | `/admin/api/settings/proxy-only` | GET/POST | 仅代理(全部走直链实时拉取) |
 | `/admin/api/settings/ai` | GET/POST | AI 管理配置(enabled/base/model/api_key/prompt) |
