@@ -754,6 +754,16 @@ function aiThrottled(chatId) {
   AI_THROTTLE[chatId] = now;
   return false;
 }
+// 判断消息文本是否为「提问/请求」，仅此类文本触发 AI 自动回复；
+// 避免图片刷屏、闲聊等非提问消息反复调用 AI 消耗配额并触发服务商 429 限流
+function isAIReplyText(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length < 2) return false;
+  if (/[?？]$/.test(t)) return true;               // 以问号结尾
+  if (/@[A-Za-z0-9_]{4,}/.test(t)) return true;    // 显式 @ 提及 bot
+  if (/(吗|呢|么)$/.test(t)) return true;          // 结尾疑问助词
+  return /(怎么|如何|为什么|什么|哪个|哪些|几个|多少|能不能|可不可以|可以吗|怎么办|怎么弄|帮我|请查|查一下|查下|查查|搜索|找一下|找找|统计|重试|转存|更新|最近|今天|明天|推荐|来一张|来.{0,2}张|发我|给我|发几张|发.{0,2}张)/.test(t);
+}
 async function callAIManage(chatId, msgId, text, env) {
   if (aiThrottled(chatId)) return; // 冷却期内忽略新的自动 AI 响应（后台测试/浮窗不受影响）
   const r = await aiComplete(env, text);
@@ -1928,10 +1938,11 @@ async function processUpdate(update, env, waitFn) {
         return { ok: true, menu: true };
       }
     }
-    // AI 管理：开启 AI 后普通文本交给大模型（function calling 查询/重试/搜索）
-    if (env.D1_DB) {
+    // AI 管理：开启 AI 后，仅当消息为纯文本且呈明显提问/请求意图时才交给大模型（function calling 查询/重试/搜索）。
+    // 纯媒体消息（图片/视频/文档/语音/贴纸等）一律不触发，避免群内刷图反复触发 AI 导致服务商 429 限流
+    if (env.D1_DB && !(msg.photo || msg.document || msg.video || msg.audio || msg.voice || msg.sticker || msg.animation || msg.video_note || msg.contact || msg.location || msg.poll)) {
       const cfg = await getAIConfig(env);
-      if (cfg.enabled === 1 && cfg.key && String(text).trim()) {
+      if (cfg.enabled === 1 && cfg.key && isAIReplyText(text)) {
         const p = callAIManage(chatId, parseInt(msgId), text, env).catch(function(e) { console.error('ai manage:', e.message); });
         if (waitFn) waitFn(p); else p;
         return { ok: true, ai: true };
