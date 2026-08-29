@@ -846,11 +846,37 @@ https://example.com/b.jpg"></textarea></div>
           <div class="fr">
             <label>请求方法</label>
             <select class="inp" id="apiMethod">
-              <option>sendMessage</option>
-              <option>getMe</option>
-              <option>getChat</option>
-              <option>getChatMemberCount</option>
-              <option>getUpdates</option>
+              <optgroup label="发送">
+                <option>sendMessage</option>
+                <option>sendPhoto</option>
+                <option>sendVideo</option>
+                <option>sendDocument</option>
+                <option>sendMediaGroup</option>
+                <option>sendChatAction</option>
+                <option>copyMessage</option>
+                <option>forwardMessage</option>
+              </optgroup>
+              <optgroup label="查询">
+                <option>getMe</option>
+                <option>getChat</option>
+                <option>getChatMemberCount</option>
+                <option>getFile</option>
+                <option>getWebhookInfo</option>
+                <option>getUpdates</option>
+              </optgroup>
+              <optgroup label="管理">
+                <option>setWebhook</option>
+                <option>deleteMessage</option>
+                <option>editMessageText</option>
+                <option>editMessageCaption</option>
+                <option>pinChatMessage</option>
+                <option>unpinChatMessage</option>
+                <option>banChatMember</option>
+                <option>unbanChatMember</option>
+              </optgroup>
+              <optgroup label="Inline 搜图">
+                <option>answerInlineQuery</option>
+              </optgroup>
             </select>
           </div>
           <div></div>
@@ -864,6 +890,19 @@ https://example.com/b.jpg"></textarea></div>
           <span id="apiModeHint" style="font-size:11px;color:var(--text-secondary)"></span>
         </div>
         <pre class="api-result" id="apiResult">等待发送...</pre>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>快捷回复键盘 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">输入栏下方的纯文本按钮，点按钮等价于发送对应文字；/start 时自动下发，可广播到全部私聊</span></div>
+        <div class="fb">
+          <div class="fr" style="flex:1;margin:0"><label>按钮一（图库）</label><input class="inp" id="mmText" placeholder="查看图库"></div>
+          <div class="fr" style="flex:1;margin:0"><label>按钮二（帮助）</label><input class="inp" id="mmHelp" placeholder="帮助"></div>
+          <div style="display:flex;flex-direction:column;gap:4px;justify-content:flex-end">
+            <button class="btn btn-primary" id="mmSaveBtn">保存</button>
+            <button class="btn btn-ghost" id="mmBroadcastBtn">广播到全部聊天</button>
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;margin-top:8px"><input type="checkbox" id="mmEnabled"> 启用快捷回复键盘</label>
+        <div id="mmStatus" style="font-size:12px;color:var(--text-secondary);margin-top:6px"></div>
       </div>
     </div>
 
@@ -4385,6 +4424,38 @@ async function loadBotInfo() {
   else
     document.getElementById("botInfo").textContent = "Bot 未连接 · v" + APP_VERSION.replace("v", "");
 }
+
+// 快捷回复键盘配置（main_menu）
+async function loadMainMenu() {
+  var r = await api("GET", "/admin/api/settings/main-menu");
+  if (!r.ok) return;
+  document.getElementById("mmText").value = r.data.text || "";
+  document.getElementById("mmHelp").value = r.data.help || "";
+  document.getElementById("mmEnabled").checked = r.data.enabled === 1;
+}
+async function saveMainMenu() {
+  var r = await api("POST", "/admin/api/settings/main-menu", {
+    enabled: document.getElementById("mmEnabled").checked ? 1 : 0,
+    text: document.getElementById("mmText").value.trim(),
+    help: document.getElementById("mmHelp").value.trim()
+  });
+  toast(r.ok ? "快捷键盘配置已保存" : ("保存失败: " + (r.error || "")), r.ok ? 1 : 0);
+  if (r.ok) loadMainMenu();
+}
+async function broadcastMainMenu() {
+  var btn = document.getElementById("mmBroadcastBtn");
+  var old = btn.textContent;
+  btn.textContent = "广播中..."; btn.disabled = true;
+  var r = await api("POST", "/admin/api/settings/main-menu/broadcast");
+  btn.textContent = old; btn.disabled = false;
+  document.getElementById("mmStatus").textContent = r.ok
+    ? ("广播完成：共 " + r.data.total + " 个私聊，成功 " + r.data.sent + "，失败 " + r.data.failed + (r.data.failed ? "（检查 bot 是否仍与该聊天可通信）" : ""))
+    : ("广播失败: " + (r.error || ""));
+  if (r.ok && r.data.sent) toast("已广播到 " + r.data.sent + " 个聊天", 1);
+}
+document.getElementById("mmSaveBtn").addEventListener("click", saveMainMenu);
+document.getElementById("mmBroadcastBtn").addEventListener("click", broadcastMainMenu);
+loadMainMenu();
 
 // 格式化大小
 function fmtSize(b) {
