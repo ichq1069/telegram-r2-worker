@@ -56,6 +56,7 @@ export default {
     if (m === 'GET' && p === '/admin/api/files') return isAdmin ? handleFiles(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/files') return isAdmin ? handleDeleteFile(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/files/upload') return isAdmin ? handleAdminFilesUpload(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/files/import') return isAdmin ? handleAdminFilesImport(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/stats') return isAdmin ? handleStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/bot-info') return isAdmin ? handleBotGetMeApi(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/dedup') return isAdmin ? handleDedup(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -3473,7 +3474,9 @@ async function handleAdminPoolCreate(request, env) {
     if (!b || !Array.isArray(b.urls) || !b.urls.length) return json({ ok: false, error: 'urls required' }, 400);
     const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
     const title = String(b.title || '').slice(0, 200);
-    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
     const now = new Date().toISOString();
     let added = 0;
     const urls = b.urls.map(function(x){ return String(x).trim(); }).filter(function(x){ return /^https?:\/\//i.test(x); });
@@ -3489,8 +3492,8 @@ async function handleAdminPoolCreate(request, env) {
     for (const url of urls) {
       if (exSet.has(url)) continue; // duplicate by original URL
       const fsize = await probeImgSize(url);
-      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, \'photo\', ?, \'manual\', 1, ?)')
-        .bind(url, url, title, tags, level, fsize, now).run();
+      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'manual\', 1, ?)')
+        .bind(url, url, title, tags, level, isPrivate, fsize, now).run();
       added++;
     }
     return json({ ok: true, data: { added: added } });
@@ -3537,7 +3540,9 @@ async function handleAdminPoolImportPage(request, env) {
     if (!pageUrls.length) return json({ ok: false, error: 'url must be http(s)' }, 400);
     const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
     const title = String(b.title || '').slice(0, 200);
-    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
     const now = new Date().toISOString();
     const foundMap = {};
     let fetched = 0;
@@ -3573,8 +3578,8 @@ async function handleAdminPoolImportPage(request, env) {
       const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE url = ? LIMIT 1').bind(url).first();
       if (ex) { skipped++; continue; }
       const fsize = await probeImgSize(url);
-      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, \'photo\', ?, \'manual\', 1, ?)')
-        .bind(url, url, title, tags, level, fsize, now).run();
+      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'manual\', 1, ?)')
+        .bind(url, url, title, tags, level, isPrivate, fsize, now).run();
       added++;
     }
     return json({ ok: true, data: { fetched: fetched, found: urls.length, added: added, skipped: skipped } });
@@ -3682,6 +3687,46 @@ async function handleAdminFilesUpload(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// 管理员外链导入到 Tele 库（files 表）：URL 直链入库，r2_url 指向外部地址（storage_key 占位 external）
+// Body: { urls: [...], tags, title, level, is_private }
+async function handleAdminFilesImport(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.urls) || !b.urls.length) return json({ ok: false, error: 'urls required' }, 400);
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || '').slice(0, 200);
+    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    const now = new Date().toISOString();
+    const urls = b.urls.map(function(x){ return String(x).trim(); }).filter(function(x){ return /^https?:\/\//i.test(x); });
+    if (!urls.length) return json({ ok: true, data: { added: 0 } });
+    const exSet = new Set();
+    for (const url of urls) {
+      const ex = await env.D1_DB.prepare('SELECT r2_url FROM files WHERE r2_url = ? LIMIT 1').bind(url).first();
+      if (ex) exSet.add(ex.r2_url);
+    }
+    const vids = ['mp4','mov','mkv','webm','avi'];
+    const auds = ['mp3','wav','ogg','m4a','aac','flac'];
+    const imgs = ['jpg','jpeg','png','gif','webp','bmp'];
+    let added = 0;
+    for (const url of urls) {
+      if (exSet.has(url)) continue;
+      const m = url.match(/\.([a-zA-Z0-9]{1,8})(?:\?.*)?$/);
+      const ext = m ? m[1].toLowerCase() : '';
+      let fileType = 'document';
+      if (vids.indexOf(ext) !== -1) fileType = 'video';
+      else if (auds.indexOf(ext) !== -1) fileType = 'audio';
+      else if (imgs.indexOf(ext) !== -1) fileType = 'photo';
+      let fileName = 'external';
+      try { const pu = new URL(url); const seg = pu.pathname.split('/').pop(); if (seg) fileName = decodeURIComponent(seg); } catch (e) {}
+      await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (\'external\', ?, ?, NULL, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+        .bind(url, String(fileName).slice(0, 255), fileType, '', title, tags, level, isPrivate, now).run();
+      added++;
+    }
+    return json({ ok: true, data: { added: added } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 // Upload a base64 image to Postimages via its official API
 // (api.postimage.org/1/upload), then resolve the direct i.postimg.cc URL
 // and add it to random_pool. Body: { name, data(base64), key, gallery }
@@ -3728,13 +3773,15 @@ async function handleAdminPoolUploadPostimages(request, env) {
     if (!direct) direct = page;
     const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
     const title = String(b.title || name).slice(0, 200);
-    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
     const now = new Date().toISOString();
     const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE url = ? LIMIT 1').bind(direct).first();
     if (ex) return json({ ok: true, data: { url: direct, added: 0, duplicate: true } });
     const fsize = b64Size(b.data);
-    await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, \'photo\', ?, \'postimages\', 1, ?)')
-      .bind(direct, direct, title, tags, level, fsize, now).run();
+    await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'postimages\', 1, ?)')
+      .bind(direct, direct, title, tags, level, isPrivate, fsize, now).run();
     return json({ ok: true, data: { url: direct, added: 1 } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }

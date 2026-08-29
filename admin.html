@@ -346,13 +346,30 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
       </div>
 
       <div class="card">
-        <div class="card-title"><span class="dot"></span>上传文件到 Tele 库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">本地上传至 R2，进入文件库并参与公开 API 输出（按级别对等过滤）</span></div>
-        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-          <div style="flex:1;min-width:240px"><label>选择文件（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="fileLocalFiles" multiple></div>
-          <div style="flex:1;min-width:160px"><label>标签（逗号分隔，可选）</label><input class="inp" id="fileLocalTags" placeholder="风景,美女"></div>
-          <div style="flex:1;min-width:110px"><label>级别（级别对等）</label><select class="inp" id="fileLocalLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
-          <button class="btn btn-primary" id="fileLocalUploadBtn">上传到 Tele 库</button>
-          <span id="fileLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+        <div class="card-title"><span class="dot"></span>上传文件到 Tele 库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">进入文件库并参与公开 API 输出（按级别对等过滤）；先选存储源，再上传或导入</span></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">
+          <span>入库级别（级别对等：vip 密钥看不到 svip/vvip 内容）：</span>
+          <select class="inp" id="fileLocalLevel" style="max-width:110px"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select>
+          <span style="margin-left:12px">标签（逗号分隔，可选）：</span>
+          <input class="inp" id="fileLocalTags" placeholder="风景,美女" style="max-width:220px">
+        </div>
+        <div class="store-tabs" id="fileStoreTabs">
+          <button type="button" class="store-tab on" data-store="local">本地上传 (R2)</button>
+          <button type="button" class="store-tab" data-store="link">外链链接</button>
+        </div>
+        <div id="fileStoreLocal">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px"><label>选择文件（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="fileLocalFiles" multiple></div>
+            <button class="btn btn-primary" id="fileLocalUploadBtn">上传到 Tele 库</button>
+            <span id="fileLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+        </div>
+        <div id="fileStoreLink" style="display:none">
+          <div class="fr"><label>文件/图片直链 URL（每行一个，直链入库，重复自动跳过）</label><textarea class="inp" id="fileImportUrls" rows="2" placeholder="https://example.com/a.jpg&#10;https://example.com/video.mp4"></textarea></div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+            <button class="btn btn-primary" id="fileLinkImportBtn">导入外链到 Tele 库</button>
+            <span id="fileLinkStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
         </div>
       </div>
 
@@ -552,12 +569,50 @@ https://example.com/b.jpg"></textarea></div>
     <!-- 私密库 -->
     <div class="panel" id="panel-private">
       <div class="card">
-        <div class="card-title"><span class="dot"></span>添加图片到私密库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">本地上传至 R2，私密内容等同 vvip，仅 vvip 密钥可访问</span></div>
-        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-          <div style="flex:1;min-width:240px"><label>选择图片（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="privateLocalFiles" accept="image/*" multiple></div>
-          <div style="flex:1;min-width:160px"><label>标签（逗号分隔，可选）</label><input class="inp" id="privateLocalTags" placeholder="风景,美女"></div>
-          <button class="btn btn-primary" id="privateLocalUploadBtn">上传并加入私密库</button>
-          <span id="privateLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+        <div class="card-title"><span class="dot"></span>添加图片到私密库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">私密内容等同 vvip 最高级，仅 vvip 密钥可访问；先选存储源，再上传或导入</span></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">
+          <span>标签（逗号分隔，可选）：</span>
+          <input class="inp" id="privateLocalTags" placeholder="风景,美女" style="max-width:220px">
+        </div>
+        <div class="store-tabs" id="privateStoreTabs">
+          <button type="button" class="store-tab on" data-store="local">本地上传 (R2)</button>
+          <button type="button" class="store-tab" data-store="zup">Zupimages</button>
+          <button type="button" class="store-tab" data-store="pi">Postimages</button>
+          <button type="button" class="store-tab" data-store="link">外链链接</button>
+        </div>
+        <div id="privateStoreLocal">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px"><label>选择图片（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="privateLocalFiles" accept="image/*" multiple></div>
+            <button class="btn btn-primary" id="privateLocalUploadBtn">上传并加入私密库</button>
+            <span id="privateLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+        </div>
+        <div id="privateStoreZup" style="display:none">
+          <div style="font-size:12px;color:var(--text-secondary);line-height:1.7">
+            把 Zupimages 的图库页（viewer.php）或图片直链粘贴到下方，一键抓取并导入私密库（等同 vvip），重复 URL 自动跳过。可先在「共享库」页的 Zupimages 挂件上传图片，再把链接粘贴到这里。
+            <div style="margin-top:8px">
+              <label>Zupimages 图库/图片链接（每行一个）</label>
+              <textarea class="inp" id="privZupPageUrl" rows="2" placeholder="https://www.zupimages.net/viewer.php?id=xxxxxx&#10;https://www.zupimages.net/up/26/xxxxxx.jpg"></textarea>
+              <button class="btn btn-primary btn-sm" id="privZupFetchBtn" style="margin-top:6px">抓取并导入私密库</button>
+              <span id="privZupStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+            </div>
+          </div>
+        </div>
+        <div id="privateStorePi" style="display:none">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:220px"><label>Postimages API Key（免费注册获取）</label><input class="inp" id="privPiKey" placeholder="postimages.org 注册后在设置里生成" style="flex:1"></div>
+            <div style="flex:1;min-width:140px"><label>Gallery 分类（可选）</label><input class="inp" id="privPiGallery" placeholder="例如: gallery"></div>
+            <div style="flex:1;min-width:200px"><label>选择图片（可多选，单张 ≤ 24MB）</label><input class="inp" type="file" id="privPiFiles" accept="image/*" multiple></div>
+            <button class="btn btn-primary" id="privPiUploadBtn">上传到 Postimages</button>
+            <span id="privPiStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+        </div>
+        <div id="privateStoreLink" style="display:none">
+          <div class="fr"><label>图片 URL（每行一个，支持多张）</label><textarea class="inp" id="privPoolUrls" rows="2" placeholder="https://example.com/a.jpg&#10;https://example.com/b.jpg"></textarea></div>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+            <button class="btn btn-primary" id="privLinkImportBtn">导入外链到私密库</button>
+            <span id="privLinkStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -979,6 +1034,26 @@ function init() {
     }
   });
 
+  // 通用存储源切换：privateStoreTabs / fileStoreTabs（面板命名 = 前缀 + 首字母大写 store 名）
+  function bindStoreTabs(tabsId, names) {
+    var tabsEl = document.getElementById(tabsId);
+    if (!tabsEl) return;
+    var prefix = tabsId.replace(/Tabs$/, "");
+    tabsEl.addEventListener("click", function(e) {
+      var t = e.target.closest(".store-tab");
+      if (!t || !tabsEl.contains(t)) return;
+      var s = t.getAttribute("data-store");
+      for (var i = 0; i < names.length; i++) {
+        var tab = tabsEl.querySelector('[data-store="' + names[i] + '"]');
+        var pan = document.getElementById(prefix + names[i].charAt(0).toUpperCase() + names[i].slice(1));
+        if (tab) tab.classList.toggle("on", names[i] === s);
+        if (pan) pan.style.display = (names[i] === s) ? "" : "none";
+      }
+    });
+  }
+  bindStoreTabs("privateStoreTabs", ["local", "zup", "pi", "link"]);
+  bindStoreTabs("fileStoreTabs", ["local", "link"]);
+
   // 退出登录
   document.getElementById("logoutBtn").addEventListener("click", function() {
     localStorage.removeItem("ak");
@@ -1097,6 +1172,19 @@ function init() {
       rd.readAsDataURL(f);
     }
     next();
+  });
+  var fileLinkBtn = document.getElementById("fileLinkImportBtn");
+  if (fileLinkBtn) fileLinkBtn.addEventListener("click", function() {
+    var urls = document.getElementById("fileImportUrls").value.split("\n").map(function(s){ return s.trim(); }).filter(Boolean);
+    if (!urls.length) { toast("请输入文件/图片 URL", 0); return; }
+    var btn = fileLinkBtn, old = btn.textContent;
+    btn.disabled = true; btn.textContent = "导入中...";
+    api("POST", "/admin/api/files/import", { urls: urls, tags: document.getElementById("fileLocalTags").value, title: "", level: document.getElementById("fileLocalLevel").value })
+      .then(function(r) {
+        if (r.ok) { toast("已导入 " + (r.data && r.data.added || 0) + " 条 (重复 URL 自动跳过)", 1); document.getElementById("fileImportUrls").value = ""; loadFiles(currentPage); loadTagCloud(); }
+        else toast(r.error || "导入失败", 0);
+      }).catch(function(e) { toast("请求失败: " + e.message, 0); })
+      .finally(function() { btn.disabled = false; btn.textContent = old; });
   });
   var piKeyInp = document.getElementById("piKey");
   if (piKeyInp) {
@@ -1229,6 +1317,69 @@ function init() {
       rd.readAsDataURL(f);
     }
     next();
+  });
+  var privPiKeyInp = document.getElementById("privPiKey");
+  if (privPiKeyInp) { try { privPiKeyInp.value = localStorage.getItem("piKey") || ""; } catch (e) {} }
+  var privZupBtn = document.getElementById("privZupFetchBtn");
+  if (privZupBtn) privZupBtn.addEventListener("click", function() {
+    var url = document.getElementById("privZupPageUrl").value.trim();
+    if (!url) { toast("请输入 Zupimages 链接", 0); return; }
+    var btn = privZupBtn, old = btn.textContent;
+    btn.disabled = true; btn.textContent = "抓取中...";
+    api("POST", "/admin/api/pool/import-page", { url: url, tags: document.getElementById("privateLocalTags").value, title: "", is_private: 1 })
+      .then(function(r) {
+        if (r.ok) { toast("抓取成功：发现 " + r.data.found + " 张，新增 " + r.data.added + " 张，重复 " + r.data.skipped + " 跳过", 1); loadPrivatePool(); loadTagCloud(); }
+        else toast(r.error || "抓取失败", 0);
+      }).catch(function(e) { toast("请求失败: " + e.message, 0); })
+      .finally(function() { btn.disabled = false; btn.textContent = old; });
+  });
+  var privPiUploadBtn = document.getElementById("privPiUploadBtn");
+  if (privPiUploadBtn) privPiUploadBtn.addEventListener("click", function() {
+    var key = document.getElementById("privPiKey").value.trim();
+    if (!key) { toast("请填写 Postimages API Key", 0); return; }
+    try { localStorage.setItem("piKey", key); } catch (e) {}
+    var inp = document.getElementById("privPiFiles");
+    var files = inp.files;
+    if (!files || !files.length) { toast("请先选择图片", 0); return; }
+    var gallery = document.getElementById("privPiGallery").value.trim();
+    var tags = document.getElementById("privateLocalTags").value.trim();
+    var btn = privPiUploadBtn, old = btn.textContent;
+    var st = document.getElementById("privPiStatus");
+    var total = files.length, done = 0, okCount = 0, failCount = 0;
+    btn.disabled = true; btn.textContent = "上传中...";
+    function next() {
+      if (done >= total) {
+        st.textContent = ""; btn.disabled = false; btn.textContent = old; inp.value = "";
+        toast("Postimages 上传完成：成功 " + okCount + " 张" + (failCount ? "，失败 " + failCount + " 张" : ""), failCount ? 0 : 1);
+        loadPrivatePool(); loadTagCloud();
+        return;
+      }
+      var f = files[done++];
+      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "图片");
+      if (f.size > 24 * 1024 * 1024) { failCount++; next(); return; }
+      var rd = new FileReader();
+      rd.onload = function() {
+        var b64 = String(rd.result || "").split(",")[1] || "";
+        api("POST", "/admin/api/pool/upload-postimages", { name: f.name || "image.jpg", data: b64, key: key, gallery: gallery, tags: tags, title: "", size: f.size, is_private: 1 })
+          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("pi fail:", r.error); } next(); });
+      };
+      rd.onerror = function() { failCount++; next(); };
+      rd.readAsDataURL(f);
+    }
+    next();
+  });
+  var privLinkBtn = document.getElementById("privLinkImportBtn");
+  if (privLinkBtn) privLinkBtn.addEventListener("click", function() {
+    var urls = document.getElementById("privPoolUrls").value.split("\n").map(function(s){ return s.trim(); }).filter(Boolean);
+    if (!urls.length) { toast("请输入图片 URL", 0); return; }
+    var btn = privLinkBtn, old = btn.textContent;
+    btn.disabled = true; btn.textContent = "导入中...";
+    api("POST", "/admin/api/pool", { urls: urls, tags: document.getElementById("privateLocalTags").value, title: "", is_private: 1 })
+      .then(function(r) {
+        if (r.ok) { toast("已导入 " + (r.data && r.data.added || 0) + " 张 (重复 URL 自动跳过)", 1); document.getElementById("privPoolUrls").value = ""; loadPrivatePool(); loadTagCloud(); }
+        else toast(r.error || "导入失败", 0);
+      }).catch(function(e) { toast("请求失败: " + e.message, 0); })
+      .finally(function() { btn.disabled = false; btn.textContent = old; });
   });
   var bPTS = document.getElementById("btnPoolTagSel");
   if (bPTS) bPTS.addEventListener("click", function() {

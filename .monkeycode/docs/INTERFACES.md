@@ -45,6 +45,8 @@
 |---|---|---|
 | `/admin/api/files` | GET | 文件列表(全量,含级别/私密标记) |
 | `/admin/api/files` | DELETE | 删除文件(软删到回收站) |
+| `/admin/api/files/upload` | POST | 本地上传文件到 Tele 库(base64 → R2 `files/` → `files` 表) |
+| `/admin/api/files/import` | POST | 外链 URL 直链入库 `files` 表(storage_key 占位 `external`,按扩展名推断类型) |
 | `/admin/api/files/tags` | POST | 批量设置文件标签 |
 | `/admin/api/files/pool-status` | POST | 设置文件是否入池 |
 | `/admin/api/stats` | GET | 总览统计 |
@@ -74,13 +76,13 @@
 | 端点 | 方法 | 说明 |
 |---|---|---|
 | `/admin/api/pool` | GET | 共享库列表(分页/筛选) |
-| `/admin/api/pool` | POST | 新增共享库条目 |
+| `/admin/api/pool` | POST | 新增外链条目(支持 `is_private`,私密时强制 `vvip`) |
 | `/admin/api/pool` | DELETE | 删除条目 |
-| `/admin/api/pool/batch` | POST | 批量操作(设置级别等) |
+| `/admin/api/pool/batch` | POST | 批量操作(设置级别/转入或移出私密/启停;转私密时联动 `level='vvip'`) |
 | `/admin/api/pool/batch-delete` | POST | 批量删除 |
-| `/admin/api/pool/import-page` | POST | 从展示页导入 |
-| `/admin/api/pool/upload` | POST | 上传图片入池 |
-| `/admin/api/pool/upload-postimages` | POST | Postimages 批量上传入池 |
+| `/admin/api/pool/import-page` | POST | 从页面 URL 抓取图片导入(支持 `is_private`) |
+| `/admin/api/pool/upload` | POST | 上传图片入池(支持 `is_private`,私密时强制 `vvip`) |
+| `/admin/api/pool/upload-postimages` | POST | Postimages 批量上传入池(支持 `is_private`) |
 | `/admin/api/pool/toggle` | POST | 启用/停用条目 |
 | `/admin/api/pool/tags` | POST | 设置条目标签 |
 | `/admin/api/pool/from-tg` | POST | 从 Telegram 文件导入共享库 |
