@@ -792,9 +792,14 @@ async function handleAdminTestAI(request, env) {
     return json({ ok: true, data: { sent: true, chat_id: chatId } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
-// 后台 AI 浮窗问答：返回 AI 回复文本
+// 后台 AI 浮窗问答：返回 AI 回复文本（同一来源 3 秒冷却，防止连点放大请求触发 429）
+var AI_ASK = {};
 async function handleAdminAskAI(request, env) {
   try {
+    const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || 'local';
+    const now = Date.now();
+    if (now - (AI_ASK[ip] || 0) < 3000) return json({ ok: false, error: '请求过于频繁，请 3 秒后再试' });
+    AI_ASK[ip] = now;
     const b = await request.json().catch(function(){ return {}; });
     const q = String(b.question || '').trim();
     if (!q) return json({ ok: false, error: '缺少问题' });
@@ -807,14 +812,19 @@ async function fetchAI(cfg, msgs) {
   const url = (cfg.base || 'https://api.deepseek.com').replace(/\/+$/, '') + '/chat/completions';
   const body = JSON.stringify({ model: cfg.model || 'deepseek-chat', messages: msgs, tools: AI_TOOLS, tool_choice: 'auto' });
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key };
-  // 429（含 Cloudflare 1015 限流）/5xx：退避重试（1s、3s），应对瞬时限流
+  // 429（含 Cloudflare 1015 限流）：不重试，避免失败请求被重试放大后再次撞上限流；
+  // 5xx（服务端瞬时错误）：退避重试（1s、3s）
   const delays = [1000, 3000];
   for (let attempt = 0; ; attempt++) {
     try {
       const r = await fetch(url, { method: 'POST', headers: headers, body: body });
       if (!r.ok) {
         const tb = String(await r.text()).slice(0, 220);
-        if ((r.status === 429 || r.status >= 500) && attempt < delays.length) {
+        if (r.status === 429) {
+          console.log('ai 429 (rate limited):', tb);
+          return { _err: 'HTTP 429 ' + tb };
+        }
+        if (r.status >= 500 && attempt < delays.length) {
           const d = delays[attempt];
           console.log('ai retry ' + r.status + ' in ' + d + 'ms');
           await new Promise(function(res) { setTimeout(res, d); });
