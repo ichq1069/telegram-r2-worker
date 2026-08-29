@@ -97,6 +97,8 @@ export default {
     if (m === 'DELETE' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
     // User stats
     if (m === 'GET' && p === '/admin/api/users') return isAdmin ? handleAdminUsers(env) : json({ok:false,error:'Unauthorized'},401);
+    // 用户聊天交互统计（消息/命令/文件/Inline/回调 汇总 + 最近活跃）
+    if (m === 'GET' && p === '/admin/api/users/interactions') return isAdmin ? handleAdminUsersInteractions(env) : json({ok:false,error:'Unauthorized'},401);
     // Slideshow page config
     if (m === 'GET' && p === '/admin/api/show-config') return isAdmin ? handleShowConfigGet(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/show-config') return isAdmin ? handleShowConfigSet(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -1486,6 +1488,13 @@ async function handleAdminWebhookFix(request, env) {
 
 // Shared: handle one update from webhook or getUpdates polling
 async function processUpdateCore(update, env, waitFn) {
+  // 用户聊天交互统计（fire-and-forget，不阻塞主流程）
+  if (env.D1_DB) {
+    try {
+      const p = recordUserInteraction(update, env);
+      if (waitFn) waitFn(p); else p;
+    } catch (e) {}
+  }
   // 点击按钮回调（inline keyboard）
   if (update.callback_query) {
     return await handleCallbackQuery(update.callback_query, env);
@@ -4012,10 +4021,57 @@ async function handleAdminKeysDelete(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// 用户聊天交互统计：按 update 类型累加 user_stats 表（消息/命令/文件/Inline 查询/按钮回调）
+async function recordUserInteraction(update, env) {
+  try {
+    // 提取用户身份
+    let user = null, type = null;
+    if (update.callback_query && update.callback_query.from) {
+      user = update.callback_query.from; type = 'callback_clicks';
+    } else if (update.inline_query && update.inline_query.from) {
+      user = update.inline_query.from; type = 'inline_queries';
+    } else {
+      const m = update.message || update.channel_post;
+      if (m && m.from) {
+        user = m.from;
+        const fi = extractFileInfo(m);
+        if (fi) type = 'files';
+        else if (m.text && String(m.text).indexOf('/') === 0) type = 'commands';
+        else type = 'messages';
+      }
+    }
+    if (!user || !user.id || !type) return;
+    const uid = parseInt(user.id, 10);
+    if (!uid) return;
+    const now = new Date().toISOString();
+    const uname = String(user.username || '').slice(0, 64);
+    const fname = String(user.first_name || user.last_name || '').slice(0, 128);
+    const col = type === 'messages' ? 'messages' : type === 'commands' ? 'commands' : type === 'files' ? 'files' : type === 'inline_queries' ? 'inline_queries' : 'callback_clicks';
+    await env.D1_DB.prepare(
+      "INSERT INTO user_stats (user_id, username, full_name, " + col + ", last_active_at) VALUES (?,?,?,1,?) " +
+      "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name, " + col + "=" + col + "+1, last_active_at=excluded.last_active_at"
+    ).bind(uid, uname, fname, now).run();
+  } catch (e) { console.error('recordUserInteraction:', e.message); }
+}
+
 async function handleAdminUsers(env) {
   try {
     const d = await env.D1_DB.prepare("SELECT user_id, username, full_name, COUNT(*) as file_count, SUM(file_size) as total_size, MAX(created_at) as last_active FROM files WHERE deleted_at IS NULL GROUP BY user_id ORDER BY file_count DESC LIMIT 100").all();
     return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户聊天交互统计：user_stats 表聚合（含总计）
+async function handleAdminUsersInteractions(env) {
+  try {
+    const d = await env.D1_DB.prepare("SELECT user_id, username, full_name, messages, commands, files, inline_queries, callback_clicks, last_active_at FROM user_stats ORDER BY (messages+commands+files+inline_queries+callback_clicks) DESC, last_active_at DESC LIMIT 200").all();
+    const rows = d.results || [];
+    const sum = function(col) { return rows.reduce(function(a, r) { return a + (parseInt(r[col]) || 0); }, 0); };
+    return json({ ok: true, data: rows, total: {
+      messages: sum('messages'), commands: sum('commands'), files: sum('files'),
+      inline_queries: sum('inline_queries'), callback_clicks: sum('callback_clicks'),
+      users: rows.length
+    } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

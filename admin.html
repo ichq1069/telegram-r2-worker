@@ -767,7 +767,14 @@ https://example.com/b.jpg"></textarea></div>
     <!-- 用户 -->
     <div class="panel" id="panel-users">
       <div class="card">
-        <div class="card-title"><span class="dot"></span>用户统计</div>
+        <div class="card-title"><span class="dot"></span>聊天交互统计 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">用户与 bot 的互动行为（部署后开始累计）</span></div>
+        <div class="stats-grid" id="userInteractGrid"></div>
+        <div class="tbl-wrap" style="margin-top:12px">
+          <table><thead><tr><th>用户ID</th><th>用户名</th><th>昵称</th><th>消息</th><th>命令</th><th>文件</th><th>Inline 查询</th><th>按钮点击</th><th>最近活跃</th></tr></thead><tbody id="userInteractList"></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>用户统计 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">按文件维度聚合</span></div>
         <div class="tbl-wrap"><table><thead><tr><th>用户ID</th><th>用户名</th><th>昵称</th><th>文件数</th><th>总大小</th><th>最近活跃</th></tr></thead><tbody id="userList"></tbody></table></div>
       </div>
     </div>
@@ -1127,7 +1134,7 @@ function init() {
     if (name === "tags") loadTagsPage();
     if (name === "gen") loadGen();
     if (name === "keys") { loadKeys(); loadRateLimitCfg(); }
-    if (name === "users") loadUsers();
+    if (name === "users") { loadUsers(); loadUserInteractions(); }
     if (name === "show") loadShowConfig();
     if (name === "cmds") loadCmds();
     if (name === "ops") loadOpsPage();
@@ -3755,6 +3762,44 @@ function editKeyModal(id, name, expires, level) {
   };
 }
 // 用户统计
+// 用户聊天交互统计
+async function loadUserInteractions() {
+  var grid = document.getElementById("userInteractGrid");
+  var list = document.getElementById("userInteractList");
+  if (!grid || !list) return;
+  var r = await api("GET", "/admin/api/users/interactions");
+  if (!r.ok) { list.innerHTML = '<tr><td colspan="9">' + (r.error || "加载失败") + '</td></tr>'; return; }
+  var t = r.total || {};
+  var cards = [
+    ["消息数", t.messages || 0, "纯文本消息"],
+    ["命令数", t.commands || 0, "斜杠命令"],
+    ["文件数", t.files || 0, "发送的媒体文件"],
+    ["Inline 查询", t.inline_queries || 0, "@bot 关键词 搜图"],
+    ["按钮点击", t.callback_clicks || 0, "键盘回调"],
+    ["交互用户", t.users || 0, "有交互记录的用户"]
+  ];
+  var gh = "";
+  for (var i = 0; i < cards.length; i++) {
+    gh += '<div class="stat-card"><div class="value">' + (cards[i][1] > 9999 ? (cards[i][1] / 1000).toFixed(1) + "k" : cards[i][1]) + '</div><div class="label">' + cards[i][0] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px">' + cards[i][2] + '</div></div>';
+  }
+  grid.innerHTML = gh;
+  var d = r.data || [];
+  var h = "";
+  for (var j = 0; j < d.length; j++) {
+    var u = d[j];
+    h += '<tr><td>' + escStr(String(u.user_id)) + '</td>';
+    h += '<td>' + escStr(u.username || "-") + '</td>';
+    h += '<td>' + escStr(u.full_name || "-") + '</td>';
+    h += '<td>' + (u.messages || 0) + '</td>';
+    h += '<td>' + (u.commands || 0) + '</td>';
+    h += '<td>' + (u.files || 0) + '</td>';
+    h += '<td>' + (u.inline_queries || 0) + '</td>';
+    h += '<td>' + (u.callback_clicks || 0) + '</td>';
+    h += '<td class="file-date">' + (u.last_active_at ? String(u.last_active_at).replace("T", " ").slice(0, 16) : "-") + '</td></tr>';
+  }
+  list.innerHTML = h || '<tr><td colspan="9">暂无交互数据（用户与 bot 互动后自动记录）</td></tr>';
+}
+
 async function loadUsers() {
   var el = document.getElementById("userList");
   if (!el) return;

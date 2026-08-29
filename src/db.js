@@ -32,7 +32,8 @@ export async function ensureTables(db) {
     "CREATE INDEX IF NOT EXISTS idx_pool_url ON random_pool(url);" +
     "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, window TEXT NOT NULL, count INTEGER DEFAULT 0, UNIQUE(key, window));" +
-    "CREATE TABLE IF NOT EXISTS worker_stats (day TEXT PRIMARY KEY, requests INTEGER DEFAULT 0, errors INTEGER DEFAULT 0, updated_at TEXT);"
+    "CREATE TABLE IF NOT EXISTS worker_stats (day TEXT PRIMARY KEY, requests INTEGER DEFAULT 0, errors INTEGER DEFAULT 0, updated_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS user_stats (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, messages INTEGER DEFAULT 0, commands INTEGER DEFAULT 0, files INTEGER DEFAULT 0, inline_queries INTEGER DEFAULT 0, callback_clicks INTEGER DEFAULT 0, last_active_at TEXT);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -122,6 +123,24 @@ export async function ensureTables(db) {
         console.log('migrated: api_keys.level column');
       }
     } catch (e7) { console.error('api_keys level migration:', e7.message); }
+    // user_stats 交互统计列（旧库有表但缺列时补加，避免 INSERT 失败）
+    try {
+      const us = await db.prepare("PRAGMA table_info(user_stats)").all();
+      const usn = (us.results || []).map(function(c) { return c.name; });
+      const usCols = [
+        ['messages', "ALTER TABLE user_stats ADD COLUMN messages INTEGER DEFAULT 0"],
+        ['commands', "ALTER TABLE user_stats ADD COLUMN commands INTEGER DEFAULT 0"],
+        ['files', "ALTER TABLE user_stats ADD COLUMN files INTEGER DEFAULT 0"],
+        ['inline_queries', "ALTER TABLE user_stats ADD COLUMN inline_queries INTEGER DEFAULT 0"],
+        ['callback_clicks', "ALTER TABLE user_stats ADD COLUMN callback_clicks INTEGER DEFAULT 0"],
+        ['last_active_at', "ALTER TABLE user_stats ADD COLUMN last_active_at TEXT"]
+      ];
+      for (const uc of usCols) {
+        if (usn.indexOf(uc[0]) !== -1) continue;
+        await db.exec(uc[1]);
+        console.log('migrated: user_stats.' + uc[0] + ' column');
+      }
+    } catch (e8) { console.error('user_stats migration:', e8.message); }
   } catch(e) { console.error('column migration:', e.message); throw e; }
   return true;
 }
