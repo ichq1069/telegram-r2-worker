@@ -64,6 +64,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .stat-card { background: var(--card); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); text-align: center; border: 1px solid var(--border); }
 .stat-card .value { font-size: 28px; font-weight: 700; color: var(--primary); }
+.stat-card .value .sk { margin: 0 auto; }
 .stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
 
 /* List item (by type, by chat) */
@@ -1967,7 +1968,7 @@ function renderD1Skeleton() {
   ];
   var h = '';
   for (var i = 0; i < defs.length; i++) {
-    h += '<div class="stat-card" style="border-color:' + defs[i][1] + ';background:' + defs[i][2] + '"><div class="value" style="color:#8b5cf6" id="d1v' + i + '">…</div><div class="label">' + defs[i][0] + '</div></div>';
+    h += '<div class="stat-card" style="border-color:' + defs[i][1] + ';background:' + defs[i][2] + '"><div class="value" style="color:#8b5cf6" id="d1v' + i + '">' + skBar('70%', 26, 8) + '</div><div class="label">' + defs[i][0] + '</div></div>';
   }
   document.getElementById("d1StatsGrid").innerHTML = h;
   var trEl = document.getElementById("d1TableRows");
@@ -2045,7 +2046,7 @@ function renderR2Skeleton() {
   ];
   var h = '';
   for (var i = 0; i < defs.length; i++) {
-    h += '<div class="stat-card"><div class="value" id="r2v' + i + '" style="color:var(--text-secondary)">…</div><div class="label" id="r2l' + i + '">' + defs[i][0] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px" id="r2s' + i + '">&nbsp;</div></div>';
+    h += '<div class="stat-card"><div class="value" id="r2v' + i + '" style="color:var(--text-secondary)">' + skBar('70%', 26, 8) + '</div><div class="label" id="r2l' + i + '">' + defs[i][0] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px" id="r2s' + i + '">&nbsp;</div></div>';
   }
   document.getElementById("r2StatsGrid").innerHTML = h;
 }
@@ -2141,7 +2142,7 @@ function renderWorkerSkeleton() {
   var defs = ['今日请求', '本月请求', '今日错误', 'CPU p50'];
   var h = '';
   for (var i = 0; i < defs.length; i++) {
-    h += '<div class="stat-card"><div class="value" id="wkv' + i + '" style="color:var(--text-secondary)">…</div><div class="label" id="wkl' + i + '">' + defs[i] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px" id="wks' + i + '">&nbsp;</div></div>';
+    h += '<div class="stat-card"><div class="value" id="wkv' + i + '" style="color:var(--text-secondary)">' + skBar('70%', 26, 8) + '</div><div class="label" id="wkl' + i + '">' + defs[i] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px" id="wks' + i + '">&nbsp;</div></div>';
   }
   document.getElementById("workerStatsGrid").innerHTML = h;
 }
