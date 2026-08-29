@@ -2508,6 +2508,7 @@ async function handleFiles(request, env) {
   if (ps2 === 'imported') { w += " AND EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) AND (f.pool_status IS NULL OR f.pool_status != 'ignored')"; }
   else if (ps2 === 'ignored') { w += " AND f.pool_status = 'ignored'"; }
   else if (ps2 === 'pending') { w += " AND NOT EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) AND (f.pool_status IS NULL OR f.pool_status != 'ignored')"; }
+  else { w += " AND NOT EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id)"; }
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files f ' + w).bind(...p).first();
     const d = await env.D1_DB.prepare("SELECT f.*, CASE WHEN f.pool_status='ignored' THEN 'ignored' WHEN EXISTS (SELECT 1 FROM random_pool rp WHERE rp.tg_file_id = f.id) THEN 'imported' ELSE 'pending' END AS pool_state FROM files f " + w + ' ORDER BY f.id DESC LIMIT ? OFFSET ?').bind(...p, ps, off).all();
