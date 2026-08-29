@@ -162,6 +162,10 @@ export default {
     if (m === 'GET' && p === '/admin/api/settings/webhook') return isAdmin ? handleAdminGetWebhook(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/webhook') return isAdmin ? handleAdminSaveWebhook(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/webhook/test') return isAdmin ? handleAdminWebhookTest(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 快捷回复键盘配置 / 广播（main_menu）
+    if (m === 'GET' && p === '/admin/api/settings/main-menu') return isAdmin ? handleAdminGetMainMenu(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/main-menu') return isAdmin ? handleAdminSaveMainMenu(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/main-menu/broadcast') return isAdmin ? handleAdminMainMenuBroadcast(request, env) : json({ok:false,error:'Unauthorized'},401);
 
     // Bot API routes (no auth needed, verified by Telegram)
     if (m === 'POST' && p === '/bot/sendMessage') return handleBotSendMessage(request, env);
@@ -180,6 +184,13 @@ export default {
     if (m === 'POST' && p === '/bot/deleteMessage') return handleBotDeleteMessage(request, env);
     if (m === 'POST' && p === '/bot/forwardMessage') return handleBotForwardMessage(request, env);
     if (m === 'POST' && p === '/bot/copyMessage') return handleBotCopyMessage(request, env);
+    if (m === 'POST' && p === '/bot/answerInlineQuery') return handleBotAnswerInlineQuery(request, env);
+    if (m === 'POST' && p === '/bot/sendMediaGroup') return handleBotSendMediaGroup(request, env);
+    if (m === 'POST' && p === '/bot/editMessageText') return handleBotEditMessageText(request, env);
+    if (m === 'POST' && p === '/bot/editMessageCaption') return handleBotEditMessageCaption(request, env);
+    if (m === 'POST' && p === '/bot/pinChatMessage') return handleBotPinChatMessage(request, env);
+    if (m === 'POST' && p === '/bot/unpinChatMessage') return handleBotUnpinChatMessage(request, env);
+    if (m === 'POST' && p === '/bot/sendChatAction') return handleBotSendChatAction(request, env);
 
     // Public JSON API for third-party programs (auth via api_keys table)
     if (m === 'GET' && (p === '/api/v1/files' || p === '/api/v1/random')) {
@@ -360,7 +371,7 @@ async function scheduleBatchRef(env, chatId, dbId, waitFn) {
       // 等 3 秒让"这一批"的其余消息到齐（TG 批量转发/相册消息间隔 <1s）
       await new Promise(function(res) { setTimeout(res, 3000); });
       const win = new Date(Date.now() - 6000).toISOString();
-      const rows = await env.D1_DB.prepare('SELECT id, message_id, file_name FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC').bind(chatId, win).all();
+      const rows = await env.D1_DB.prepare('SELECT id, message_id, file_name, media_group_id FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC').bind(chatId, win).all();
       const list = (rows.results || []).filter(function(r) { return r.id; });
       if (!list.length) return;
       const N = list.length;
@@ -373,20 +384,95 @@ async function scheduleBatchRef(env, chatId, dbId, waitFn) {
       if (list[list.length - 1].id !== dbId || !env.TG_BOT_TOKEN) return;
       const cnt = await countCompleted(env);
       const cntStr = cnt ? '\n📊 已完成: ' + cnt.completed + ' / ' + cnt.total + ' 条' : '';
-      for (var k = 0; k < list.length; k++) {
-        const ref = N + '-' + String(k + 1).padStart(3, '0');
-        const nm = String(list[k].file_name || '').slice(0, 40);
+      // 按 media_group_id 合并：同一相册只发一条合并回执（其余文件仍一条一条回执）
+      const groups = {}; const order = [];
+      list.forEach(function(r) {
+        const key = r.media_group_id || ('single:' + r.id);
+        if (!groups[key]) { groups[key] = []; order.push(key); }
+        groups[key].push(r);
+      });
+      for (var g = 0; g < order.length; g++) {
+        const members = groups[order[g]];
+        const isAlbum = order[g].indexOf('single:') !== 0;
+        const lines = members.map(function(r) {
+          const ref = N + '-' + String(list.indexOf(r) + 1).padStart(3, '0');
+          const nm = String(r.file_name || '').slice(0, 40);
+          return '#' + ref + (nm ? ' · ' + nm : '');
+        });
+        const text = (isAlbum ? '📥 相册已入库（' + members.length + ' 张）\n' : '📥 已入库 ') + lines.join('\n') + cntStr;
         try {
-          await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+          const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(list[k].message_id, 10) || undefined, text: '📥 已入库 #' + ref + (nm ? ' · ' + nm : '') + cntStr })
+            body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(members[0].message_id, 10) || undefined, text: text })
           });
+          const j = await resp.json();
+          const mid = j && j.ok && j.result && j.result.message_id;
+          if (mid) {
+            // 记录回执 message_id：转存完成后 editMessageText 原地更新为直链（媒体组更新整条合并回执）
+            for (const mb of members) {
+              try { await env.D1_DB.prepare('UPDATE files SET receipt_msg_id=? WHERE id=?').bind(mid, mb.id).run(); } catch (e) {}
+            }
+          }
         } catch (e) {}
       }
     } catch (e) { console.error('batchRef:', e.message); }
   })();
   if (waitFn) waitFn(p); else p;
+}
+
+// 相册合并回执原地更新：重查同 media_group_id 的所有文件，把已完成项换成直链、未完成项标"转存中"
+async function refreshGroupReceipt(env, chatId, mediaGroupId) {
+  if (!env.D1_DB || !chatId || !mediaGroupId || !env.TG_BOT_TOKEN) return;
+  try {
+    const rows = await env.D1_DB.prepare('SELECT id, group_ref, file_name, r2_url, processing_state, receipt_msg_id FROM files WHERE chat_id=? AND media_group_id=? AND deleted_at IS NULL ORDER BY id ASC').bind(chatId, mediaGroupId).all();
+    const members = (rows.results || []).filter(function(r) { return r.id && r.receipt_msg_id; });
+    if (!members.length) return;
+    const mid = members[0].receipt_msg_id;
+    const cnt = await countCompleted(env);
+    const cntStr = cnt ? '\n📊 已完成: ' + cnt.completed + ' / ' + cnt.total + ' 条' : '';
+    const lines = members.map(function(r) {
+      const ref = r.group_ref || String(r.id);
+      const nm = String(r.file_name || '').slice(0, 40);
+      if (r.processing_state === 'completed' && r.r2_url) return '✅ #' + ref + (nm ? ' · ' + nm : '') + '\n' + r.r2_url;
+      return '⏳ #' + ref + (nm ? ' · ' + nm : '') + ' 转存中…';
+    });
+    const text = '📥 相册回执（' + members.length + ' 张）\n' + lines.join('\n') + cntStr;
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/editMessageText', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, message_id: mid, text: String(text).slice(0, 1024) })
+    }).catch(function(e) { console.log('refreshGroupReceipt edit fail:', e.message); });
+  } catch (e) { console.log('refreshGroupReceipt:', e.message); }
+}
+
+// 用户撤销已入库的媒体消息（Telegram 补发空内容 message 更新）：
+// 1) 将对应入库记录移入回收站（软删）
+// 2) 清理批量回执：相册合并回执若无其余存活文件则删掉回执消息，否则刷新回执去掉已删项；单条回执直接删除
+async function handleDeletedMsg(msg, env) {
+  const chatId = String(msg.chat && msg.chat.id ? msg.chat.id : '');
+  const messageId = String(msg.message_id || '');
+  if (!env.D1_DB || !chatId || !messageId) return { ok: true, skip: true };
+  try {
+    // 只处理近期(24h 内)仍有入库记录的消息，避免误删旧数据
+    const cutoff = new Date(Date.now() - 86400000).toISOString();
+    const row = await env.D1_DB.prepare('SELECT id, media_group_id, receipt_msg_id FROM files WHERE chat_id=? AND message_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id DESC LIMIT 1').bind(chatId, messageId, cutoff).first();
+    if (!row || !row.id) return { ok: true, skip: true };
+    await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=?').bind(new Date().toISOString(), row.id).run();
+    if (row.receipt_msg_id && env.TG_BOT_TOKEN) {
+      if (row.media_group_id) {
+        const alive = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE chat_id=? AND media_group_id=? AND deleted_at IS NULL').bind(chatId, row.media_group_id).first();
+        if (alive && (alive.c || 0) > 0) {
+          await refreshGroupReceipt(env, chatId, row.media_group_id).catch(function(){});
+        } else {
+          try { await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/deleteMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: row.receipt_msg_id }) }); } catch (e) {}
+        }
+      } else {
+        try { await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/deleteMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: row.receipt_msg_id }) }); } catch (e) {}
+      }
+    }
+    return { ok: true, deleted: true };
+  } catch (e) { console.error('handleDeletedMsg:', e.message); return { ok: true, skip: true }; }
 }
 
 // ==================== DB ====================
@@ -966,6 +1052,8 @@ async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   if (cmd === '/start' || cmd === '/help') {
     const helpText = cmd === '/start' ? DEFAULT_COMMANDS['/start'] : DEFAULT_COMMANDS['/help'];
     await replyTextWithKeyboard(chatId, helpText, MAIN_BUTTONS, env);
+    // /start 附带下发快捷回复键盘（纯文本按钮，点"查看图库/帮助"直接触发）
+    if (cmd === '/start') await sendQuickReplyKeyboard(chatId, env);
     return { ok: true };
   }
 
@@ -1253,6 +1341,61 @@ async function handleImgCommand(chatId, msgId, args, env) {
   }
 }
 
+// Inline 模式：用户在任何聊天输入 @<bot> 关键词，从共享库随机池返回可发送的图片（与群内索图同源）。
+// 空查询→完全随机；有关键词→标签/标题/URL 模糊匹配（逗号分隔，命中任意一个即可）。
+// 仅返回图片类结果（photo）；非图片内容在图片不足时以 article 兜底展示链接。
+async function handleInlineQuery(iq, env) {
+  const iqId = String(iq.id || '');
+  const query = String(iq.query || '').trim();
+  if (!iqId || !env.TG_BOT_TOKEN) return { ok: false, error: 'no_iq' };
+  const fail = async function(message) {
+    try {
+      await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/answerInlineQuery', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inline_query_id: iqId, cache_time: 0, results: [], is_personal: true, switch_pm_text: message, switch_pm_parameter: 'inline' })
+      });
+    } catch (e) {}
+    return { ok: true, empty: true };
+  };
+  if (!env.D1_DB) return await fail('❌ D1 未配置');
+  try {
+    const parts = String(query).split(/[\s,，]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+    let w = "WHERE enabled=1 AND is_private=0 AND level IN ('pt')"; const p = [];
+    if (parts.length) {
+      const ts = [];
+      parts.forEach(function(t) {
+        ts.push('(tags LIKE ? OR tags LIKE ? OR tags LIKE ? OR tags = ? OR title LIKE ? OR url LIKE ?)');
+        p.push('%,' + t + ',%', t + ',%', '%,' + t, t, '%' + t + '%', '%' + t + '%');
+      });
+      w += ' AND (' + ts.join(' OR ') + ')';
+    }
+    const d = await env.D1_DB.prepare('SELECT id, url, thumb_url, title, tags, file_type, width, height FROM random_pool ' + w + ' ORDER BY RANDOM() LIMIT 50').bind(...p).all();
+    const rows = (d.results || []).filter(function(r) { return r.url; });
+    if (!rows.length) return await fail(parts.length ? ('共享库没有匹配「' + parts.join('、') + '」的图') : '共享库还没有内容，先在后台「共享库」添加');
+    const results = rows.map(function(r, i) {
+      const cap = (r.title || '') + (r.tags ? '\n#' + String(r.tags).split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(' #') : '');
+      const w = r.width || 0, h = r.height || 0;
+      const photoW = w || 800, photoH = h || 600;
+      const item = { type: 'photo', id: 'i' + r.id + '_' + i, title: r.title || (parts.join(' ') || '图片') };
+      item.photo_url = r.url;
+      item.thumb_url = r.thumb_url || r.url;
+      item.photo_width = photoW;
+      item.photo_height = photoH;
+      item.caption = String(cap).slice(0, 1024);
+      return item;
+    });
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/answerInlineQuery', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inline_query_id: iqId, results: results, cache_time: 0, is_personal: true })
+    }).catch(function(e) { console.log('answerInlineQuery:', e.message); });
+    return { ok: true, results: results.length };
+  } catch (e) {
+    return await fail('❌ ' + String(e.message).slice(0, 100));
+  }
+}
+
 // ==================== WEBHOOK ====================
 
 async function handleWebhook(request, env, ctx) {
@@ -1345,7 +1488,16 @@ async function processUpdateCore(update, env, waitFn) {
   if (update.callback_query) {
     return await handleCallbackQuery(update.callback_query, env);
   }
+  // Inline 模式：任意聊天输入 @<bot> 关键词 触发，从共享库搜图返回
+  if (update.inline_query) {
+    return await handleInlineQuery(update.inline_query, env);
+  }
   const msg = update.message || update.channel_post;
+  // 用户撤销（unsend）已入库消息：Telegram 会补发一条"空内容"的 message 更新，
+  // 据此把对应入库记录移入回收站，并清理批量回执（无内容且无任何媒体/服务字段才视为撤销）
+  if (msg && !msg.text && !msg.caption && !msg.photo && !msg.document && !msg.video && !msg.audio && !msg.voice && !msg.sticker && !msg.animation && !msg.video_note && !msg.contact && !msg.location && !msg.poll && !msg.dice && !msg.game && !msg.entities && !msg.new_chat_members && !msg.new_chat_member && !msg.left_chat_member && !msg.pinned_message && !msg.delete_chat_photo && !msg.group_chat_created && !msg.supergroup_chat_created && !msg.channel_chat_created && msg.message_id && env.D1_DB) {
+    return await handleDeletedMsg(msg, env);
+  }
   if (msg && !msg.text?.startsWith('/')) {
     const fi = extractFileInfo(msg);
     if (fi) {
@@ -1383,8 +1535,8 @@ async function processUpdateCore(update, env, waitFn) {
       if (env.D1_DB) {
         try {
           const r = await env.D1_DB.prepare(
-            'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,group_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-          ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), ref).run();
+            'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+          ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), ref, msg.media_group_id || '').run();
           rid = r.meta?.last_row_id;
         } catch (e) { console.error('D1 pending:', e.message); }
       }
@@ -1776,7 +1928,7 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
           await env.D1_DB.prepare("UPDATE files SET storage_key=?, r2_url=?, md5_hash=?, mime_type=?, processing_state='completed', file_name=?, tg_file_url=?, thumb_url=?, progress_bytes=?, total_bytes=?, quick_hash=? WHERE id=?")
             .bind(dup.storage_key, dup.r2_url, dup.md5_hash || '', dup.mime_type || '', fi.fileName, '', dup.thumb_url || '', fi.fileSize || 0, fi.fileSize || 0, '', dbIdNum).run();
           const rr1 = await getFileRef(env, dbIdNum);
-          await replyMsg(chatId, parseInt(msgId), fi, dup.r2_url, env, rr1 || ref || String(dbIdNum));
+          await replyMsg(chatId, parseInt(msgId), fi, dup.r2_url, env, rr1 || ref || String(dbIdNum), dbIdNum);
           return;
         }
       } catch (e) { console.log('file_id dedup check fail:', e.message); }
@@ -1976,7 +2128,7 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
     await updateProgress('completed', fi.fileSize || 0, fi.fileSize || 0).catch(function(){});
     // 用最终编号（延迟批量编号已分配，如 3-001）；历史/重试文件兜底用原 ref 或文件 id
     const rr2 = await getFileRef(env, dbId);
-    await replyMsg(chatId, parseInt(msgId), fi, url, env, rr2 || ref || String(dbId));
+    await replyMsg(chatId, parseInt(msgId), fi, url, env, rr2 || ref || String(dbId), dbId);
     fireWebhook(env, 'file_imported', { id: dbIdNum, url: url, file_name: fi.fileName, file_type: fi.type, file_size: fi.fileSize || 0, chat_id: chatId, source: 'tg' }).catch(function(){});
   } catch (e) {
     console.error('processFileAsync:', e.message);
@@ -2016,6 +2168,17 @@ async function processUpdate(update, env, waitFn) {
         if (it) { await execMenuAction(it.action, chatId, env, parseInt(msgId)); return { ok: true, menu: true }; }
         await replyText(chatId, parseInt(msgId), '❌ 没有选项 ' + n, env);
         return { ok: true, menu: true };
+      }
+    }
+    // 快捷回复键盘按钮：点"查看图库"=查询现有数量，点"帮助"=展示帮助（在 AI 分支之前处理，避免被 AI 接管）
+    if (env.D1_DB && !fi) {
+      const mm = await getMainMenuCfg(env);
+      if (mm && mm.enabled && text && text.trim() === mm.text) {
+        return await handleCountCommand(chatId, env);
+      }
+      if (mm && mm.enabled && text && text.trim() === mm.help) {
+        await replyTextWithKeyboard(chatId, DEFAULT_COMMANDS['/help'], MAIN_BUTTONS, env);
+        return { ok: true, quick: true };
       }
     }
     // @bot 找图：群里 @机器人 并含"图/来一张/随机"等意图时，直接走共享库索图（不依赖 AI 开启）
@@ -2085,14 +2248,14 @@ async function processUpdate(update, env, waitFn) {
     try {
       ref2 = await allocTgRef(env);
       const r = await env.D1_DB.prepare(
-        'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,tg_file_url,group_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-      ).bind(key, url, md5, 'completed', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, fd.ct, fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), tgUrl, ref2).run();
+        'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,tg_file_url,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+      ).bind(key, url, md5, 'completed', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, fd.ct, fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), tgUrl, ref2, msg.media_group_id || '').run();
       rid = r.meta?.last_row_id;
     } catch (e) { console.error('D1:', e.message); }
   }
 
   console.log('url:', url);
-  await replyMsg(chatId, parseInt(msgId), fi, url, env, ref2 || '');
+  await replyMsg(chatId, parseInt(msgId), fi, url, env, ref2 || '', rid);
   fireWebhook(env, 'file_imported', { id: rid, url: url, file_name: fi.fileName, file_type: fi.type, file_size: fi.fileSize || 0, chat_id: chatId, source: 'tg' }).catch(function(){});
   return { ok: true, url, fileId: rid, type: fi.type };
 }
@@ -2346,7 +2509,7 @@ function stripExifIfJpeg(buf, ct) {
   } catch (e) { return buf; }
 }
 
-async function replyMsg(chatId, replyId, fi, url, env, ref) {
+async function replyMsg(chatId, replyId, fi, url, env, ref, dbId) {
   const ic = { photo: '🖼', document: '📄', video: '🎬', audio: '🎵', voice: '🎤' };
   const lb = { photo: 'Photo', document: 'File', video: 'Video', audio: 'Audio', voice: 'Voice' };
   const pre = ref ? '#' + ref + ' ' : '';
@@ -2354,6 +2517,20 @@ async function replyMsg(chatId, replyId, fi, url, env, ref) {
   const cnt = await countCompleted(env);
   const cntStr = cnt ? '\n📊 已完成: ' + cnt.completed + ' / ' + cnt.total + ' 条' : '';
   const t = fi.type === 'photo' ? pre + '🖼 Saved\n' + url + cntStr : pre + ic[fi.type] + ' ' + lb[fi.type] + ' Saved\n' + fi.fileName + ' (' + fmtSize(fi.fileSize) + ')\n' + url + cntStr;
+  // 转存完成：若该文件已有批量回执，原地编辑更新为直链（相册更新整条合并回执），避免刷屏
+  if (dbId && env.D1_DB) {
+    try {
+      const f = await env.D1_DB.prepare('SELECT media_group_id, receipt_msg_id FROM files WHERE id=?').bind(dbId).first();
+      if (f && f.media_group_id) {
+        await refreshGroupReceipt(env, chatId, f.media_group_id);
+        return;
+      }
+      if (f && f.receipt_msg_id) {
+        await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/editMessageText', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: f.receipt_msg_id, text: String(t).slice(0, 1024) }) }).catch(function(e) { console.log('replyMsg edit fail:', e.message); });
+        return;
+      }
+    } catch (e) { console.log('replyMsg receipt lookup:', e.message); }
+  }
   try { await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text: t }) }); } catch (e) { }
 }
 // 已入库数量统计：总数（未删除）+ 已完成转存数
@@ -2392,6 +2569,68 @@ var MAIN_BUTTONS = [
   [{ text: '📊 现有数量', callback_data: 'cmd:count' }, { text: '⏳ 未转存', callback_data: 'cmd:pending' }],
   [{ text: '🚀 继续转存', callback_data: 'cmd:retry' }, { text: '🛰 服务状态', callback_data: 'cmd:health' }]
 ];
+
+// ==================== 快捷回复键盘（ReplyKeyboardMarkup） ====================
+// 设置项 settings['main_menu']：{"enabled":1,"text":"查看图库","help":"帮助"}
+// 键盘按钮为纯文本，点按钮等价于在输入框发送对应文字；随 /start 下发，可后台广播到全部聊天。
+async function getMainMenuCfg(env) {
+  const def = { enabled: 1, text: '查看图库', help: '帮助' };
+  if (!env.D1_DB) return def;
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='main_menu'").first();
+    if (!s) return def;
+    const c = JSON.parse(s.value || '{}');
+    return { enabled: c.enabled !== 0 ? 1 : 0, text: (c.text || '').trim() || def.text, help: (c.help || '').trim() || def.help };
+  } catch (e) { return def; }
+}
+
+async function sendQuickReplyKeyboard(chatId, env) {
+  if (!env.TG_BOT_TOKEN) return false;
+  const cfg = await getMainMenuCfg(env);
+  if (!cfg.enabled) return false;
+  const kb = [[{ text: cfg.text }, { text: cfg.help }]];
+  try {
+    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: '⌨️ 快捷按钮已就绪', reply_markup: { keyboard: kb, resize_keyboard: true, one_time_keyboard: false, input_field_placeholder: '点击按钮或直接发送内容' } })
+    });
+    return true;
+  } catch (e) { console.log('quickReply kb fail:', e.message); return false; }
+}
+
+// 广播快捷回复键盘到全部私聊（键盘是聊天级状态，需逐个下发才对新旧聊天生效）
+async function broadcastQuickReplyKeyboard(env) {
+  if (!env.D1_DB || !env.TG_BOT_TOKEN) return { total: 0, sent: 0, failed: 0, error: 'D1 or token missing' };
+  try {
+    const d = await env.D1_DB.prepare("SELECT DISTINCT chat_id FROM files WHERE chat_type='private' AND chat_id IS NOT NULL AND chat_id!='' ORDER BY chat_id").all();
+    const ids = (d.results || []).map(function(r) { return String(r.chat_id); });
+    let sent = 0, failed = 0;
+    for (const cid of ids) {
+      if (sent + failed >= 100) break; // 单请求内限流，避免 worker 超时
+      const ok = await sendQuickReplyKeyboard(cid, env);
+      if (ok) sent++; else failed++;
+    }
+    return { total: ids.length, sent: sent, failed: failed };
+  } catch (e) { return { total: 0, sent: 0, failed: 0, error: e.message }; }
+}
+
+async function handleAdminGetMainMenu(env) {
+  const c = await getMainMenuCfg(env);
+  return json({ ok: true, data: c });
+}
+async function handleAdminSaveMainMenu(request, env) {
+  try {
+    const in2 = await request.json();
+    const cfg = { enabled: in2.enabled !== 0 ? 1 : 0, text: String(in2.text || '').trim(), help: String(in2.help || '').trim() };
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('main_menu',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
+    return json({ ok: true, data: cfg });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+async function handleAdminMainMenuBroadcast(request, env) {
+  const r = await broadcastQuickReplyKeyboard(env);
+  return json({ ok: true, data: r });
+}
 
 async function replyTextWithKeyboard(chatId, text, buttons, env) {
   try {
@@ -2487,6 +2726,14 @@ async function handleBotUnbanChatMember(request, env) { return proxyBotApi('unba
 async function handleBotDeleteMessage(request, env) { return proxyBotApi('deleteMessage', request, env); }
 async function handleBotForwardMessage(request, env) { return proxyBotApi('forwardMessage', request, env); }
 async function handleBotCopyMessage(request, env) { return proxyBotApi('copyMessage', request, env); }
+// Inline 搜图 / 相册 / 消息编辑 / 置顶 / 聊天动作 等官方 Bot API 代理
+async function handleBotAnswerInlineQuery(request, env) { return proxyBotApi('answerInlineQuery', request, env); }
+async function handleBotSendMediaGroup(request, env) { return proxyBotApi('sendMediaGroup', request, env); }
+async function handleBotEditMessageText(request, env) { return proxyBotApi('editMessageText', request, env); }
+async function handleBotEditMessageCaption(request, env) { return proxyBotApi('editMessageCaption', request, env); }
+async function handleBotPinChatMessage(request, env) { return proxyBotApi('pinChatMessage', request, env); }
+async function handleBotUnpinChatMessage(request, env) { return proxyBotApi('unpinChatMessage', request, env); }
+async function handleBotSendChatAction(request, env) { return proxyBotApi('sendChatAction', request, env); }
 
 // ==================== API HANDLERS ====================
 
@@ -5036,11 +5283,28 @@ async function sendDailyReport(env) {
     const dayStr = cnTodayStr();
     const reqs = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day=?').bind(dayStr).first();
     const text = '\uD83D\uDCC5 图库日报\n\u2022 昨日新增：' + ((yNew && yNew.c) || 0) + ' 个 / ' + fmtSize((yNew && yNew.s) || 0) + '\n\u2022 文件总数：' + ((total && total.c) || 0) + ' 个\n\u2022 回收站待清：' + ((trash && trash.c) || 0) + ' 个（>30 天自动硬清）\n\u2022 ' + storageTxt + '\n\u2022 今日请求（本地计数）：' + ((reqs && reqs.r) || 0) + ' 次';
-    await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: text, disable_web_page_preview: true })
-    });
+    // 发送并置顶日报：pinChatMessage 置顶（bot 需在群里有置顶权限），下次发新日报前先解pin旧的避免堆积
+    try {
+      const sr = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text: text, disable_web_page_preview: true })
+      });
+      const sj = await sr.json();
+      const mid = sj && sj.ok && sj.result && sj.result.message_id;
+      if (mid) {
+        const old = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='pinned_report_msg_id'").first();
+        if (old && old.value && old.value !== String(mid)) {
+          try {
+            await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/unpinChatMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: parseInt(old.value, 10) }) });
+          } catch (e) {}
+        }
+        try {
+          await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/pinChatMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: mid, disable_notification: true }) });
+        } catch (e) { console.log('pin fail:', e.message); }
+        await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('pinned_report_msg_id',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(mid)).run();
+      }
+    } catch (e) { console.error('sendDailyReport send:', e.message); }
   } catch (e) { console.error('sendDailyReport:', e.message); }
 }
 
