@@ -365,8 +365,8 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             </select>
             <select class="inp" style="width:120px" id="filePoolState">
               <option value="">全部导入状态</option>
-              <option value="pending">未导入随机库</option>
-              <option value="imported">已导入随机库</option>
+              <option value="pending">未导入共享库</option>
+              <option value="imported">已导入共享库</option>
               <option value="ignored">已忽略导入</option>
             </select>
             <select class="inp" style="width:110px" id="fileSource">
@@ -382,7 +382,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             <button class="btn btn-ghost" id="btnCopyProxy" style="display:none" title="复制所选文件的代理链接 /file/tg/&lt;id&gt; (每行一个)">复制代理链接</button>
             <button class="btn btn-ghost" id="btnCopyBoth" style="display:none" title="R2 直链 + 代理链接一起复制 (| 分隔)">复制双链接</button>
             <button class="btn btn-primary" id="btnTagSel" style="display:none">打标签</button>
-            <button class="btn btn-primary" id="btnPool" style="display:none">加入随机库</button>
+            <button class="btn btn-primary" id="btnPool" style="display:none">加入共享库</button>
             <button class="btn btn-ghost" id="btnIgnoreSel" style="display:none" title="标记为忽略：批量导入时跳过">忽略导入</button>
             <button class="btn btn-ghost" id="btnUnignoreSel" style="display:none" title="取消忽略">取消忽略</button>
           </div>
@@ -439,10 +439,16 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
       </div>
     </div>
 
-    <!-- 随机库 -->
+    <!-- 共享库 -->
     <div class="panel" id="panel-pool">
       <div class="card">
-        <div class="card-title"><span class="dot"></span>添加图片到随机库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">先选存储源，再上传或导入</span></div>
+        <div class="card-title"><span class="dot"></span>添加图片到共享库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">先选存储源，再上传或导入</span></div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;font-size:12px;color:var(--text-secondary)">
+          <span>入库级别（级别对等：vip 密钥看不到 svip/vvip 内容）：</span>
+          <select class="inp" id="poolAddLevel" style="max-width:110px">
+            <option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option>
+          </select>
+        </div>
         <div class="store-tabs" id="storeTabs">
           <button type="button" class="store-tab on" data-store="local">本地上传 (R2)</button>
           <button type="button" class="store-tab" data-store="zup">Zupimages</button>
@@ -457,7 +463,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             </div>
             <div style="flex:1;min-width:160px"><label>标签（逗号分隔，可选）</label><input class="inp" id="poolLocalTags" placeholder="风景,美女"></div>
             <div style="flex:1;min-width:160px"><label>预设标签（点选即加入上方）</label><div id="presetTagsLocal" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:28px"></div></div>
-            <button class="btn btn-primary" id="poolLocalUploadBtn">上传并加入随机库</button>
+            <button class="btn btn-primary" id="poolLocalUploadBtn">上传并加入共享库</button>
             <span id="poolLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
           </div>
           <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">图片直接存入你自己的 R2（telegramup.wo58.cn），无数量限制、永不过期，推荐首选。</div>
@@ -466,11 +472,11 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
           <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
             <div id="zupEmbedWrap"><script type="text/javascript" src="https://www.zupimages.net/api/embed.php?background=transparent&amp;color=000000&amp;header=true&amp;lastimage=true"></script></div>
             <div style="flex:1;min-width:240px;font-size:12px;color:var(--text-secondary);line-height:1.7">
-              在左侧挂件上传图片到 Zupimages（上传后挂件显示最后一张图）。把 Zupimages 的图库页（viewer.php）或图片直链粘贴到下方，一键抓取页面里的全部图片并导入随机库，重复 URL 自动跳过。
+              在左侧挂件上传图片到 Zupimages（上传后挂件显示最后一张图）。把 Zupimages 的图库页（viewer.php）或图片直链粘贴到下方，一键抓取页面里的全部图片并导入共享库，重复 URL 自动跳过。
               <div style="margin-top:8px">
                 <label>Zupimages 图库/图片链接（每行一个）</label>
                 <textarea class="inp" id="zupPageUrl" rows="2" placeholder="https://www.zupimages.net/viewer.php?id=xxxxxx&#10;https://www.zupimages.net/up/26/xxxxxx.jpg"></textarea>
-                <button class="btn btn-primary btn-sm" id="zupFetchBtn" style="margin-top:6px">抓取并导入随机库</button>
+                <button class="btn btn-primary btn-sm" id="zupFetchBtn" style="margin-top:6px">抓取并导入共享库</button>
               </div>
             </div>
           </div>
@@ -503,12 +509,12 @@ https://example.com/b.jpg"></textarea></div>
             <div id="presetTagsLink" style="display:flex;flex-wrap:wrap;gap:6px;min-height:26px"></div>
             <button class="btn btn-ghost btn-sm" id="btnManageTags" title="后台维护预设标签，上传时一键点选，保证标签统一">管理标签库</button>
           </div>
-          <button class="btn btn-primary" id="poolImportBtn">导入随机库</button>
+          <button class="btn btn-primary" id="poolImportBtn">导入共享库</button>
         </div>
       </div>
       <div class="card">
-        <div class="card-title"><span class="dot"></span>随机库内容 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">共 <span id="poolCount">0</span> 张 · 来源与外链图分开管理，标签通用</span></div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">提示：到「文件」页勾选图片，点工具栏「加入随机库」即可把 Telegram 图片导入到这里。勾选下方图片可批量操作。</div>
+        <div class="card-title"><span class="dot"></span>共享库内容 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">共 <span id="poolCount">0</span> 张 · 来源与外链图分开管理，标签通用</span></div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">提示：到「文件」页勾选图片，点工具栏「加入共享库」即可把 Telegram 图片导入到这里。勾选下方图片可批量操作。</div>
         <div class="toolbar" style="margin-bottom:12px">
           <input class="inp" id="poolKw" placeholder="标题/URL 关键词" style="max-width:180px">
           <input class="inp" id="poolTagsF" placeholder="标签筛选 (逗号分隔)" style="max-width:180px">
@@ -520,12 +526,34 @@ https://example.com/b.jpg"></textarea></div>
         <div class="toolbar" id="poolToolbar" style="display:none;margin-bottom:12px;padding:10px 14px;background:#eef2ff;border-radius:10px">
           <span style="font-size:12px;color:var(--text)">已选 <span id="poolSelCount" style="font-weight:700;color:var(--primary)">0</span> 张</span>
           <button class="btn btn-primary btn-sm" id="btnPoolTagSel">打标签</button>
+          <button class="btn btn-ghost btn-sm" id="btnPoolLevelSel" title="批量设置所选图片的级别（级别对等）">设置级别</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolEnableSel">批量启用</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolDisableSel">批量停用</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolCopySel">复制链接</button>
           <button class="btn btn-danger btn-sm" id="btnPoolDelSel">批量删除</button>
         </div>
         <div class="file-grid" id="poolList"></div>
+      </div>
+    </div>
+
+    <!-- 私密库 -->
+    <div class="panel" id="panel-private">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>私密库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">私密内容等同 vvip 最高级，仅 vvip 密钥可访问，不进入共享库 / 公开输出</span></div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">提示：到「文件」页勾选图片，点工具栏「加入共享库」，在弹窗里点「加入私密库」即可把 Telegram 图片放入这里。</div>
+        <div class="toolbar" style="margin-bottom:12px">
+          <input class="inp" id="privateKw" placeholder="标题/URL 关键词" style="max-width:180px">
+          <input class="inp" id="privateTagsF" placeholder="标签筛选 (逗号分隔)" style="max-width:180px">
+          <button class="btn btn-primary" id="privateSearchBtn">筛选</button>
+          <button class="btn btn-ghost" id="privateResetBtn">重置</button>
+        </div>
+        <div class="toolbar" id="privateToolbar" style="display:none;margin-bottom:12px;padding:10px 14px;background:#fff7ed;border-radius:10px">
+          <span style="font-size:12px;color:var(--text)">已选 <span id="privateSelCount" style="font-weight:700;color:#d97706">0</span> 张</span>
+          <button class="btn btn-ghost btn-sm" id="btnPrivateEnableSel">移入共享库</button>
+          <button class="btn btn-ghost btn-sm" id="btnPrivateCopySel">复制链接</button>
+          <button class="btn btn-danger btn-sm" id="btnPrivateDelSel">批量删除</button>
+        </div>
+        <div class="file-grid" id="privateList"></div>
       </div>
     </div>
 
@@ -553,7 +581,7 @@ https://example.com/b.jpg"></textarea></div>
           <div class="fr"><label>API 密钥 (在「密钥」页生成)</label><select class="inp" id="genKey"><option value="">加载中...</option></select></div>
           <div class="fr"><label>文件类型</label><select class="inp" id="genType"><option value="">全部</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select></div>
           <div class="fr"><label>数量 (1-100)</label><input class="inp" type="number" id="genLimit" value="10" min="1" max="100"></div>
-          <div class="fr"><label>模式</label><select class="inp" id="genMode"><option value="files">随机库列表</option><option value="random">随机取一张/多张</option></select></div>
+          <div class="fr"><label>模式</label><select class="inp" id="genMode"><option value="files">共享库列表</option><option value="random">随机取一张/多张</option></select></div>
           <div class="fr"><label>关键词 (可选)</label><input class="inp" id="genKw" placeholder="文件名/描述包含..."></div>
         </div>
         <div class="fr" style="margin-top:6px"><label>标签筛选 (点击切换，多选=命中任意一个即可)</label><div id="genTags" style="display:flex;flex-wrap:wrap;gap:6px"></div></div>
@@ -580,10 +608,13 @@ https://example.com/b.jpg"></textarea></div>
           <div style="display:flex;gap:8px;align-items:center">
             <input class="inp" style="width:220px" id="keyName" placeholder="用途说明，如：我的网站">
             <input class="inp" type="date" id="keyExpires" title="到期日期（留空 = 永久有效）">
+            <select class="inp" id="keyLevel" title="密钥级别：决定可访问内容级别（级别对等，默认 pt）">
+              <option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option>
+            </select>
             <button class="btn btn-primary" id="createKeyBtn">+ 生成密钥</button>
           </div>
         </div>
-        <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px">第三方程序用此密钥调用公开 JSON 接口：
+        <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px">第三方程序用此密钥调用公开 JSON 接口，密钥级别决定可获取内容级别（pt&lt;vip&lt;svip&lt;vvip，级别对等，低级别不会输出高级别内容）：
           <code>GET /api/v1/files?api_key=密钥&tags=风景,美女&type=photo&limit=20</code> ·
           <code>GET /api/v1/random?api_key=密钥&tags=风景&count=1</code>（随机取图）
         </div>
@@ -611,7 +642,7 @@ https://example.com/b.jpg"></textarea></div>
     <!-- 轮播设置 -->
     <div class="panel" id="panel-show">
       <div class="card">
-        <div class="card-title"><span class="dot"></span>轮播展示页设置 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">控制 /show 页面（随机库展示）</span></div>
+        <div class="card-title"><span class="dot"></span>轮播展示页设置 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">控制 /show 页面（共享库展示）</span></div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
           <div class="fr"><label>展示页开关</label><select class="inp" id="scEnabled"><option value="1">开启</option><option value="0">关闭</option></select></div>
           <div class="fr"><label>自动切换秒数 (1-60)</label><input class="inp" type="number" id="scInterval" value="5" min="1" max="60"></div>
@@ -873,7 +904,7 @@ function toast(msg, ok) {
 // 初始化
 function init() {
   // Tab 栏
-  var tabData = [["stats","概览"],["files","Tele文件"],["trash","回收站"],["unsaved","未转存"],["pool","随机库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
+  var tabData = [["stats","概览"],["files","Tele文件"],["trash","回收站"],["unsaved","未转存"],["pool","共享库"],["private","私密库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
   var tabBar = document.getElementById("tabBar");
   var html = "";
   for (var i = 0; i < tabData.length; i++) {
@@ -887,7 +918,7 @@ function init() {
     var name = tab.getAttribute("data-tab");
     var panels = document.querySelectorAll(".panel");
     var tabs = tabBar.querySelectorAll(".tab");
-    var allNames = ["stats","files","trash","unsaved","pool","tags","gen","keys","users","show","cmds","api","ops"];
+    var allNames = ["stats","files","trash","unsaved","pool","private","tags","gen","keys","users","show","cmds","api","ops"];
     for (var i = 0; i < allNames.length; i++) {
       panels[i].className = "panel";
       tabs[i].className = "tab";
@@ -901,6 +932,7 @@ function init() {
     if (name === "trash") loadTrash(1);
     if (name === "unsaved") loadUnsaved(1);
     if (name === "pool") { loadPool(); initPresetTags(); }
+    if (name === "private") { loadPrivatePool(); }
     if (name === "tags") loadTagsPage();
     if (name === "gen") loadGen();
     if (name === "keys") { loadKeys(); loadRateLimitCfg(); }
@@ -910,7 +942,7 @@ function init() {
     if (name === "ops") loadOpsPage();
   });
 
-  // 随机库 · 存储源切换（本地上传 / Zupimages / Postimages / 外链链接）
+  // 共享库 · 存储源切换（本地上传 / Zupimages / Postimages / 外链链接）
   var storeTabs = document.getElementById("storeTabs");
   if (storeTabs) storeTabs.addEventListener("click", function(e) {
     var t = e.target.closest(".store-tab");
@@ -968,7 +1000,8 @@ function init() {
     api("POST", "/admin/api/pool/import-page", {
       url: url,
       tags: document.getElementById("poolTags").value,
-      title: document.getElementById("poolTitle").value
+      title: document.getElementById("poolTitle").value,
+      level: document.getElementById("poolAddLevel").value
     }).then(function(r) {
       if (r.ok) {
         toast("抓取成功：发现 " + r.data.found + " 张，新增 " + r.data.added + " 张，重复 " + r.data.skipped + " 跳过", 1);
@@ -1002,7 +1035,7 @@ function init() {
       var rd = new FileReader();
       rd.onload = function() {
         var b64 = String(rd.result || "").split(",")[1] || "";
-        api("POST", "/admin/api/pool/upload", { name: f.name || "image.jpg", data: b64, tags: tags, title: "", size: f.size })
+        api("POST", "/admin/api/pool/upload", { name: f.name || "image.jpg", data: b64, tags: tags, title: "", size: f.size, level: document.getElementById("poolAddLevel").value })
           .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("upload fail:", r.error); } next(); });
       };
       rd.onerror = function() { failCount++; next(); };
@@ -1064,7 +1097,7 @@ function init() {
       var rd = new FileReader();
       rd.onload = function() {
         var b64 = String(rd.result || "").split(",")[1] || "";
-        api("POST", "/admin/api/pool/upload-postimages", { name: f.name || "image.jpg", data: b64, key: key, gallery: gallery, tags: tags, title: "", size: f.size })
+        api("POST", "/admin/api/pool/upload-postimages", { name: f.name || "image.jpg", data: b64, key: key, gallery: gallery, tags: tags, title: "", size: f.size, level: document.getElementById("poolAddLevel").value })
           .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("pi upload fail:", r.error); } next(); });
       };
       rd.onerror = function() { failCount++; next(); };
@@ -1091,12 +1124,32 @@ function init() {
     var el = document.getElementById(id);
     if (el) el.addEventListener("keydown", function(e) { if (e.key === "Enter") loadPool(); });
   });
+  // 私密库
+  var prSB = document.getElementById("privateSearchBtn");
+  if (prSB) prSB.addEventListener("click", function() { loadPrivatePool(); });
+  var prRB = document.getElementById("privateResetBtn");
+  if (prRB) prRB.addEventListener("click", function() {
+    ["privateKw","privateTagsF"].forEach(function(id){ var el = document.getElementById(id); if (el) el.value = ""; });
+    loadPrivatePool();
+  });
+  ["privateKw","privateTagsF"].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("keydown", function(e) { if (e.key === "Enter") loadPrivatePool(); });
+  });
+  var bPrMove = document.getElementById("btnPrivateEnableSel");
+  if (bPrMove) bPrMove.addEventListener("click", function() { privateBatch("move"); });
+  var bPrCopy = document.getElementById("btnPrivateCopySel");
+  if (bPrCopy) bPrCopy.addEventListener("click", function() { privateBatch("copy"); });
+  var bPrDel = document.getElementById("btnPrivateDelSel");
+  if (bPrDel) bPrDel.addEventListener("click", function() { privateBatch("del"); });
   var bPTS = document.getElementById("btnPoolTagSel");
   if (bPTS) bPTS.addEventListener("click", function() {
     var ids = Array.from(poolSel);
     if (!ids.length) { toast("请先勾选图片", 0); return; }
     showTagModal(ids, "pool");
   });
+  var bPLS = document.getElementById("btnPoolLevelSel");
+  if (bPLS) bPLS.addEventListener("click", function() { setPoolLevelModal(); });
   var bPES = document.getElementById("btnPoolEnableSel");
   if (bPES) bPES.addEventListener("click", function() { poolBatch(true); });
   var bPDS = document.getElementById("btnPoolDisableSel");
@@ -1109,7 +1162,7 @@ function init() {
   if (bPDL) bPDL.addEventListener("click", function() {
     var ids = Array.from(poolSel);
     if (!ids.length) { toast("请先勾选图片", 0); return; }
-    if (confirm("确定从随机库删除选中的 " + ids.length + " 张?")) {
+    if (confirm("确定从共享库删除选中的 " + ids.length + " 张?")) {
       api("POST", "/admin/api/pool/batch-delete", { ids: ids }).then(function(r) {
         if (r.ok) { toast("已删除 " + (r.deleted || ids.length) + " 张", 1); poolSel.clear(); updatePoolSel(); loadPool(); loadTagCloud(); }
         else toast(r.error || "删除失败", 0);
@@ -1222,7 +1275,7 @@ function init() {
       else fallbackCopy(dv);
       return;
     }
-    // 随机库操作
+    // 共享库操作
     var poolCheck = t.closest("[data-pool-check]");
     if (poolCheck) {
       var pid3 = poolCheck.getAttribute("data-pool-check");
@@ -1244,15 +1297,38 @@ function init() {
     var poolDel = t.closest("[data-action='pool-delete']");
     if (poolDel) {
       var pid2 = poolDel.getAttribute("data-id");
-      if (confirm("确定从随机库删除这张图?")) {
+      if (confirm("确定从共享库删除这张图?")) {
         api("DELETE", "/admin/api/pool?id=" + pid2).then(function(r) { if (r.ok) { toast("已删除", 1); loadPool(); } });
       }
       return;
     }
+    // 私密库操作
+    var priCheck = t.closest("[data-private-check]");
+    if (priCheck) {
+      var priid = priCheck.getAttribute("data-private-check");
+      if (priCheck.checked) privateSel.add(priid); else privateSel.delete(priid);
+      updatePrivateSel();
+      return;
+    }
+    var priMove = t.closest("[data-action='private-move']");
+    if (priMove) {
+      api("POST", "/admin/api/pool/batch", { ids: [priMove.getAttribute("data-id")], is_private: 0 }).then(function(r) {
+        if (r.ok) { toast("已移入共享库", 1); loadPrivatePool(); loadPool(); }
+        else toast(r.error || "操作失败", 0);
+      });
+      return;
+    }
+    var priDel = t.closest("[data-action='private-delete']");
+    if (priDel) {
+      var priid2 = priDel.getAttribute("data-id");
+      if (confirm("确定从私密库删除这张图?")) {
+        api("DELETE", "/admin/api/pool?id=" + priid2).then(function(r) { if (r.ok) { toast("已删除", 1); loadPrivatePool(); } });
+      }
+      return;
+    }
     // 密钥操作
-    var keyEdit = t.closest("[data-action='edit-key']");
-    if (keyEdit) {
-      editKeyModal(keyEdit.getAttribute("data-id"), keyEdit.getAttribute("data-name") || "", keyEdit.getAttribute("data-expires") || "");
+    var keyEdit = t.closest("[data-action='edit-key']");    if (keyEdit) {
+      editKeyModal(keyEdit.getAttribute("data-id"), keyEdit.getAttribute("data-name") || "", keyEdit.getAttribute("data-expires") || "", keyEdit.getAttribute("data-level") || "pt");
       return;
     }
     var keyToggle = t.closest("[data-action='toggle-key']");
@@ -1488,7 +1564,7 @@ function dupThumb(f) {
   return '<div style="width:56px;height:56px;display:flex;align-items:center;justify-content:center;background:#f3f4f6;border-radius:6px;font-size:20px">📄</div>';
 }
 
-// 重复分组对比视图（清理前核对：每组哪些保留、哪些待清理、哪些被随机库引用）
+// 重复分组对比视图（清理前核对：每组哪些保留、哪些待清理、哪些被共享库引用）
 async function showDupGroups() {
   var overlay = document.createElement("div");
   overlay.id = "dupOverlay";
@@ -1961,10 +2037,10 @@ function renderD1Skeleton() {
     ['库内文件合计 (Σ大小，含代理/重复)', '#c4b5fd', '#ede9fe'],
     ['今日上传', '#a78bfa', '#f3e8ff'],
     ['本月上传', '#c4b5fd', '#ede9fe'],
-    ['随机库总数', '#8b5cf6', '#f5f3ff'],
-    ['随机库启用', '#a78bfa', '#f3e8ff'],
-    ['随机库 · TG导入', '#c4b5fd', '#ede9fe'],
-    ['随机库 · 外链', '#ddd6fe', '#faf5ff']
+    ['共享库总数', '#8b5cf6', '#f5f3ff'],
+    ['共享库启用', '#a78bfa', '#f3e8ff'],
+    ['共享库 · TG导入', '#c4b5fd', '#ede9fe'],
+    ['共享库 · 外链', '#ddd6fe', '#faf5ff']
   ];
   var h = '';
   for (var i = 0; i < defs.length; i++) {
@@ -2653,7 +2729,7 @@ function showTagModal(ids, kind) {
   tagTargetKind = kind || "files";
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-bg" id="modalBackdrop"><div class="modal">' +
-    '<h3>设置标签 (' + ids.length + ' 个' + (tagTargetKind === "pool" ? "随机库图片" : "文件") + ')</h3>' +
+    '<h3>设置标签 (' + ids.length + ' 个' + (tagTargetKind === "pool" ? "共享库图片" : "文件") + ')</h3>' +
     '<div class="fr"><label>标签 (逗号分隔；留空则清空标签)</label><input class="inp" id="modalTags" placeholder="风景,美女,夜景"></div>' +
     '<div class="modal-actions">' +
     '<button class="btn btn-ghost" id="modalCancel">取消</button>' +
@@ -2672,22 +2748,25 @@ async function saveTags() {
     loadTagCloud();
   } else toast(r.error || "保存失败", 0);
 }
-// 导入随机库弹窗：可选 ①设置标签并导入 ②仅导入(沿用现有标签) ③只设标签不导入
+// 导入共享库弹窗：可选 ①设置标签并导入 ②仅导入(沿用现有标签) ③只设标签不导入 ④加入私密库
 function showPoolImportModal(ids) {
   var closeM = function() { document.getElementById("modalArea").innerHTML = ""; };
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-bg" id="modalBackdrop"><div class="modal">' +
-    '<h3>导入随机库 (' + ids.length + ' 个文件)</h3>' +
+    '<h3>导入共享库 (' + ids.length + ' 个文件)</h3>' +
     '<div class="fr"><label>标签（可选，逗号分隔；留空则沿用文件现有标签）</label><input class="inp" id="impTags" placeholder="街拍,美女"></div>' +
+    '<div class="fr"><label>级别（级别对等：低级别密钥不可见高级别内容）</label><select class="inp" id="impLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>' +
     '<div class="modal-actions" style="flex-wrap:wrap">' +
     '<button class="btn btn-primary" id="impImportTag">设置标签并导入</button>' +
     '<button class="btn" id="impImportOnly" style="background:#f1f5f9;color:var(--text)">仅导入（沿用现有标签）</button>' +
     '<button class="btn btn-ghost" id="impTagOnly">只设标签不导入</button>' +
+    '<button class="btn btn-warn" id="impPrivate" style="background:#d97706;color:#fff" title="私密图片等同 vvip，仅 vvip 密钥可访问，不进入共享库">加入私密库</button>' +
     '<button class="btn btn-ghost" id="modalCancel">取消</button>' +
     '</div></div></div>';
   document.getElementById("impImportTag").onclick = function() {
     var tags = document.getElementById("impTags").value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
-    api("POST", "/admin/api/pool/from-tg", { ids: ids, tags: tags }).then(function(r) {
+    var level = document.getElementById("impLevel").value;
+    api("POST", "/admin/api/pool/from-tg", { ids: ids, tags: tags, level: level }).then(function(r) {
       if (r.ok) {
         toast("已设置标签并导入 " + (r.data && r.data.added || 0) + " 张" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
         closeM(); loadFiles(currentPage); loadTagCloud(); loadPool();
@@ -2695,9 +2774,10 @@ function showPoolImportModal(ids) {
     });
   };
   document.getElementById("impImportOnly").onclick = function() {
-    api("POST", "/admin/api/pool/from-tg", { ids: ids }).then(function(r) {
+    var level = document.getElementById("impLevel").value;
+    api("POST", "/admin/api/pool/from-tg", { ids: ids, level: level }).then(function(r) {
       if (r.ok) {
-        toast("已导入 " + (r.data && r.data.added || 0) + " 张到随机库" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
+        toast("已导入 " + (r.data && r.data.added || 0) + " 张到共享库" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
         closeM(); loadFiles(currentPage); loadTagCloud(); loadPool();
       } else toast(r.error || "导入失败", 0);
     });
@@ -2709,6 +2789,15 @@ function showPoolImportModal(ids) {
         toast("已设置标签（未导入）", 1);
         closeM(); loadFiles(currentPage); loadTagCloud();
       } else toast(r.error || "失败", 0);
+    });
+  };
+  document.getElementById("impPrivate").onclick = function() {
+    var tags = document.getElementById("impTags").value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
+    api("POST", "/admin/api/private-pool/from-tg", { ids: ids, tags: tags }).then(function(r) {
+      if (r.ok) {
+        toast("已加入私密库 " + (r.data && r.data.added || 0) + " 张" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
+        closeM(); loadFiles(currentPage); loadTagCloud(); loadPrivatePool();
+      } else toast(r.error || "加入失败", 0);
     });
   };
 }
@@ -2855,7 +2944,7 @@ function saveShowConfig() {
 // ===== 节目组已废弃（图片直接在节目内配置） =====
 var gpList = [];
 function renderGroupSelects() {} // no-op
-// 随机库
+// 共享库
 var poolSel = new Set();
 var poolUrlMap = {};
 function updatePoolSel() {
@@ -2884,7 +2973,7 @@ async function loadPool() {
   var d = r.data || [];
   var cnt = document.getElementById("poolCount");
   if (cnt) cnt.textContent = d.length + (r.total !== undefined && r.total !== d.length ? " / " + r.total : "");
-  if (!d.length) { el.innerHTML = '<div class="empty">' + (kw || tags || source || en ? "没有符合筛选条件的图片" : "随机库为空：上方可导入外链，或在「文件」页勾选图片点「加入随机库」") + '</div>'; return; }
+  if (!d.length) { el.innerHTML = '<div class="empty">' + (kw || tags || source || en ? "没有符合筛选条件的图片" : "共享库为空：上方可导入外链，或在「文件」页勾选图片点「加入共享库」") + '</div>'; return; }
   var h = "";
   for (var i = 0; i < d.length; i++) {
     var f = d[i];
@@ -2894,7 +2983,7 @@ async function loadPool() {
     h += '<img class="thumb" style="height:120px;cursor:zoom-in" src="' + escStr(pv) + '" loading="lazy" data-pool-url="' + escStr(f.url) + '">';
     h += '<div class="info">';
     h += '<div class="name" title="' + escStr(f.title || (f.url || "")) + '">' + escStr(f.title || (f.url || "").slice(0, 40)) + '</div>';
-    h += '<div style="font-size:10px;margin:3px 0">' + (f.source === "tg" ? '<span class="badge badge-green">TG导入</span> ' : '<span class="badge badge-blue">外链</span> ') + tagHtml(f) + '</div>';
+    h += '<div style="font-size:10px;margin:3px 0">' + levelBadge(f.level) + ' ' + (f.source === "tg" ? '<span class="badge badge-green">TG导入</span> ' : '<span class="badge badge-blue">外链</span> ') + tagHtml(f) + '</div>';
     h += '<div class="meta"><span>' + (f.file_size ? fmtSize(f.file_size) : "--") + '</span><span>' + (f.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>') + '</span></div>';
     h += '</div>';
     h += '<div class="actions">';
@@ -2905,6 +2994,73 @@ async function loadPool() {
     poolUrlMap[f.id] = f.url;
   }
   el.innerHTML = h;
+}
+// 私密库
+var privateSel = new Set();
+var privateUrlMap = {};
+function updatePrivateSel() {
+  var n = privateSel.size;
+  var tb = document.getElementById("privateToolbar");
+  if (tb) tb.style.display = n > 0 ? "flex" : "none";
+  var c = document.getElementById("privateSelCount");
+  if (c) c.textContent = n;
+}
+async function loadPrivatePool() {
+  var el = document.getElementById("privateList");
+  if (!el) return;
+  var kw = document.getElementById("privateKw") ? document.getElementById("privateKw").value.trim() : "";
+  var tags = document.getElementById("privateTagsF") ? document.getElementById("privateTagsF").value.trim() : "";
+  var u = "/admin/api/private-pool?limit=500";
+  if (kw) u += "&keyword=" + encodeURIComponent(kw);
+  if (tags) u += "&tags=" + encodeURIComponent(tags);
+  el.innerHTML = skImgs(6);
+  var r = await api("GET", u);
+  if (!r.ok) { el.innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
+  var d = r.data || [];
+  if (!d.length) { el.innerHTML = '<div class="empty">' + (kw || tags ? "没有符合筛选条件的图片" : "私密库为空：到「文件」页勾选图片，点「加入共享库」，在弹窗里选「加入私密库」") + '</div>'; return; }
+  var h = "";
+  for (var i = 0; i < d.length; i++) {
+    var f = d[i];
+    var pv = f.thumb_url || f.url;
+    h += '<div class="file-card">';
+    h += '<div class="cb-wrap"><input type="checkbox" data-private-check="' + f.id + '"' + (privateSel.has(String(f.id)) ? ' checked' : '') + '></div>';
+    h += '<img class="thumb" style="height:120px;cursor:zoom-in" src="' + escStr(pv) + '" loading="lazy" data-pool-url="' + escStr(f.url) + '">';
+    h += '<div class="info">';
+    h += '<div class="name" title="' + escStr(f.title || (f.url || "")) + '">' + escStr(f.title || (f.url || "").slice(0, 40)) + '</div>';
+    h += '<div style="font-size:10px;margin:3px 0">' + levelBadge("vvip") + ' ' + '<span class="badge badge-yellow">私密</span> ' + tagHtml(f) + '</div>';
+    h += '<div class="meta"><span>' + (f.file_size ? fmtSize(f.file_size) : "--") + '</span></div>';
+    h += '</div>';
+    h += '<div class="actions">';
+    h += '<button class="btn btn-ghost btn-sm" data-action="private-move" data-id="' + f.id + '" title="移入共享库后私密图片将按共享库规则分级可见">移入共享库</button>';
+    h += '<button class="btn btn-danger btn-sm" data-action="private-delete" data-id="' + f.id + '">删除</button>';
+    h += '</div></div>';
+    privateUrlMap[f.id] = f.url;
+  }
+  el.innerHTML = h;
+}
+function privateBatch(mode) {
+  var ids = Array.from(privateSel);
+  if (!ids.length) return;
+  if (mode === "move") {
+    api("POST", "/admin/api/pool/batch", { ids: ids, is_private: 0 }).then(function(r) {
+      if (r.ok) { toast("已移入共享库（保留原级别）", 1); privateSel.clear(); updatePrivateSel(); loadPrivatePool(); loadPool(); }
+      else toast(r.error || "操作失败", 0);
+    });
+  } else if (mode === "del") {
+    if (!confirm("确定从私密库删除选中的 " + ids.length + " 张?")) return;
+    api("POST", "/admin/api/pool/batch-delete", { ids: ids }).then(function(r) {
+      if (r.ok) { toast("已删除 " + (r.deleted || ids.length) + " 张", 1); privateSel.clear(); updatePrivateSel(); loadPrivatePool(); }
+      else toast(r.error || "删除失败", 0);
+    });
+  } else if (mode === "copy") {
+    var links = [];
+    for (var i = 0; i < ids.length; i++) { if (privateUrlMap[ids[i]]) links.push(privateUrlMap[ids[i]]); }
+    if (!links.length) { toast("未找到链接", 0); return; }
+    var txt = links.join("\n");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(function() { toast("已复制 " + links.length + " 条链接", 1); }, function() { fallbackCopy(txt); });
+    } else fallbackCopy(txt);
+  }
 }
 function copyPoolLinks() {
   var ids = Array.from(poolSel);
@@ -2927,12 +3083,33 @@ function poolBatch(en) {
     else toast(r.error || "操作失败", 0);
   });
 }
+// 批量设置共享库图片级别（级别对等）
+function setPoolLevelModal() {
+  var ids = Array.from(poolSel);
+  if (!ids.length) { toast("请先勾选图片", 0); return; }
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-mask"><div class="modal"><h3>设置级别 (' + ids.length + ' 张)</h3>' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">级别（级别对等：低级别密钥不可见高级别内容）</label>' +
+    '<select class="inp" id="plLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="plCancel">取消</button><button class="btn btn-primary" id="plSave">保存</button></div>' +
+    '</div></div>';
+  document.getElementById("plCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("plSave").onclick = function() {
+    var lv = document.getElementById("plLevel").value;
+    api("POST", "/admin/api/pool/batch", { ids: ids, level: lv }).then(function(r) {
+      document.getElementById("modalArea").innerHTML = "";
+      if (r.ok) { toast("已设置级别 " + lv.toUpperCase(), 1); loadPool(); }
+      else toast(r.error || "设置失败", 0);
+    });
+  };
+}
 async function importPoolUrls() {
   var urls = document.getElementById("poolUrls").value.split("\n").map(function(s){ return s.trim(); }).filter(Boolean);
   if (!urls.length) { toast("请输入图片 URL", 0); return; }
   var tags = document.getElementById("poolTags").value.split(",").map(function(s){ return s.trim(); }).filter(Boolean);
   var title = document.getElementById("poolTitle").value.trim();
-  var r = await api("POST", "/admin/api/pool", { urls: urls, tags: tags, title: title });
+  var level = document.getElementById("poolAddLevel").value;
+  var r = await api("POST", "/admin/api/pool", { urls: urls, tags: tags, title: title, level: level });
   if (r.ok) {
     toast("已导入 " + ((r.data && r.data.added) || 0) + " 张 (重复 URL 自动跳过)", 1);
     document.getElementById("poolUrls").value = "";
@@ -2991,7 +3168,7 @@ function renderGenExamples(url, mode) {
   var imgUrl = url + (url.indexOf("mode=") >= 0 ? "" : (url.indexOf("?") >= 0 ? "&mode=img" : "?mode=img"));
   var img = mode === "random"
     ? '<img src="' + imgUrl + '">   <!-- mode=img: 302 跳转到随机一张图片 -->'
-    : '接口只从「随机库」取数据 (pool=1)，item 里的 url 即图片直链，确保图片都经过你审核';
+    : '接口只从「共享库」取数据 (pool=1)，item 里的 url 即图片直链，确保图片都经过你审核';
   document.getElementById("genExamples").innerHTML =
     '<div style="color:#94a3b8;font-size:12px;margin-bottom:6px">① curl 命令行</div>' +
     '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#86efac">' + escStr(curl) + '</div>' +
@@ -3017,7 +3194,7 @@ function genDoc() {
   rows.push("| keyword | 文件名/描述关键词 |");
   rows.push("| " + (mode === "random" ? "count" : "limit") + " | 返回数量 " + limit + (mode === "random" ? " (最多10)" : "") + " |");
   if (mode === "random") rows.push("| mode | json=返回JSON(默认)；img=302跳转到随机一张图片 |");
-  else rows.push("| pool | 1=从随机库取(生成器默认)；留空=从Telegram全库取 |");
+  else rows.push("| pool | 1=从共享库取(生成器默认)；留空=从Telegram全库取 |");
   var md =
     "# 图片接口文档\n\n" +
     "## 接口地址\n\n" + url + "\n\n" +
@@ -3037,6 +3214,13 @@ function genDoc() {
     '</div></div></div>';
 }
 // 密钥管理
+// 级别 badge：pt 灰 / vip 蓝 / svip 紫 / vvip 金
+var LEVEL_STYLES = { pt: "#9ca3af", vip: "#3b82f6", svip: "#8b5cf6", vvip: "#d97706" };
+function levelBadge(lv) {
+  lv = LEVEL_STYLES[lv] ? lv : "pt";
+  var color = LEVEL_STYLES[lv];
+  return '<span style="font-size:11px;font-weight:700;color:#fff;background:' + color + ';border-radius:4px;padding:1px 6px;letter-spacing:.3px">' + lv.toUpperCase() + '</span>';
+}
 async function loadKeys() {
   var el = document.getElementById("keyList");
   if (!el) return;
@@ -3044,7 +3228,7 @@ async function loadKeys() {
   if (!r.ok) { el.innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
   var d = r.data || [];
   if (!d.length) { el.innerHTML = '<div class="empty">暂无密钥，点击右上角生成</div>'; return; }
-  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>权限</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>级别</th><th>权限</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
   var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   for (var i = 0; i < d.length; i++) {
     var k = d[i];
@@ -3056,13 +3240,14 @@ async function loadKeys() {
     }
     h += '<tr><td>' + escStr(k.name || "-") + '</td>';
     h += '<td><code style="font-size:11px">' + escStr(k.key) + '</code> <button class="btn btn-ghost btn-sm" data-action="copy-key" data-key="' + escStr(k.key) + '">复制</button></td>';
+    h += '<td>' + levelBadge(k.level) + '</td>';
     h += '<td>' + escStr(k.scopes || "files:read") + '</td>';
     h += '<td>' + (k.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>') + '</td>';
     h += '<td>' + expTxt + '</td>';
     h += '<td>' + (k.usage_count || 0) + '</td>';
     h += '<td class="file-date">' + (k.last_used_at ? String(k.last_used_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
     h += '<td class="file-date">' + (k.created_at ? String(k.created_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
-    h += '<td><button class="btn btn-ghost btn-sm" data-action="edit-key" data-id="' + k.id + '" data-name="' + escStr(k.name || "") + '" data-expires="' + (k.expires_at || "") + '">编辑</button> ';
+    h += '<td><button class="btn btn-ghost btn-sm" data-action="edit-key" data-id="' + k.id + '" data-name="' + escStr(k.name || "") + '" data-expires="' + (k.expires_at || "") + '" data-level="' + escStr(k.level || "pt") + '">编辑</button> ';
     h += '<button class="btn btn-ghost btn-sm" data-action="toggle-key" data-id="' + k.id + '" data-enabled="' + k.enabled + '">' + (k.enabled ? "停用" : "启用") + '</button> ';
     h += '<button class="btn btn-danger btn-sm" data-action="delete-key" data-id="' + k.id + '">删除</button></td></tr>';
   }
@@ -3072,23 +3257,32 @@ async function loadKeys() {
 function createKey() {
   var name = document.getElementById("keyName").value.trim();
   var expires_at = document.getElementById("keyExpires") ? document.getElementById("keyExpires").value : "";
-  api("POST", "/admin/api/keys", { name: name, expires_at: expires_at }).then(function(r) {
+  var level = document.getElementById("keyLevel") ? document.getElementById("keyLevel").value : "pt";
+  api("POST", "/admin/api/keys", { name: name, expires_at: expires_at, level: level }).then(function(r) {
     if (r.ok) {
-      toast("密钥已生成" + (expires_at ? "，到期 " + expires_at : "（永久有效）"), 1);
+      toast("密钥已生成" + (expires_at ? "，到期 " + expires_at : "（永久有效）") + " · 级别 " + level.toUpperCase(), 1);
       document.getElementById("keyName").value = "";
       if (document.getElementById("keyExpires")) document.getElementById("keyExpires").value = "";
+      if (document.getElementById("keyLevel")) document.getElementById("keyLevel").value = "pt";
       loadKeys();
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(r.data.key);
     } else toast(r.error || "生成失败", 0);
   });
 }
-// 编辑密钥（名称 / 到期时间）
-function editKeyModal(id, name, expires) {
+// 编辑密钥（名称 / 到期时间 / 级别）
+function editKeyModal(id, name, expires, level) {
   var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  var lvOpts = "";
+  var lvs = ["pt", "vip", "svip", "vvip"];
+  for (var li = 0; li < lvs.length; li++) {
+    lvOpts += '<option value="' + lvs[li] + '"' + ((level || "pt") === lvs[li] ? " selected" : "") + '>' + lvs[li] + '</option>';
+  }
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-mask"><div class="modal"><h3>编辑密钥</h3>' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">用途名称</label>' +
     '<input class="inp" id="ekName" value="' + escStr(name) + '" placeholder="用途说明">' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">级别（决定可获取内容级别，级别对等）</label>' +
+    '<select class="inp" id="ekLevel">' + lvOpts + '</select>' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">到期日期（留空 = 永久有效）</label>' +
     '<input class="inp" type="date" id="ekExpires" value="' + escStr(expires) + '" min="' + today + '">' +
     '<div class="modal-actions"><button class="btn btn-ghost" id="ekCancel">取消</button><button class="btn btn-primary" id="ekSave">保存</button></div>' +
@@ -3097,7 +3291,8 @@ function editKeyModal(id, name, expires) {
   document.getElementById("ekSave").onclick = function() {
     var nm = document.getElementById("ekName").value.trim();
     var ex = document.getElementById("ekExpires").value;
-    api("PATCH", "/admin/api/keys?id=" + id, { name: nm, expires_at: ex }).then(function(r) {
+    var lv = document.getElementById("ekLevel").value;
+    api("PATCH", "/admin/api/keys?id=" + id, { name: nm, expires_at: ex, level: lv }).then(function(r) {
       document.getElementById("modalArea").innerHTML = "";
       if (r.ok) { toast("已保存", 1); loadKeys(); } else toast(r.error || "保存失败", 0);
     });
@@ -3355,7 +3550,7 @@ async function loadFiles(page) {
       h += '<div class="cb-wrap"><input type="checkbox" class="fck" data-id="' + f.id + '"></div>';
       h += thumb;
       h += '<div class="info"><div class="name" title="' + nm + '">' + nm + '</div>';
-      h += '<div style="font-size:10px;margin:3px 0">' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div>';
+      h += '<div style="font-size:10px;margin:3px 0">' + levelBadge(f.level) + ' ' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div>';
       h += '<div class="meta"><span>' + fmtSize(f.file_size) + '</span><span>' + (f.created_at || "").split("T")[0] + '</span></div></div>';
       h += '<div class="actions"><a href="' + pv + '" target="_blank" class="btn btn-ghost btn-sm">打开</a>';
       h += '<button class="btn btn-ghost btn-sm" data-action="tag-file" data-id="' + f.id + '">标签</button>';
@@ -3379,7 +3574,7 @@ async function loadFiles(page) {
             : '<div class="preview-placeholder" style="cursor:pointer;background:#1e293b;color:#fff;font-size:14px" data-preview="' + pv + '" data-type="video" data-name="' + nm + '">\u25B6</div>')
         : '<div class="preview-placeholder">\uD83D\uDCC4</div>';
       h += '<tr><td><input type="checkbox" class="fck" data-id="' + f.id + '"></td><td>' + img + '</td>';
-      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div></td>';
+      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + levelBadge(f.level) + ' ' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div></td>';
       h += '<td><span class="badge badge-blue">' + f.file_type + '</span></td>';
       h += '<td>' + fmtSize(f.file_size) + '</td>';
       h += '<td style="font-size:12px">' + escStr(f.chat_title || "") + '</td>';
