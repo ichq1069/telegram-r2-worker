@@ -6,9 +6,9 @@
 
 | 认证类型 | 凭证位置 | 适用端点 |
 |---|---|---|
-| 无认证 | — | `/health`、`/show*`、`/file/tg/*`、`/webhook`、`/docs`、`/dashboard` |
+| 无认证 | — | `/health`、`/show*`、`/gallery`、`/file/tg/*`、`/webhook`、`/docs`、`/dashboard` |
 | 管理员 | `?api_key=` 或 `X-API-Key` 头,值 `env.API_KEY` | `/admin/api/*`、旧式 `/api/*`、`/admin` |
-| api_keys 表 | `X-API-Key` 头,值存于 `api_keys` 表 | `/api/v1/files`、`/api/v1/random` |
+| api_keys 表 | `X-API-Key` 头,值存于 `api_keys` 表 | `/api/v1/files`、`/api/v1/random`、`/api/v1/upload`、`/gallery/data` |
 | Telegram | webhook secret_token(可选) | `/bot/*` |
 
 ## 2. 公开端点(无认证)
@@ -20,20 +20,43 @@
 | `/docs` | GET | 内置文档页(静态) |
 | `/show` | GET | 公开轮播展示页(读 shared pool) |
 | `/show/data` | GET | 轮播页数据接口(仅 `pt` 且非私密内容) |
+| `/gallery` | GET | 画廊瀑布流静态页(数据走 `/gallery/data`) |
 | `/file/tg/<id>` | GET | 302 跳转 Telegram 官方直链(不暴露 token) |
 | `/favicon.ico` | GET | 204 空响应 |
 | `/webhook` | POST | Telegram webhook 入口(需 secret_token 时校验) |
 
 ## 3. 公开 JSON API v1(api_keys 表认证 + 限流)
 
-> 认证:`X-API-Key: <api_keys.key>`。返回 401(无效)、429(限流)。按密钥 `level` 过滤结果,私密内容(`is_private=1`)仅 `vvip` 密钥可见。
+> 认证:`X-API-Key: <api_keys.key>` 或 `?api_key=`,返回 401(无效)、429(限流)。按密钥 `level` 过滤结果,私密内容(`is_private=1`)仅 `vvip` 密钥可见。
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
 | `/api/v1/files` | GET | 文件列表,支持 `page/page_size/type/chat_id/user_id/keyword/start_date/end_date`,按级别过滤 |
 | `/api/v1/random` | GET | 随机内容,按级别过滤,`count` 指定条数 |
+| `/api/v1/upload` | POST | 上传文件到 R2(见下) |
+| `/gallery/data` | GET | 画廊页数据接口,同 `/api/v1/files?pool=1`(多级+标签+类型) |
 
 级别规则:密钥级别 `L` 可看到 `level <= L` 的公共内容(`is_private=0`);任何非 `vvip` 请求都看不到私密内容。详细见 [专有概念/内容分级与私密库](./专有概念/内容分级与私密库.md)。
+
+### 3.1 上传接口 `POST /api/v1/upload`
+
+multipart/form-data,文件字段名固定为 `file`,单文件上限 **19MB**。
+
+| 参数 | 位置 | 说明 |
+|---|---|---|
+| `api_key` | query/header | 必填,api_keys 表密钥 |
+| `pool` | query | `1` = 进共享库 random_pool;不带 = 进 Tele 库 files 表 |
+| `tags` | query | 逗号分隔标签 |
+| `title` | query | 标题(可选,默认文件名) |
+| `level` | query | 可选,不得超过密钥级别(默认 = 密钥级别,级别对等) |
+| `is_private` | query | `1` = 私密(仅 vvip 密钥可用,私密=vvip 最高级) |
+
+返回:`{ ok, data: { id, url, added, pool, level, is_private, file_type, file_size } }`,`url` 即直链。
+
+示例:
+```bash
+curl -F "file=@cat.jpg" "https://<worker>.workers.dev/api/v1/upload?api_key=你的密钥&pool=1&tags=cat,动物&title=一只猫"
+```
 
 ## 4. 管理 API(管理员 Key)
 

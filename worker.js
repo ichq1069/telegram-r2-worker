@@ -42,6 +42,9 @@ export default {
     if (m === 'GET' && p === '/docs') return handleDocs();
     if (m === 'GET' && p === '/show') return handleShowPage();
     if (m === 'GET' && p === '/show/data') return handleShowData(request, env);
+    // 画廊瀑布流页（带 key 鉴权，多级+标签+类型筛选）
+    if (m === 'GET' && p === '/gallery') return handleGalleryPage();
+    if (m === 'GET' && p === '/gallery/data') return handleGalleryData(request, env);
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
     if (m === 'GET' && p === '/favicon.ico') return new Response(null, { status: 204 });
     // File proxy: /file/tg/<id> -> 302 to official Telegram direct link (clean URL, no token exposed)
@@ -155,6 +158,10 @@ export default {
     if (m === 'GET' && p === '/admin/api/settings/rate-limit') return isAdmin ? handleAdminGetRateLimit(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/rate-limit') return isAdmin ? handleAdminSaveRateLimit(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/notify-test') return isAdmin ? handleAdminNotifyTest(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 事件 Webhook 通知配置（入库/删除/失败时 POST 到外部 URL）
+    if (m === 'GET' && p === '/admin/api/settings/webhook') return isAdmin ? handleAdminGetWebhook(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/webhook') return isAdmin ? handleAdminSaveWebhook(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/webhook/test') return isAdmin ? handleAdminWebhookTest(request, env) : json({ok:false,error:'Unauthorized'},401);
 
     // Bot API routes (no auth needed, verified by Telegram)
     if (m === 'POST' && p === '/bot/sendMessage') return handleBotSendMessage(request, env);
@@ -182,6 +189,16 @@ export default {
       const keyLevel = (k.rec && k.rec.level) || 'pt';
       if (p === '/api/v1/random') return handlePublicRandom(request, env, keyLevel);
       return handlePublicFiles(request, env, keyLevel);
+    }
+    // Public upload API for third-party programs (auth via api_keys table)
+    // POST /api/v1/upload?api_key=xxx&pool=1&tags=风景&title=xxx&level=pt&is_private=1
+    // Body: multipart/form-data with a file field named "file"
+    if (m === 'POST' && p === '/api/v1/upload') {
+      const k = await checkApiKey(request, env);
+      if (!k) return json({ ok: false, error: 'Unauthorized or invalid API key' }, 401);
+      if (k.limited) return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      const keyLevel = (k.rec && k.rec.level) || 'pt';
+      return handlePublicUpload(request, env, keyLevel);
     }
 
     // API routes (require auth)
@@ -354,6 +371,8 @@ async function scheduleBatchRef(env, chatId, dbId, waitFn) {
       }
       // 由批内最后一条统一回复（最后唤醒者拿到最终批号，避免中途编号变化/重复回复）
       if (list[list.length - 1].id !== dbId || !env.TG_BOT_TOKEN) return;
+      const cnt = await countCompleted(env);
+      const cntStr = cnt ? '\n📊 已完成: ' + cnt.completed + ' / ' + cnt.total + ' 条' : '';
       for (var k = 0; k < list.length; k++) {
         const ref = N + '-' + String(k + 1).padStart(3, '0');
         const nm = String(list[k].file_name || '').slice(0, 40);
@@ -361,7 +380,7 @@ async function scheduleBatchRef(env, chatId, dbId, waitFn) {
           await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(list[k].message_id, 10) || undefined, text: '📥 已入库 #' + ref + (nm ? ' · ' + nm : '') })
+            body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(list[k].message_id, 10) || undefined, text: '📥 已入库 #' + ref + (nm ? ' · ' + nm : '') + cntStr })
           });
         } catch (e) {}
       }
@@ -379,11 +398,12 @@ async function scheduleBatchRef(env, chatId, dbId, waitFn) {
 // ==================== BOT COMMANDS ====================
 
 const DEFAULT_COMMANDS = {
-  '/start': '👋 欢迎！发送任意文件即可自动入库并转存到云端存储。\n\n常用命令:\n/count - 查询现有数量\n/pending - 查询未转存数量\n/retry - 继续完成未转存入库\n/health - 查询服务状态\n/stats - 完整统计\n/file <id> - 按 ID 获取文件\n/search <关键词> - 搜索文件',
-  '/help': '📖 可用命令:\n\n/count - 查询现有数量\n/pending - 查询未转存数量\n/retry - 继续完成未转存入库\n/health - 查询服务状态\n/stats - 完整统计\n/file <id> - 按 ID 获取文件\n/search <关键词> - 搜索文件\n\n直接发送文件（图片/视频/文档/音频）即可自动保存！',
+  '/start': '👋 欢迎！发送任意文件即可自动入库并转存到云端存储。\n\n常用命令:\n/count - 查询现有数量\n/pending - 查询未转存数量\n/retry - 继续完成未转存入库\n/health - 查询服务状态\n/stats - 完整统计\n/file <id> - 按 ID 获取文件\n/search <关键词> - 搜索文件\n/img <标签> - 从共享库随机抽图',
+  '/help': '📖 可用命令:\n\n/count - 查询现有数量\n/pending - 查询未转存数量\n/retry - 继续完成未转存入库\n/health - 查询服务状态\n/stats - 完整统计\n/file <id> - 按 ID 获取文件\n/search <关键词> - 搜索文件\n/img <标签> - 从共享库随机抽图\n\n直接发送文件（图片/视频/文档/音频）即可自动保存！',
   '/stats': '__STATS__',
   '/file': 'Usage: /file <id>\nExample: /file 123',
   '/search': 'Usage: /search <keyword>\nExample: /search cat',
+  '/img': 'Usage: /img <标签1,标签2 或 关键词>\nExample: /img 风景 或 /img 美女',
 };
 
 // ==================== 数字菜单交互（1/2/3 选择） ====================
@@ -992,6 +1012,11 @@ async function handleBotCommand(chatId, msgId, text, env, waitFn) {
     return await handleHealthCommand(chatId, env);
   }
 
+  // /img <标签1,标签2 或 关键词>：从共享库随机抽一张符合条件的图发到群里
+  if (cmd === '/img' || cmd === '/image' || cmd === '/图') {
+    return await handleImgCommand(chatId, msgId, args, env);
+  }
+
   return null; // Not a command
 }
 
@@ -1005,7 +1030,8 @@ var BUILTIN_COMMANDS = [
   { command: '/count', description: '现有数量统计' },
   { command: '/pending', description: '未转存数量' },
   { command: '/retry', description: '继续完成未转存（数字菜单）' },
-  { command: '/health', description: '健康检查' }
+  { command: '/health', description: '健康检查' },
+  { command: '/img', description: '从共享库随机抽图：/img 风景,美女 或 /img 关键词' }
 ];
 
 // 把内置命令同步进 bot_commands（INSERT OR IGNORE，不覆盖用户已修改的），后台统一管理
@@ -1181,6 +1207,48 @@ async function handleSearchCommand(chatId, msgId, keyword, env) {
     return { ok: true };
   } catch (e) {
     await replyText(chatId, msgId, '�?Error: ' + e.message, env);
+    return { ok: true };
+  }
+}
+
+// 群内索图：从共享库 random_pool 随机抽 1 张符合条件(enabled=1 + level<=pt 且非私密)的图发回群里。
+// 参数为空则完全随机。支持逗号分隔标签（命中任意一个即可）或关键词（标题/URL 包含）。
+async function handleImgCommand(chatId, msgId, args, env) {
+  if (!env.D1_DB) { await replyText(chatId, msgId, '❌ D1 未配置', env); return { ok: true }; }
+  try {
+    const parts = String(args || '').split(/[\s,，]+/).map(function(s){ return s.trim(); }).filter(Boolean);
+    const tags = parts.length ? parts : [];
+    let w = "WHERE enabled=1 AND is_private=0 AND level IN ('pt')"; const p = [];
+    if (tags.length) {
+      const ts = [];
+      tags.forEach(function(t) {
+        ts.push('(tags LIKE ? OR tags LIKE ? OR tags LIKE ? OR tags = ? OR title LIKE ? OR url LIKE ?)');
+        p.push('%,' + t + ',%', t + ',%', '%,' + t, t, '%' + t + '%', '%' + t + '%');
+      });
+      w += ' AND (' + ts.join(' OR ') + ')';
+    }
+    const d = await env.D1_DB.prepare('SELECT id, url, thumb_url, title, tags, file_type FROM random_pool ' + w + ' ORDER BY RANDOM() LIMIT 1').bind(...p).all();
+    const it = (d.results || [])[0];
+    if (!it) {
+      await replyText(chatId, msgId, tags.length ? ('😕 共享库中没有匹配「' + tags.join('、') + '」的图') : '😕 共享库还没有内容，先在后台「共享库」添加一些吧', env);
+      return { ok: true };
+    }
+    const cap = (it.title || '') + (it.tags ? '\n#' + it.tags.split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(' #') : '');
+    // 优先发图片（sendPhoto 支持 URL）；非图片类型退化为发链接文本
+    if (it.file_type === 'photo' && it.url) {
+      try {
+        await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendPhoto', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, photo: it.url, caption: String(cap).slice(0, 1024), parse_mode: '' })
+        });
+        return { ok: true, img: true };
+      } catch (e) {}
+    }
+    await replyText(chatId, msgId, '📸 ' + (it.title || '（无标题）') + '\n' + it.url + (it.tags ? '\n#' + it.tags.split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(' #') : ''), env);
+    return { ok: true, img: true };
+  } catch (e) {
+    await replyText(chatId, msgId, '❌ ' + e.message, env);
     return { ok: true };
   }
 }
@@ -1679,6 +1747,7 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
       var f = null;
       try { f = await env.D1_DB.prepare('SELECT file_name, chat_title FROM files WHERE id=?').bind(dbId).first(); } catch (e) {}
       notifyAdmin(env, '转存失败: ' + ((f && f.file_name) || dbId) + ((f && f.chat_title) ? ' | ' + f.chat_title : '') + '\n' + String(err).slice(0, 300));
+      fireWebhook(env, 'file_failed', { id: dbId, file_name: (f && f.file_name) || '', chat_title: (f && f.chat_title) || '', error: String(err).slice(0, 300) }).catch(function(){});
       // 通知原聊天：已入库但转存失败，可在后台「未转存」页手动重试，或等待定时任务自动重试
       if (chatId && env.TG_BOT_TOKEN) {
         try {
@@ -1908,6 +1977,7 @@ async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, 
     // 用最终编号（延迟批量编号已分配，如 3-001）；历史/重试文件兜底用原 ref 或文件 id
     const rr2 = await getFileRef(env, dbId);
     await replyMsg(chatId, parseInt(msgId), fi, url, env, rr2 || ref || String(dbId));
+    fireWebhook(env, 'file_imported', { id: dbIdNum, url: url, file_name: fi.fileName, file_type: fi.type, file_size: fi.fileSize || 0, chat_id: chatId, source: 'tg' }).catch(function(){});
   } catch (e) {
     console.error('processFileAsync:', e.message);
     await updateState('failed', e.message);
@@ -1946,6 +2016,16 @@ async function processUpdate(update, env, waitFn) {
         if (it) { await execMenuAction(it.action, chatId, env, parseInt(msgId)); return { ok: true, menu: true }; }
         await replyText(chatId, parseInt(msgId), '❌ 没有选项 ' + n, env);
         return { ok: true, menu: true };
+      }
+    }
+    // @bot 找图：群里 @机器人 并含"图/来一张/随机"等意图时，直接走共享库索图（不依赖 AI 开启）
+    if (env.D1_DB && !fi && !(msg.photo || msg.document || msg.video || msg.audio || msg.voice || msg.sticker || msg.animation || msg.video_note || msg.contact || msg.location || msg.poll)) {
+      const botUser = await getBotUsername(env);
+      const atBot = botUser && new RegExp('@' + botUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(text);
+      if (atBot && /(找图|来图|来一张|随机|图$|图片|看看图)/.test(text)) {
+        // 去除 @bot 与指令词，剩余的作为标签
+        const clean = String(text).replace(new RegExp('@' + botUser.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '').replace(/(找图|来图|来一张|随机|图片|看看图)/g, '').trim();
+        return await handleImgCommand(chatId, parseInt(msgId), clean, env);
       }
     }
     // AI 管理：开启 AI 后，仅当消息为纯文本且呈明显提问/请求意图时才交给大模型（function calling 查询/重试/搜索）。
@@ -2013,6 +2093,7 @@ async function processUpdate(update, env, waitFn) {
 
   console.log('url:', url);
   await replyMsg(chatId, parseInt(msgId), fi, url, env, ref2 || '');
+  fireWebhook(env, 'file_imported', { id: rid, url: url, file_name: fi.fileName, file_type: fi.type, file_size: fi.fileSize || 0, chat_id: chatId, source: 'tg' }).catch(function(){});
   return { ok: true, url, fileId: rid, type: fi.type };
 }
 
@@ -2269,8 +2350,20 @@ async function replyMsg(chatId, replyId, fi, url, env, ref) {
   const ic = { photo: '🖼', document: '📄', video: '🎬', audio: '🎵', voice: '🎤' };
   const lb = { photo: 'Photo', document: 'File', video: 'Video', audio: 'Audio', voice: 'Voice' };
   const pre = ref ? '#' + ref + ' ' : '';
-  const t = fi.type === 'photo' ? pre + '🖼 Saved\n' + url : pre + ic[fi.type] + ' ' + lb[fi.type] + ' Saved\n' + fi.fileName + ' (' + fmtSize(fi.fileSize) + ')\n' + url;
+  // 附带入库数量：总数/已完成（已完成数 = 总数 - 未转存数），让用户一眼看到本次转存后的数据规模
+  const cnt = await countCompleted(env);
+  const cntStr = cnt ? '\n📊 已完成: ' + cnt.completed + ' / ' + cnt.total + ' 条' : '';
+  const t = fi.type === 'photo' ? pre + '🖼 Saved\n' + url + cntStr : pre + ic[fi.type] + ' ' + lb[fi.type] + ' Saved\n' + fi.fileName + ' (' + fmtSize(fi.fileSize) + ')\n' + url + cntStr;
   try { await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text: t }) }); } catch (e) { }
+}
+// 已入库数量统计：总数（未删除）+ 已完成转存数
+async function countCompleted(env) {
+  if (!env.D1_DB) return null;
+  try {
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
+    const c = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state='completed'").first();
+    return { total: t?.c || 0, completed: c?.c || 0 };
+  } catch (e) { return null; }
 }
 
 async function replyText(chatId, replyId, text, env) {
@@ -2591,6 +2684,19 @@ async function getProxyMode(env) {
   } catch (e) {}
   _proxyModeAt = now;
   return _proxyMode;
+}
+
+// bot 用户名（用于识别 @bot 提及），getMe 一次并缓存 1 小时
+let _botUserCache = '', _botUserAt = 0;
+async function getBotUsername(env) {
+  if (!env.TG_BOT_TOKEN) return '';
+  if (_botUserCache && Date.now() - _botUserAt < 3600000) return _botUserCache;
+  try {
+    const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getMe');
+    const j = await r.json();
+    if (j && j.ok && j.result && j.result.username) { _botUserCache = j.result.username; _botUserAt = Date.now(); return _botUserCache; }
+  } catch (e) {}
+  return _botUserCache;
 }
 async function handleAdminGetProxyMode(env) {
   return json({ ok: true, data: { proxy_mode: await getProxyMode(env) } });
@@ -2919,6 +3025,129 @@ async function handleShowData(request, env) {
     return json({ ok: true, data: { cfg: cfg, program: pgName ? { name: pgName } : null, items: items } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
+
+// ==================== 画廊瀑布流页（带 key 鉴权） ====================
+// /gallery 静态页；/gallery/data?api_key=xxx&tags=&type=&limit=&offset= 返回 JSON
+// 鉴权走 api_keys 表（级别对等：key 级别决定可见内容级别；is_private=1 仅 vvip 可见）
+async function handleGalleryPage() {
+  return new Response(GALLERY_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+async function handleGalleryData(request, env) {
+  const k = await checkApiKey(request, env);
+  if (!k) return json({ ok: false, error: 'Unauthorized or invalid API key' }, 401);
+  if (k.limited) return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+  const keyLevel = (k.rec && k.rec.level) || 'pt';
+  const u = new URL(request.url);
+  const tagsParam = u.searchParams.get('tags') || '';
+  const type = u.searchParams.get('type') || '';
+  const limit = clampInt(u.searchParams.get('limit') || '60', 60, 1, 100);
+  const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
+  let w = 'WHERE enabled=1'; const p = [];
+  const lf = levelFilter(keyLevel);
+  w += lf.sql; p.push.apply(p, lf.params);
+  if (keyLevel !== 'vvip') { w += ' AND is_private=0'; }
+  if (type) { w += ' AND file_type=?'; p.push(type); }
+  if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+  try {
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, level: keyLevel, items: (d.results || []).map(poolFileJson) } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// The gallery page (fully static; data fetched from /gallery/data with api_key)
+const GALLERY_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>图片画廊</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0b0f19; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height:100vh; }
+.head { position:sticky; top:0; z-index:20; background:rgba(11,15,25,.88); backdrop-filter:blur(8px); border-bottom:1px solid rgba(255,255,255,.1); padding:12px 16px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.head h1 { font-size:16px; font-weight:700; margin-right:auto; }
+.head .inp { background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); color:#e2e8f0; border-radius:8px; padding:6px 10px; font-size:13px; outline:none; }
+.head .inp:focus { border-color:#4f6ef7; }
+.head .btn { background:#4f6ef7; border:none; color:#fff; border-radius:8px; padding:6px 14px; font-size:13px; cursor:pointer; }
+.head .btn:disabled { opacity:.4; cursor:not-allowed; }
+.head select.inp { max-width:130px; }
+.hint { font-size:11px; color:#7d8db0; padding:8px 16px 0; }
+.hint code { background:rgba(255,255,255,.08); padding:1px 6px; border-radius:4px; }
+#grid { columns:4 240px; column-gap:10px; padding:14px 16px 40px; }
+.card { break-inside:avoid; margin-bottom:10px; border-radius:10px; overflow:hidden; background:rgba(255,255,255,.05); position:relative; transition:transform .15s; }
+.card:hover { transform:translateY(-2px); }
+.card img { width:100%; display:block; }
+.card .cap { position:absolute; inset:auto 0 0 0; padding:18px 8px 8px; background:linear-gradient(transparent,rgba(0,0,0,.78)); font-size:12px; }
+.card .cap .t { font-weight:600; }
+.card .cap .g { color:#a8b4cc; margin-top:2px; font-size:11px; }
+#load { text-align:center; padding:20px 0 40px; }
+#load .btn { font-size:13px; }
+#empty { text-align:center; color:#7d8db0; padding:60px 20px; font-size:14px; }
+a.card { text-decoration:none; color:inherit; }
+@media (max-width:900px){ #grid { columns:2 150px; } }
+</style>
+</head>
+<body>
+<div class="head">
+  <h1>🖼 图片画廊</h1>
+  <input class="inp" id="kw" placeholder="标签筛选，如：风景,美女" style="width:220px">
+  <select class="inp" id="type">
+    <option value="">全部类型</option><option value="photo">图片</option><option value="video">视频</option>
+  </select>
+  <button class="btn" id="apply">筛选</button>
+  <button class="btn" id="loadBtn">加载更多</button>
+</div>
+<div class="hint">带 key 鉴权画廊：需在 URL 或下方提供 API 密钥（级别对等，低级别不会显示高级别内容）。示例：<code>/gallery?api_key=你的密钥</code></div>
+<div id="grid"></div>
+<div id="empty" style="display:none">没有匹配的内容</div>
+<div id="load"><button class="btn" id="loadBtn2" style="display:none">加载更多</button></div>
+<script>
+(function(){
+  var KEY = new URLSearchParams(location.search).get('api_key') || localStorage.getItem('gal_key') || '';
+  var kw = document.getElementById('kw');
+  var typeEl = document.getElementById('type');
+  var grid = document.getElementById('grid');
+  var empty = document.getElementById('empty');
+  var offset = 0, total = 0, loading = false;
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function load(reset){
+    if (loading) return; loading = true;
+    if (reset){ offset = 0; grid.innerHTML = ''; empty.style.display = 'none'; }
+    var q = 'offset=' + offset + '&limit=60';
+    if (kw.value.trim()) q += '&tags=' + encodeURIComponent(kw.value.trim());
+    if (typeEl.value) q += '&type=' + encodeURIComponent(typeEl.value);
+    fetch('/gallery/data?api_key=' + encodeURIComponent(KEY) + '&' + q).then(function(r){ return r.json(); }).then(function(j){
+      loading = false;
+      if (!j || !j.ok){ empty.style.display='block'; empty.textContent = (j && j.error) || '加载失败'; document.getElementById('loadBtn2').style.display='none'; return; }
+      var items = (j.data && j.data.items) || [];
+      total = (j.data && j.data.total) || 0;
+      if (!items.length){ empty.style.display='block'; document.getElementById('loadBtn2').style.display='none'; return; }
+      empty.style.display='none';
+      items.forEach(function(it){
+        var card = document.createElement('a');
+        card.className = 'card';
+        card.href = it.url;
+        card.target = '_blank';
+        var t = esc(it.title || '');
+        var g = (it.tags||[]).map(function(x){ return '#'+esc(x); }).join(' ');
+        card.innerHTML = '<img loading="lazy" src="' + esc(it.thumb_url || it.url) + '" alt=""><div class="cap"><div class="t">' + t + '</div><div class="g">' + g + '</div></div>';
+        grid.appendChild(card);
+      });
+      offset += items.length;
+      document.getElementById('loadBtn2').style.display = (offset < total) ? 'inline-block' : 'none';
+    }).catch(function(){ loading = false; });
+  }
+  document.getElementById('apply').addEventListener('click', function(){ load(true); });
+  document.getElementById('loadBtn').addEventListener('click', function(){ load(false); });
+  document.getElementById('loadBtn2').addEventListener('click', function(){ load(false); });
+  kw.addEventListener('keydown', function(e){ if (e.key === 'Enter') load(true); });
+  load(true);
+})();
+</script>
+</body>
+</html>`;
 
 // Match current time against the TV-style schedule. Returns the active program or null.
 // 支持 weekdays（周几筛选，1=周一..7=周日，空=每天）
@@ -3340,6 +3569,69 @@ function poolFileJson(r) {
     file_type: r.file_type || 'photo', width: r.width, height: r.height, file_size: r.file_size,
     source: r.source, created_at: r.created_at
   };
+}
+
+// ==================== Public upload API ====================
+// POST /api/v1/upload?api_key=xxx&pool=1&tags=风景,美女&title=xxx&level=pt&is_private=1
+// Body: multipart/form-data, field "file" = 文件内容（默认进 files 表；pool=1 进共享库 random_pool）
+// 级别默认 = 密钥级别（级别对等：上传内容级别不得超过密钥级别）；is_private=1 仅 vvip 密钥可用
+const PUBLIC_UPLOAD_MAX = 19 * 1024 * 1024; // 19MB
+async function handlePublicUpload(request, env, keyLevel) {
+  try {
+    if (!env.R2_BUCKET) return json({ ok: false, error: 'R2 not configured' }, 500);
+    const u = new URL(request.url);
+    const pool = u.searchParams.get('pool') === '1' || u.searchParams.get('pool') === 'true';
+    const tagsParam = u.searchParams.get('tags') || '';
+    const title = String(u.searchParams.get('title') || '').slice(0, 200);
+    // 请求级别不得超过密钥级别（级别对等）；未传 level 时默认 = 密钥级别
+    const reqLvRaw = u.searchParams.get('level');
+    let reqLevel = reqLvRaw ? sanitizeLevel(reqLvRaw) : keyLevel;
+    if (LEVEL_RANK[reqLevel] > LEVEL_RANK[keyLevel]) reqLevel = keyLevel;
+    const isPrivate = (u.searchParams.get('is_private') === '1' || u.searchParams.get('is_private') === 'true') && keyLevel === 'vvip' ? 1 : 0;
+    const useLevel = isPrivate ? 'vvip' : reqLevel;
+    const tags = tagsParam.split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+
+    const fd = await request.formData().catch(function(){ return null; });
+    if (!fd) return json({ ok: false, error: 'multipart/form-data required (field "file")' }, 400);
+    const file = fd.get('file');
+    if (!file || typeof file.arrayBuffer !== 'function') return json({ ok: false, error: 'file field required' }, 400);
+    if (file.size > PUBLIC_UPLOAD_MAX) return json({ ok: false, error: 'file too large (max 19MB)' }, 400);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!bytes.length) return json({ ok: false, error: 'empty file' }, 400);
+
+    const name = String(file.name || 'file.bin').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+    const mimeMap = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+      mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
+      mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+      pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain'
+    };
+    const ct = mimeMap[ext] || 'application/octet-stream';
+    const vids = ['mp4', 'mov', 'mkv', 'webm', 'avi'];
+    const auds = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'];
+    const imgs = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
+    let fileType = 'document';
+    if (vids.indexOf(ext) !== -1) fileType = 'video';
+    else if (auds.indexOf(ext) !== -1) fileType = 'audio';
+    else if (imgs.indexOf(ext) !== -1) fileType = 'photo';
+    const now = new Date();
+    const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    const key = (pool ? 'pool/' : 'files/') + ym + '/' + randHex(16) + '.' + ext;
+    const url = await putR2(key, bytes, ct, env);
+    if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
+
+    const iso = now.toISOString();
+    if (pool) {
+      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+        .bind(url, url, title || name, tags, useLevel, isPrivate, fileType, bytes.length, 'api', iso).run();
+      return json({ ok: true, data: { url: url, added: 1, pool: true, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length } });
+    }
+    const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+      .bind(key, url, name, bytes.length, fileType, ct, title, tags, useLevel, isPrivate, iso).run();
+    fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: name, file_type: fileType, level: useLevel, is_private: isPrivate, file_size: bytes.length, title: title, tags: tags }).catch(function(){});
+    return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 // ==================== Admin: tags / api keys / users ====================
@@ -3928,6 +4220,59 @@ async function handleAdminSaveRateLimit(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ==================== 事件 Webhook 通知 ====================
+// 入库/删除/失败时 POST JSON 到外部 URL（settings.webhook_cfg = { url, enabled, events: [] }）
+// events 空数组 = 全部事件；支持事件：file_imported / file_deleted / file_failed
+async function getWebhookCfg(env) {
+  const out = { enabled: 0, url: '', events: [] };
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'webhook_cfg'").first();
+    if (s && s.value) {
+      const j = JSON.parse(s.value);
+      if (j) { out.enabled = j.enabled ? 1 : 0; out.url = j.url || ''; out.events = Array.isArray(j.events) ? j.events : []; }
+    }
+  } catch (e) {}
+  return out;
+}
+// fire and forget：不阻塞主流程；发送失败静默跳过
+async function fireWebhook(env, event, payload) {
+  try {
+    if (!env.D1_DB) return;
+    const c = await getWebhookCfg(env);
+    if (!c.enabled || !c.url || !/^https?:\/\//i.test(c.url)) return;
+    if (c.events.length && c.events.indexOf(event) === -1) return;
+    const body = JSON.stringify({ event: event, ts: new Date().toISOString(), data: payload || {} });
+    await fetch(c.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body }).catch(function(e) { console.log('webhook send fail:', e.message); });
+  } catch (e) { console.log('fireWebhook error:', e.message); }
+}
+async function handleAdminGetWebhook(env) {
+  try {
+    const c = await getWebhookCfg(env);
+    return json({ ok: true, data: c });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+async function handleAdminSaveWebhook(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const url = b && b.url ? String(b.url).trim().slice(0, 500) : '';
+    const enabled = !!(b && b.enabled);
+    const events = Array.isArray(b && b.events) ? b.events.map(function(e){ return String(e); }).filter(Boolean) : [];
+    const cfg = { enabled: enabled, url: url, events: events };
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('webhook_cfg', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
+    return json({ ok: true, data: cfg });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+async function handleAdminWebhookTest(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const url = b && b.url ? String(b.url).trim().slice(0, 500) : '';
+    if (!url || !/^https?:\/\//i.test(url)) return json({ ok: false, error: '请输入有效的 http(s) URL' }, 400);
+    const body = JSON.stringify({ event: 'webhook_test', ts: new Date().toISOString(), data: { message: 'webhook 通知测试（来自 telegram-r2-bot）', ok: true } });
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body });
+    return json({ ok: r.ok, status: r.status, error: r.ok ? '' : ('HTTP ' + r.status + ' ' + r.statusText) });
+  } catch (e) { return json({ ok: false, error: e.message }, 400); }
+}
+
 async function handleAdminPoolTags(request, env) {
   try {
     const b = await request.json().catch(() => null);
@@ -3982,6 +4327,7 @@ async function handleAdminPoolBatchDelete(request, env) {
     if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
     for (const id of b.ids) {
       await env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id).run();
+      fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
     }
     return json({ ok: true, deleted: b.ids.length });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -4081,6 +4427,7 @@ async function handleAdminPoolDelete(request, env) {
     const id = u.searchParams.get('id');
     if (!id) return json({ ok: false, error: 'id required' }, 400);
     await env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id).run();
+    fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
     return json({ ok: true });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -4208,6 +4555,7 @@ async function handleDeleteFile(request, env) {
         const r = await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=? AND deleted_at IS NULL').bind(now, one).run();
         if (r.meta && r.meta.changes) deleted++;
       }
+      fireWebhook(env, 'file_deleted', { id: one, deleted: !purge, source: 'files' }).catch(function(){});
     } catch (e) {}
   }
   return json({ ok: true, deleted: deleted, message: (purge ? 'Purged ' : 'Deleted ') + deleted + ' file(s)' });

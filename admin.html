@@ -711,7 +711,7 @@ https://example.com/b.jpg"></textarea></div>
           <div class="fr"><label>API 密钥 (在「密钥」页生成)</label><select class="inp" id="genKey"><option value="">加载中...</option></select></div>
           <div class="fr"><label>文件类型</label><select class="inp" id="genType"><option value="">全部</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select></div>
           <div class="fr"><label>数量 (1-100)</label><input class="inp" type="number" id="genLimit" value="10" min="1" max="100"></div>
-          <div class="fr"><label>模式</label><select class="inp" id="genMode"><option value="files">共享库列表</option><option value="random">随机取一张/多张</option></select></div>
+          <div class="fr"><label>模式</label><select class="inp" id="genMode"><option value="files">共享库列表</option><option value="random">随机取一张/多张</option><option value="upload">上传文件</option></select></div>
           <div class="fr"><label>关键词 (可选)</label><input class="inp" id="genKw" placeholder="文件名/描述包含..."></div>
         </div>
         <div class="fr" style="margin-top:6px"><label>标签筛选 (点击切换，多选=命中任意一个即可)</label><div id="genTags" style="display:flex;flex-wrap:wrap;gap:6px"></div></div>
@@ -746,7 +746,9 @@ https://example.com/b.jpg"></textarea></div>
         </div>
         <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px">第三方程序用此密钥调用公开 JSON 接口，密钥级别决定可获取内容级别（pt&lt;vip&lt;svip&lt;vvip，级别对等，低级别不会输出高级别内容）：
           <code>GET /api/v1/files?api_key=密钥&tags=风景,美女&type=photo&limit=20</code> ·
-          <code>GET /api/v1/random?api_key=密钥&tags=风景&count=1</code>（随机取图）
+          <code>GET /api/v1/random?api_key=密钥&tags=风景&count=1</code>（随机取图）·
+          <code>GET /gallery?api_key=密钥</code>（画廊瀑布流页）·
+          <code>POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</code>（multipart 上传文件字段名为 file，落库见下方说明，上限 19MB）
         </div>
         <div id="keyList"></div>
       </div>
@@ -885,6 +887,24 @@ https://example.com/b.jpg"></textarea></div>
           <button class="btn btn-ghost" id="notifyTestBtn">发送测试</button>
         </div>
         <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">告警消息由 bot 直接发给你。首次使用时：先给 @tkxin_bot 发一条消息，再用 @userinfobot 查出你的 ID 填到这里。</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>事件 Webhook 通知 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">入库/删除/转存失败时 POST JSON 到外部 URL，供第三方系统实时联动</span></div>
+        <div class="fb">
+          <div class="fr" style="flex:1;margin:0"><label>Webhook URL（http/https）</label><input class="inp" id="whUrl" placeholder="https://your-server.com/hook"></div>
+          <button class="btn btn-primary" id="whSaveBtn">保存</button>
+          <button class="btn btn-ghost" id="whTestBtn">发送测试</button>
+        </div>
+        <div style="margin-top:10px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="whEnabled"> 启用事件通知</label>
+        </div>
+        <div style="margin-top:8px;font-size:13px">触发事件：</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px"><input type="checkbox" class="whEv" value="file_imported" checked> 文件入库</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px"><input type="checkbox" class="whEv" value="file_deleted"> 文件删除</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:12px"><input type="checkbox" class="whEv" value="file_failed"> 转存失败</label>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">空事件 = 全部通知。载荷格式：<code>{"event":"file_imported","ts":"...","data":{...}}</code>。发送失败静默跳过，不影响主流程。</div>
       </div>
       <div class="card">
         <div class="card-title"><span class="dot"></span>转存模式 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">代理模式：新文件不占用 R2 存储，直链由 worker 实时从 Telegram 拉取（仅 ≤20MB，视频/大文件仍转存 R2）；只影响开关后的新文件</span></div>
@@ -2854,6 +2874,7 @@ document.getElementById("tagsAddBtn").addEventListener("click", function() {
 // ==================== 运维页面（备份 + 告警） ====================
 async function loadOpsPage() {
   loadBackupList();
+  loadWebhookCfg();
   try {
     const r = await api("GET", "/admin/api/settings/notify");
     if (r && r.ok) document.getElementById("notifyChatId").value = (r.data && r.data.chat_id) || "";
@@ -3033,6 +3054,39 @@ document.getElementById("notifyTestBtn").addEventListener("click", function() {
   if (!v) { toast("请先填写用户 ID", 0); return; }
   api("POST", "/admin/api/settings/notify-test", { chat_id: v }).then(function(r) {
     if (r && r.ok) toast("测试消息已发送，请到 bot 查收", 1); else toast((r && r.error) || "发送失败", 0);
+  });
+});
+
+// ==================== 事件 Webhook 通知 ====================
+function collectWhEvents() {
+  var evs = [];
+  document.querySelectorAll(".whEv:checked").forEach(function(c) { evs.push(c.value); });
+  return evs;
+}
+async function loadWebhookCfg() {
+  try {
+    const r = await api("GET", "/admin/api/settings/webhook");
+    if (!r || !r.ok || !r.data) return;
+    document.getElementById("whUrl").value = r.data.url || "";
+    document.getElementById("whEnabled").checked = !!r.data.enabled;
+    var evs = r.data.events || [];
+    document.querySelectorAll(".whEv").forEach(function(c) { c.checked = evs.length === 0 || evs.indexOf(c.value) !== -1; });
+  } catch (e) {}
+}
+document.getElementById("whSaveBtn").addEventListener("click", function() {
+  api("POST", "/admin/api/settings/webhook", {
+    url: document.getElementById("whUrl").value.trim(),
+    enabled: document.getElementById("whEnabled").checked,
+    events: collectWhEvents()
+  }).then(function(r) {
+    if (r && r.ok) toast("Webhook 配置已保存", 1); else toast((r && r.error) || "保存失败", 0);
+  });
+});
+document.getElementById("whTestBtn").addEventListener("click", function() {
+  var url = document.getElementById("whUrl").value.trim();
+  if (!url) { toast("请先填写 Webhook URL", 0); return; }
+  api("POST", "/admin/api/settings/webhook/test", { url: url }).then(function(r) {
+    if (r && r.ok) toast("测试发送成功（HTTP " + r.status + "）", 1); else toast((r && r.error) || "发送失败，检查 URL", 0);
   });
 });
 
@@ -3486,6 +3540,15 @@ function genUrl() {
   if (mode === "random") limit = String(Math.min(parseInt(limit) || 1, 10));
   var kw = document.getElementById("genKw").value.trim();
   var tags = genSelTags.join(",");
+  if (mode === "upload") {
+    // 上传模式：POST multipart，文件字段 file；type 选择器不适用于上传，忽略
+    var u = "/api/v1/upload?api_key=" + encodeURIComponent(key || "YOUR_KEY");
+    if (tags) u += "&tags=" + encodeURIComponent(tags);
+    var url = OR + u;
+    document.getElementById("genUrl").value = url;
+    renderGenExamples(url, mode);
+    return;
+  }
   var u = mode === "random" ? "/api/v1/random" : "/api/v1/files?pool=1";
   u += (mode === "random" ? "?" : "&") + "api_key=" + encodeURIComponent(key || "YOUR_KEY");
   if (type) u += "&type=" + type;
@@ -3497,6 +3560,25 @@ function genUrl() {
   renderGenExamples(url, mode);
 }
 function renderGenExamples(url, mode) {
+  if (mode === "upload") {
+    var key = (url.match(/api_key=([^&]+)/) || [null, 'YOUR_KEY'])[1];
+    var curl = "curl -F \"file=@cat.jpg\" \"" + url + (url.indexOf("?") >= 0 ? "&pool=1&title=我的标题" : "?pool=1&title=我的标题") + "\"";
+    var fetchJs = "const fd = new FormData(); fd.append('file', new Blob([...]), 'cat.jpg');\n" +
+      "fetch('" + url + "?pool=1&title=我的标题', { method: 'POST', body: fd }).then(r=>r.json()).then(d=>console.log(d));";
+    var note = "• POST multipart/form-data，文件字段名必须是 file，上限 19MB\n" +
+      "• pool=1 → 进共享库(random_pool)；不带 pool → 进 Tele 库(files)\n" +
+      "• level 参数可选，不得超过密钥级别（默认=密钥级别，级别对等）\n" +
+      "• is_private=1 仅 vvip 密钥可用（私密=vvip 最高级）\n" +
+      "• 返回 JSON：{ url, added, pool, level, file_type }，url 即直链";
+    document.getElementById("genExamples").innerHTML =
+      '<div style="color:#94a3b8;font-size:12px;margin-bottom:6px">① curl 上传</div>' +
+      '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#86efac">' + escStr(curl) + '</div>' +
+      '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">② JavaScript fetch</div>' +
+      '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#93c5fd">' + escStr(fetchJs) + '</div>' +
+      '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">③ 说明</div>' +
+      '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#fbbf24">' + escStr(note) + '</div>';
+    return;
+  }
   var curl = "curl \"" + url + "\"";
   var fetchJs = "fetch('" + url + "').then(r=>r.json()).then(d=>console.log(d));";
   var imgUrl = url + (url.indexOf("mode=") >= 0 ? "" : (url.indexOf("?") >= 0 ? "&mode=img" : "?mode=img"));
