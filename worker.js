@@ -3925,7 +3925,7 @@ async function handleSetFileTags(request, env) {
       } else {
         const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
         const oldArr = (f && f.tags) ? f.tags.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [];
-        const cur = oldArr.slice();
+        let cur = oldArr.slice();
         let hitAuto = false;
         if (mode === 'append') {
           tagsArr.forEach(function(t) { if (cur.indexOf(t) === -1) cur.push(t); });
