@@ -55,6 +55,7 @@ export default {
     if (m === 'DELETE' && p === '/admin/api/commands') return isAdmin ? handleAdminDeleteCommand(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/files') return isAdmin ? handleFiles(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/files') return isAdmin ? handleDeleteFile(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/files/upload') return isAdmin ? handleAdminFilesUpload(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/stats') return isAdmin ? handleStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/bot-info') return isAdmin ? handleBotGetMeApi(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/dedup') return isAdmin ? handleDedup(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -3631,12 +3632,53 @@ async function handleAdminPoolUpload(request, env) {
     if (!url) return json({ ok: false, error: 'R2 upload failed: ' + lastUploadError }, 500);
     const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
     const title = String(b.title || name).slice(0, 200);
-    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
     const iso = now.toISOString();
     const fsize = (b.size && Number(b.size) > 0) ? Math.round(Number(b.size)) : b64Size(b.data);
-    await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, \'photo\', ?, \'upload\', 1, ?)')
-      .bind(url, url, title, tags, level, fsize, iso).run();
-    return json({ ok: true, data: { url: url, added: 1 } });
+    await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'upload\', 1, ?)')
+      .bind(url, url, title, tags, level, isPrivate, fsize, iso).run();
+    return json({ ok: true, data: { url: url, added: 1, is_private: isPrivate } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 管理员本地上传到 Tele 库（files 表）：base64 → R2 files/ → INSERT files
+// Body: { name, data(base64), tags, title, size, level, is_private }
+async function handleAdminFilesUpload(request, env) {
+  try {
+    if (!env.R2_BUCKET) return json({ ok: false, error: 'R2 not configured' }, 500);
+    const b = await request.json().catch(() => null);
+    if (!b || !b.data) return json({ ok: false, error: 'data (base64) required' }, 400);
+    if (b.data.length > 45 * 1024 * 1024) return json({ ok: false, error: 'file too large (max ~30MB)' }, 400);
+    let bytes;
+    try { bytes = b64ToBytes(String(b.data)); } catch (e) { return json({ ok: false, error: 'invalid base64' }, 400); }
+    if (!bytes || !bytes.length) return json({ ok: false, error: 'empty file' }, 400);
+    const name = String(b.name || 'file.bin').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+    const mimeMap = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+      mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
+      mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+      pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword'
+    };
+    const ct = mimeMap[ext] || 'application/octet-stream';
+    const typeMap = { photo: ['jpg','jpeg','png','gif','webp','bmp'], video: ['mp4','mov','mkv','webm','avi'], audio: ['mp3','wav','ogg','m4a','aac','flac'] };
+    let fileType = 'document';
+    for (const t of Object.keys(typeMap)) { if (typeMap[t].indexOf(ext) !== -1) { fileType = t; break; } }
+    const now = new Date();
+    const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    const key = 'files/' + ym + '/' + randHex(16) + '.' + ext;
+    const url = await putR2(key, bytes, ct, env);
+    if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    const fsize = (b.size && Number(b.size) > 0) ? Math.round(Number(b.size)) : b64Size(b.data);
+    const iso = now.toISOString();
+    const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+      .bind(key, url, name, fsize, fileType, ct, String(b.title || '').slice(0, 200), tags, level, isPrivate, iso).run();
+    return json({ ok: true, data: { id: res.meta.last_row_id, url: url, file_type: fileType } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -3837,7 +3879,12 @@ async function handleAdminPoolBatch(request, env) {
       if (b.level !== undefined) {
         await env.D1_DB.prepare('UPDATE random_pool SET level = ? WHERE id = ?').bind(sanitizeLevel(b.level), id).run();
       } else if (b.is_private !== undefined) {
-        await env.D1_DB.prepare('UPDATE random_pool SET is_private = ? WHERE id = ?').bind(b.is_private ? 1 : 0, id).run();
+        // 转入私密库：等同 vvip 最高级，级别联动；移出私密库保留原级别
+        if (b.is_private) {
+          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 1, level = ? WHERE id = ?').bind('vvip', id).run();
+        } else {
+          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 0 WHERE id = ?').bind(id).run();
+        }
       } else {
         await env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, id).run();
       }

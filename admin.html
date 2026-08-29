@@ -346,6 +346,17 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
       </div>
 
       <div class="card">
+        <div class="card-title"><span class="dot"></span>上传文件到 Tele 库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">本地上传至 R2，进入文件库并参与公开 API 输出（按级别对等过滤）</span></div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:240px"><label>选择文件（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="fileLocalFiles" multiple></div>
+          <div style="flex:1;min-width:160px"><label>标签（逗号分隔，可选）</label><input class="inp" id="fileLocalTags" placeholder="风景,美女"></div>
+          <div style="flex:1;min-width:110px"><label>级别（级别对等）</label><select class="inp" id="fileLocalLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
+          <button class="btn btn-primary" id="fileLocalUploadBtn">上传到 Tele 库</button>
+          <span id="fileLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="fbs">
           <div style="display:flex;align-items:center;gap:12px">
             <div class="card-title" style="margin-bottom:0"><span class="dot"></span>文件管理</div>
@@ -383,6 +394,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             <button class="btn btn-ghost" id="btnCopyBoth" style="display:none" title="R2 直链 + 代理链接一起复制 (| 分隔)">复制双链接</button>
             <button class="btn btn-primary" id="btnTagSel" style="display:none">打标签</button>
             <button class="btn btn-primary" id="btnPool" style="display:none">加入共享库</button>
+            <button class="btn btn-ghost" id="btnFilesPrivate" style="display:none" title="把所选文件复制到私密库（等同 vvip，仅 vvip 密钥可访问）">转入私密库</button>
             <button class="btn btn-ghost" id="btnIgnoreSel" style="display:none" title="标记为忽略：批量导入时跳过">忽略导入</button>
             <button class="btn btn-ghost" id="btnUnignoreSel" style="display:none" title="取消忽略">取消忽略</button>
           </div>
@@ -527,6 +539,7 @@ https://example.com/b.jpg"></textarea></div>
           <span style="font-size:12px;color:var(--text)">已选 <span id="poolSelCount" style="font-weight:700;color:var(--primary)">0</span> 张</span>
           <button class="btn btn-primary btn-sm" id="btnPoolTagSel">打标签</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolLevelSel" title="批量设置所选图片的级别（级别对等）">设置级别</button>
+          <button class="btn btn-ghost btn-sm" id="btnPoolPrivateSel" title="把所选图片转入私密库（等同 vvip，仅 vvip 密钥可访问，不进入共享库/公开输出）">转入私密库</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolEnableSel">批量启用</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolDisableSel">批量停用</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolCopySel">复制链接</button>
@@ -539,8 +552,17 @@ https://example.com/b.jpg"></textarea></div>
     <!-- 私密库 -->
     <div class="panel" id="panel-private">
       <div class="card">
+        <div class="card-title"><span class="dot"></span>添加图片到私密库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">本地上传至 R2，私密内容等同 vvip，仅 vvip 密钥可访问</span></div>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:240px"><label>选择图片（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="privateLocalFiles" accept="image/*" multiple></div>
+          <div style="flex:1;min-width:160px"><label>标签（逗号分隔，可选）</label><input class="inp" id="privateLocalTags" placeholder="风景,美女"></div>
+          <button class="btn btn-primary" id="privateLocalUploadBtn">上传并加入私密库</button>
+          <span id="privateLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+        </div>
+      </div>
+      <div class="card">
         <div class="card-title"><span class="dot"></span>私密库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">私密内容等同 vvip 最高级，仅 vvip 密钥可访问，不进入共享库 / 公开输出</span></div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">提示：到「文件」页勾选图片，点工具栏「加入共享库」，在弹窗里点「加入私密库」即可把 Telegram 图片放入这里。</div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">提示：可直接在上方上传图片到私密库；或到「文件」页勾选图片，点工具栏「转入私密库」或「加入共享库」弹窗里选「加入私密库」。</div>
         <div class="toolbar" style="margin-bottom:12px">
           <input class="inp" id="privateKw" placeholder="标题/URL 关键词" style="max-width:180px">
           <input class="inp" id="privateTagsF" placeholder="标签筛选 (逗号分隔)" style="max-width:180px">
@@ -1043,6 +1065,39 @@ function init() {
     }
     next();
   });
+  var fileLocalBtn = document.getElementById("fileLocalUploadBtn");
+  if (fileLocalBtn) fileLocalBtn.addEventListener("click", function() {
+    var inp = document.getElementById("fileLocalFiles");
+    var files = inp.files;
+    if (!files || !files.length) { toast("请先选择文件", 0); return; }
+    var tags = document.getElementById("fileLocalTags").value.trim();
+    var btn = fileLocalBtn, old = btn.textContent;
+    var st = document.getElementById("fileLocalStatus");
+    var total = files.length, done = 0, okCount = 0, failCount = 0;
+    btn.disabled = true; btn.textContent = "上传中...";
+    function next() {
+      if (done >= total) {
+        st.textContent = "";
+        btn.disabled = false; btn.textContent = old;
+        inp.value = "";
+        toast("上传完成：成功 " + okCount + " 个文件" + (failCount ? "，失败 " + failCount + " 个" : ""), failCount ? 0 : 1);
+        loadFiles(currentPage); loadTagCloud();
+        return;
+      }
+      var f = files[done++];
+      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "文件");
+      if (f.size > 30 * 1024 * 1024) { failCount++; next(); return; }
+      var rd = new FileReader();
+      rd.onload = function() {
+        var b64 = String(rd.result || "").split(",")[1] || "";
+        api("POST", "/admin/api/files/upload", { name: f.name || "file.bin", data: b64, tags: tags, title: "", size: f.size, level: document.getElementById("fileLocalLevel").value })
+          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("upload fail:", r.error); } next(); });
+      };
+      rd.onerror = function() { failCount++; next(); };
+      rd.readAsDataURL(f);
+    }
+    next();
+  });
   var piKeyInp = document.getElementById("piKey");
   if (piKeyInp) {
     try { piKeyInp.value = localStorage.getItem("piKey") || ""; } catch (e) {}
@@ -1142,6 +1197,39 @@ function init() {
   if (bPrCopy) bPrCopy.addEventListener("click", function() { privateBatch("copy"); });
   var bPrDel = document.getElementById("btnPrivateDelSel");
   if (bPrDel) bPrDel.addEventListener("click", function() { privateBatch("del"); });
+  var privateLocalBtn = document.getElementById("privateLocalUploadBtn");
+  if (privateLocalBtn) privateLocalBtn.addEventListener("click", function() {
+    var inp = document.getElementById("privateLocalFiles");
+    var files = inp.files;
+    if (!files || !files.length) { toast("请先选择图片", 0); return; }
+    var tags = document.getElementById("privateLocalTags").value.trim();
+    var btn = privateLocalBtn, old = btn.textContent;
+    var st = document.getElementById("privateLocalStatus");
+    var total = files.length, done = 0, okCount = 0, failCount = 0;
+    btn.disabled = true; btn.textContent = "上传中...";
+    function next() {
+      if (done >= total) {
+        st.textContent = "";
+        btn.disabled = false; btn.textContent = old;
+        inp.value = "";
+        toast("上传完成：成功 " + okCount + " 张" + (failCount ? "，失败 " + failCount + " 张" : ""), failCount ? 0 : 1);
+        loadPrivatePool(); loadTagCloud();
+        return;
+      }
+      var f = files[done++];
+      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "图片");
+      if (f.size > 30 * 1024 * 1024) { failCount++; next(); return; }
+      var rd = new FileReader();
+      rd.onload = function() {
+        var b64 = String(rd.result || "").split(",")[1] || "";
+        api("POST", "/admin/api/pool/upload", { name: f.name || "image.jpg", data: b64, tags: tags, title: "", size: f.size, is_private: 1 })
+          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("upload fail:", r.error); } next(); });
+      };
+      rd.onerror = function() { failCount++; next(); };
+      rd.readAsDataURL(f);
+    }
+    next();
+  });
   var bPTS = document.getElementById("btnPoolTagSel");
   if (bPTS) bPTS.addEventListener("click", function() {
     var ids = Array.from(poolSel);
@@ -1150,6 +1238,18 @@ function init() {
   });
   var bPLS = document.getElementById("btnPoolLevelSel");
   if (bPLS) bPLS.addEventListener("click", function() { setPoolLevelModal(); });
+  var bPPriv = document.getElementById("btnPoolPrivateSel");
+  if (bPPriv) bPPriv.addEventListener("click", function() {
+    var ids = Array.from(poolSel);
+    if (!ids.length) { toast("请先勾选图片", 0); return; }
+    if (!confirm("确定把选中的 " + ids.length + " 张转入私密库？私密图片等同 vvip，仅 vvip 密钥可访问，不进入共享库 / 公开输出。")) return;
+    api("POST", "/admin/api/pool/batch", { ids: ids, is_private: 1 }).then(function(r) {
+      if (r.ok) {
+        toast("已转入私密库 " + ids.length + " 张", 1);
+        poolSel.clear(); updatePoolSel(); loadPool(); loadPrivatePool();
+      } else toast(r.error || "操作失败", 0);
+    });
+  });
   var bPES = document.getElementById("btnPoolEnableSel");
   if (bPES) bPES.addEventListener("click", function() { poolBatch(true); });
   var bPDS = document.getElementById("btnPoolDisableSel");
@@ -3335,6 +3435,7 @@ function updateSelUI() {
   var cB = document.getElementById("btnCopyBoth");
   var tBtn = document.getElementById("btnTagSel");
   var pBtn = document.getElementById("btnPool");
+  var prBtn = document.getElementById("btnFilesPrivate");
   var iBtn = document.getElementById("btnIgnoreSel");
   var uBtn = document.getElementById("btnUnignoreSel");
   if (dBtn) dBtn.style.display = n > 0 ? "inline-flex" : "none";
@@ -3344,6 +3445,7 @@ function updateSelUI() {
   if (cB) cB.style.display = n > 0 ? "inline-flex" : "none";
   if (tBtn) tBtn.style.display = n > 0 ? "inline-flex" : "none";
   if (pBtn) pBtn.style.display = n > 0 ? "inline-flex" : "none";
+  if (prBtn) prBtn.style.display = n > 0 ? "inline-flex" : "none";
   if (iBtn) iBtn.style.display = n > 0 ? "inline-flex" : "none";
   if (uBtn) uBtn.style.display = n > 0 ? "inline-flex" : "none";
   var sc = document.getElementById("selCount");
@@ -3456,6 +3558,17 @@ function proxyExt(f) {
     var ids = Array.from(selSet);
     if (!ids.length) { toast("请先选择文件", 0); return; }
     showPoolImportModal(ids);
+  });
+  var bFilesPrivate = document.getElementById("btnFilesPrivate");
+  if (bFilesPrivate) bFilesPrivate.addEventListener("click", function() {
+    var ids = Array.from(selSet);
+    if (!ids.length) { toast("请先选择文件", 0); return; }
+    api("POST", "/admin/api/private-pool/from-tg", { ids: ids }).then(function(r) {
+      if (r.ok) {
+        toast("已转入私密库 " + (r.data && r.data.added || 0) + " 张" + (r.data && r.data.skipped ? "，跳过 " + r.data.skipped + " 张" : ""), 1);
+        loadPrivatePool();
+      } else toast(r.error || "失败", 0);
+    });
   });
   var bIgnore = document.getElementById("btnIgnoreSel");
   if (bIgnore) bIgnore.addEventListener("click", function() {
