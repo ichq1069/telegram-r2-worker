@@ -216,6 +216,17 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
 .aif-bot { background: #ffffff; border: 1px solid var(--border); color: #1e293b; }
 .aif-input { display: flex; gap: 6px; padding: 10px; border-top: 1px solid var(--border); background: #fff; }
 .aif-input .inp { flex: 1; }
+
+/* Skeleton screen：数据加载时统一 shimmer 占位，避免白屏/布局跳动 */
+.sk { position: relative; overflow: hidden; background: #eef0f4; border-radius: 6px; }
+.sk::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); animation: skShine 1.3s ease infinite; }
+@keyframes skShine { 100% { transform: translateX(100%); } }
+.sk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.sk-card { background: var(--card); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.sk-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; gap: 16px; }
+.sk-row > div { flex-shrink: 0; }
+.sk-rows { margin-top: 4px; }
+.sk-img { width: 100%; aspect-ratio: 16 / 9; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -257,7 +268,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
         <div class="stats-grid" id="d1StatsGrid"></div>
         <div style="margin-top:12px;padding-top:10px;border-top:1px solid #f1f5f9">
           <div style="font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:8px">表行数</div>
-          <div id="d1TableRows"><span style="font-size:11px;color:var(--text-secondary)">加载中...</span></div>
+          <div id="d1TableRows" style="padding-top:4px"><div class="sk-row"><div class="sk" style="width:50%;height:13px"></div><div class="sk" style="width:20%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:42%;height:13px"></div><div class="sk" style="width:16%;height:13px;border-radius:20px"></div></div></div>
         </div>
       </div>
       <!-- R2 对象存储 -->
@@ -273,23 +284,23 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
       <!-- Webhook 状态 -->
       <div class="card" style="margin-bottom:16px">
         <div class="card-title"><span class="dot" style="background:#ef4444"></span>Telegram Webhook <span style="font-size:11px;color:var(--text-secondary);font-weight:400">机器人消息接收通道</span></div>
-        <div id="webhookStatusBody" style="font-size:13px;color:var(--text-secondary)">检测中...</div>
+        <div id="webhookStatusBody" style="font-size:13px;color:var(--text-secondary)"><div class="sk" style="width:60%;height:14px;margin:2px 0"></div><div style="height:6px"></div><div class="sk" style="width:40%;height:12px"></div></div>
       </div>
       <!-- 用量预测 + 请求趋势 -->
       <div class="card" id="forecastCard" style="display:none;margin-top:16px">
         <div class="card-title"><span class="dot"></span>用量预测 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">基于今日速率线性外推，仅供参考</span></div>
-        <div id="forecastBody" style="font-size:13px;color:var(--text-secondary)">计算中...</div>
+        <div id="forecastBody" style="font-size:13px;color:var(--text-secondary)"><div class="sk" style="width:55%;height:14px;margin:2px 0"></div><div style="height:6px"></div><div class="sk" style="width:35%;height:12px"></div></div>
         <div style="display:flex;align-items:flex-end;gap:3px;height:56px;margin-top:12px" id="reqTrend"></div>
         <div style="font-size:10px;color:var(--text-secondary);margin-top:4px">最近 14 天请求趋势（本地计数，部署后开始累计）</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div class="card">
           <div class="card-title"><span class="dot"></span>文件类型</div>
-          <div id="byType"></div>
+          <div id="byType"><div class="sk-row"><div class="sk" style="width:40%;height:13px"></div><div class="sk" style="width:15%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:32%;height:13px"></div><div class="sk" style="width:12%;height:13px;border-radius:20px"></div></div></div>
         </div>
         <div class="card">
           <div class="card-title"><span class="dot"></span>热门群组</div>
-          <div id="byChat"></div>
+          <div id="byChat"><div class="sk-row"><div class="sk" style="width:42%;height:13px"></div><div class="sk" style="width:15%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:34%;height:13px"></div><div class="sk" style="width:12%;height:13px;border-radius:20px"></div></div></div>
         </div>
       </div>
     </div>
@@ -317,7 +328,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
           </div>
         </div>
         <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">「清理」= 重复文件移入回收站（可恢复）；「彻底删除」= 直接删除重复文件及 R2 对象，不可恢复。<b>查重已后台化</b>：定时任务每 5 分钟自动扫描一批（算 MD5 + 清理重复），点按钮可立即多扫一批加速，不会超时。</div>
-        <div id="dedupStats" style="font-size:13px;color:var(--text-secondary)">加载中...</div>
+        <div id="dedupStats" style="font-size:13px;color:var(--text-secondary)"><div class="sk-row"><div class="sk" style="width:40%;height:13px"></div><div class="sk" style="width:15%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:30%;height:13px"></div><div class="sk" style="width:12%;height:13px;border-radius:20px"></div></div></div>
         <div style="margin-top:10px"><button class="btn btn-ghost btn-sm" id="dupGroupsBtn">查看重复分组（清理前核对）</button></div>
       </div>
 
@@ -329,7 +340,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             <button class="btn btn-primary btn-sm" id="compressRunBtn">压缩为 WebP</button>
           </div>
         </div>
-        <div id="compressStats" style="font-size:13px;color:var(--text-secondary)">加载中...</div>
+        <div id="compressStats" style="font-size:13px;color:var(--text-secondary)"><div class="sk-row"><div class="sk" style="width:38%;height:13px"></div><div class="sk" style="width:14%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:28%;height:13px"></div><div class="sk" style="width:11%;height:13px;border-radius:20px"></div></div></div>
         <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">将转存的 JPEG/PNG 图片压缩为 WebP（质量 80，预计省 50~70% 存储）。需要账号启用 <b>Cloudflare Image Resizing</b>；未启用时运行会明确提示。⚠️ 压缩后不可还原原图。另：回收站中超过 30 天的文件由定时任务自动硬清（含 R2 对象），无需手动。</div>
       </div>
 
@@ -396,7 +407,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             <button class="btn btn-danger btn-sm" data-action="trash-purge-all">清空回收站</button>
           </div>
         </div>
-        <div id="trashList" style="font-size:13px;color:var(--text-secondary)">加载中...</div>
+        <div id="trashList" style="font-size:13px;color:var(--text-secondary)"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px"><div class="sk" style="height:100px"></div><div class="sk" style="height:100px"></div><div class="sk" style="height:100px"></div><div class="sk" style="height:100px"></div><div class="sk" style="height:100px"></div><div class="sk" style="height:100px"></div></div></div>
         <div class="pagination" id="trashPager"></div>
       </div>
       <div class="card">
@@ -422,7 +433,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
           </div>
         </div>
         <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">消息先入库（秒回 #id），文件下载/上传异步进行。此处列出所有已入库但未完成的记录，可手动重试；定时任务每 5 分钟也会自动重试 pending/failed 记录。超过 20MB 且未配置本地 Bot API 的会直接失败。</div>
-        <div id="unsavedList" style="font-size:13px;color:var(--text-secondary)">加载中...</div>
+        <div id="unsavedList" style="font-size:13px;color:var(--text-secondary)"><div class="sk-row"><div class="sk" style="width:45%;height:13px"></div><div class="sk" style="width:18%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:38%;height:13px"></div><div class="sk" style="width:14%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:50%;height:13px"></div><div class="sk" style="width:16%;height:13px;border-radius:20px"></div></div></div>
         <div class="pagination" id="unsavedPager"></div>
       </div>
     </div>
@@ -788,6 +799,12 @@ function imgUrl(f) { if (f && f.id) { if (f.proxy_url) return f.proxy_url; if (f
 function escStr(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 // 后台版本号：GitHub Actions 部署时自动注入 v1.0.<run#>
 var APP_VERSION = "v1.0.0";
+// 全量骨架屏：数据加载时统一 shimmer 占位（统计卡/列表/表格/图片网格），避免白屏与布局跳动
+function skBar(w, h, r) { return '<div class="sk" style="width:' + (w || '100%') + ';height:' + (h || 14) + 'px' + (r ? ';border-radius:' + r + 'px' : '') + '"></div>'; }
+function skGrid(n) { var s = ''; for (var i = 0; i < n; i++) { s += '<div class="sk-card">' + skBar('42%', 16, 8) + '<div style="height:4px"></div>' + skBar('80%', 12, 8) + '</div>'; } return '<div class="sk-grid">' + s + '</div>'; }
+function skRows(n) { var s = '<div class="sk-rows">'; for (var i = 0; i < n; i++) { s += '<div class="sk-row">' + skBar('35%', 14, 7) + skBar('14%', 14, 20) + '</div>'; } return s + '</div>'; }
+function skTable(n) { var s = '<div class="tbl-wrap"><table><thead><tr>'; for (var c = 0; c < 4; c++) { s += '<th>' + skBar('70%', 10, 5) + '</th>'; } s += '</tr></thead><tbody>'; for (var r = 0; r < n; r++) { s += '<tr>'; for (var c2 = 0; c2 < 4; c2++) { s += '<td>' + skBar((25 + ((r * 37 + c2 * 53) % 70)) + '%', 12, 6) + '</td>'; } s += '</tr>'; } s += '</tbody></table></div>'; return s; }
+function skImgs(n) { var s = ''; for (var i = 0; i < n; i++) { s += '<div class="sk-card"><div class="sk-img"></div><div style="height:6px"></div>' + skBar('70%', 12, 8) + '</div>'; } return '<div class="sk-grid">' + s + '</div>'; }
 var AK = ""; // no longer injected by the server; key comes from ?api_key=, localStorage or the login form
 var LS = document.getElementById("loginScreen");
 var AM = document.getElementById("appMain");
@@ -1782,7 +1799,7 @@ var trashPage = 1;
 async function loadTrash(page) {
   trashPage = page || 1;
   var el = document.getElementById("trashList");
-  el.innerHTML = "加载中...";
+  el.innerHTML = skImgs(6);
   var r = await api("GET", "/admin/api/trash?page=" + trashPage + "&page_size=20");
   if (!r.ok) { el.innerHTML = '<div class="empty">' + escStr(r.error || "加载失败") + '</div>'; return; }
   var d = r.data;
@@ -1853,7 +1870,7 @@ async function loadUnsaved(page) {
   unsavedPage = page || 1;
   var el = document.getElementById("unsavedList");
   var cnt = document.getElementById("unsavedCount");
-  el.innerHTML = "加载中...";
+  el.innerHTML = skTable(5);
   var r = await api("GET", "/admin/api/unsaved?page=" + unsavedPage + "&page_size=20");
   if (!r.ok) { el.innerHTML = '<div class="empty">' + escStr(r.error || "加载失败") + '</div>'; return; }
   var d = r.data;
@@ -1954,7 +1971,7 @@ function renderD1Skeleton() {
   }
   document.getElementById("d1StatsGrid").innerHTML = h;
   var trEl = document.getElementById("d1TableRows");
-  if (trEl) trEl.innerHTML = '<span style="font-size:11px;color:var(--text-secondary)">加载中...</span>';
+  if (trEl) trEl.innerHTML = skRows(4);
 }
 
 function fillD1Stats(d) {
@@ -2520,7 +2537,7 @@ document.getElementById("r2QuotaSaveBtn").addEventListener("click", function() {
 async function loadBackupList() {
   var el = document.getElementById("backupList");
   if (!el) return;
-  el.innerHTML = '<span style="color:var(--text-secondary)">加载中...</span>';
+  el.innerHTML = skTable(3);
   try {
     const r = await api("GET", "/admin/api/backup/list");
     if (!r.ok || !r.data || !r.data.backups || !r.data.backups.length) { el.innerHTML = '<span style="color:var(--text-secondary)">暂无备份。点「立即备份到 R2」生成第一份。</span>'; return; }
@@ -2860,6 +2877,7 @@ async function loadPool() {
   if (en !== "") u += "enabled=" + en + "&";
   if (tags) u += "tags=" + encodeURIComponent(tags) + "&";
   u += "limit=500";
+  el.innerHTML = skImgs(6);
   var r = await api("GET", u);
   if (!r.ok) { el.innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
   var d = r.data || [];
@@ -3294,6 +3312,7 @@ async function loadFiles(page) {
   var tg = document.getElementById("fileTags").value.trim();
   if (tg) u += "&tags=" + encodeURIComponent(tg);
   u += "&state=completed";
+  document.getElementById("fileList").innerHTML = skImgs(6);
   var r = await api("GET", u);
   if (!r.ok) {
     document.getElementById("fileList").innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>';
