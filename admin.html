@@ -3026,7 +3026,7 @@ async function loadKeys() {
   var d = r.data || [];
   if (!d.length) { el.innerHTML = '<div class="empty">暂无密钥，点击右上角生成</div>'; return; }
   var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>权限</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
-  var today = new Date().toISOString().slice(0, 10);
+  var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   for (var i = 0; i < d.length; i++) {
     var k = d[i];
     var expTxt = "";
@@ -3065,7 +3065,7 @@ function createKey() {
 }
 // 编辑密钥（名称 / 到期时间）
 function editKeyModal(id, name, expires) {
-  var today = new Date().toISOString().slice(0, 10);
+  var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-mask"><div class="modal"><h3>编辑密钥</h3>' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">用途名称</label>' +

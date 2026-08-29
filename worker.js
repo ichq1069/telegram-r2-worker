@@ -9,6 +9,12 @@ import { notifyAdmin, genThumb } from './src/notify.js';
 import { dumpAllTables, handleAdminBackup, handleAdminBackupSave, handleAdminBackupList, handleAdminBackupDelete } from './src/backup.js';
 import { applyRateLimit } from './src/ratelimit.js';
 
+// 东八区辅助：统计"今日/本月"统一按北京时间（UTC+8）口径，避免凌晨上传的文件被计入前一天
+const CN_OFFSET_MS = 8 * 3600 * 1000;
+function cnShift(d) { return new Date(d.getTime() + CN_OFFSET_MS); }
+function cnTodayStr() { return cnShift(new Date()).toISOString().slice(0, 10); }
+function cnDayIso(dayStr) { return new Date(dayStr + 'T00:00:00+08:00').toISOString(); }
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return cors(null, 204);
@@ -505,14 +511,15 @@ async function handleUsageForecast(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
     await ensureTablesOnce(env.D1_DB);
-    const dayStr = new Date().toISOString().slice(0, 10);
-    const hourNow = new Date().getUTCHours() + 1; // 已过小时数（1-24）
+    const cnNow = cnShift(new Date());
+    const dayStr = cnNow.toISOString().slice(0, 10);
+    const hourNow = cnNow.getUTCHours() + 1; // 已过小时数（1-24）
     const t = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day=?').bind(dayStr).first();
     const today = (t && t.r) || 0;
     const quota = 100000;
     const projected = hourNow > 0 ? Math.round(today / hourNow * 24) : today;
     const daysToQuota = projected > 0 ? Math.max(1, Math.floor(quota / projected)) : null;
-    const todayStart = dayStr + 'T00:00:00Z';
+    const todayStart = cnDayIso(dayStr);
     const nw = await env.D1_DB.prepare('SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(todayStart).first();
     const newFiles = (nw && nw.c) || 0;
     const newBytes = (nw && nw.s) || 0;
@@ -527,13 +534,14 @@ async function handleUsageForecast(env) {
     if (storageBytes !== null && storageBytes < cap && newBytes > 0) {
       daysToFull = Math.floor((cap - storageBytes) / newBytes);
     }
-    const dStart = new Date(Date.now() - 13 * 86400000).toISOString().slice(0, 10);
+    const trendBase = Date.now() + CN_OFFSET_MS;
+    const dStart = new Date(trendBase - 13 * 86400000).toISOString().slice(0, 10);
     const hist = await env.D1_DB.prepare('SELECT day, requests FROM worker_stats WHERE day>=? ORDER BY day').bind(dStart).all();
     const map = {};
     (hist.results || []).forEach(function(r) { map[r.day] = r.requests; });
     const trend = [];
     for (let i = 13; i >= 0; i--) {
-      const dd = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
+      const dd = new Date(trendBase - i * 86400000).toISOString().slice(0, 10);
       trend.push({ day: dd.slice(5), requests: map[dd] || 0 });
     }
     return json({ ok: true, data: { today_requests: today, today_projected: projected, quota: quota, days_to_quota: daysToQuota, new_files: newFiles, new_bytes: newBytes, storage_bytes: storageBytes, storage_remaining: storageRemaining, capacity: cap, days_to_full: daysToFull, trend: trend } });
@@ -553,10 +561,11 @@ async function cfWorkerUsage(env) {
     }).then(function(r) { return r.json(); });
   };
   try {
-    const dayStr = new Date().toISOString().slice(0, 10);
-    const todayStart = dayStr + 'T00:00:00Z';
+    const cnNow = cnShift(new Date());
+    const dayStr = cnNow.toISOString().slice(0, 10);
+    const todayStart = cnDayIso(dayStr);
     const nowIso = new Date().toISOString();
-    const monthStart = dayStr.slice(0, 8) + '01T00:00:00Z';
+    const monthStart = cnDayIso(dayStr.slice(0, 8) + '01');
     const q1 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { workersInvocationsAdaptiveGroups(limit:1, filter:{datetime_geq:"' + todayStart + '", datetime_leq:"' + nowIso + '"}) { sum { requests errors } quantiles { cpuTime p50 cpuTime p90 } } } } }';
     const j1 = await gql(q1);
     if (j1.errors) return { _err: 'worker errors: ' + JSON.stringify(j1.errors).slice(0, 300) };
@@ -586,7 +595,7 @@ async function cfWorkerUsage(env) {
 async function handleAdminWorkerUsage(env) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
-    const dayStr = new Date().toISOString().slice(0, 10);
+    const dayStr = cnTodayStr();
     const mStart = dayStr.slice(0, 8) + '01';
     const lt = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day=?').bind(dayStr).first();
     const lm = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day>=?').bind(mStart).first();
@@ -808,7 +817,7 @@ async function aiGetStatsText(env) {
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
     const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
-    const td = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first();
+    const td = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(cnDayIso(cnTodayStr())).first();
     const bt = await env.D1_DB.prepare('SELECT file_type, COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY file_type').all();
     const un = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed'").first();
     let s2 = '📊 图库统计\n· 文件总数: ' + (t?.c || 0) + '\n· 占用存储: ' + fmtSize(s?.s || 0) + '\n· 今日新增: ' + (td?.c || 0) + '\n· 未转存: ' + (un?.c || 0);
@@ -978,7 +987,7 @@ async function handleCountCommand(chatId, env) {
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
     const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
-    const td = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first();
+    const td = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(cnDayIso(cnTodayStr())).first();
     const comp = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state='completed'").first();
     const byType = await env.D1_DB.prepare('SELECT file_type, COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY file_type').all();
     let text = '📊 **现有数量**\n\n文件总数: **' + (t?.c || 0) + '**（含未转存）\n已转存: **' + (comp?.c || 0) + '** / ' + (t?.c || 0) + '\n未转存: ' + ((t?.c || 0) - (comp?.c || 0)) + '\n总大小: ' + fmtSize(s?.s || 0) + '\n今日新增: ' + (td?.c || 0) + '\n';
@@ -1059,7 +1068,7 @@ async function handleStatsCommand(chatId, env) {
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
     const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
-    const td = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first();
+    const td = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(cnDayIso(cnTodayStr())).first();
     const byType = await env.D1_DB.prepare('SELECT file_type, COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY file_type').all();
     const topChat = await env.D1_DB.prepare('SELECT chat_title, COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY chat_title ORDER BY c DESC LIMIT 3').all();
 
@@ -2141,7 +2150,7 @@ function bumpR2Usage(env, key) {
 // 本地请求计数（worker_stats 表，按天累计；GraphQL 不可用时的兜底）
 function bumpWorkerStat(env) {
   if (!env || !env.D1_DB) return;
-  const day = new Date().toISOString().slice(0, 10);
+  const day = cnTodayStr();
   env.D1_DB.prepare("INSERT INTO worker_stats (day, requests, updated_at) VALUES (?, 1, ?) ON CONFLICT(day) DO UPDATE SET requests = requests + 1, updated_at = excluded.updated_at").bind(day, new Date().toISOString()).run().catch(function(){});
 }
 
@@ -2582,11 +2591,13 @@ async function handleAdminSaveProxyOnly(request, env) {
 
 async function handleStats(env) {
   try {
+    const cn0 = cnDayIso(cnTodayStr());
+    const cnMonth0 = cnDayIso(cnTodayStr().slice(0, 8) + '01');
     const [t, ts, td, mo, bt, bc, pt, pe, pm, ptg, comp] = await Promise.all([
       env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first(),
       env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first(),
-      env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first(),
-      env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now','start of month')").first(),
+      env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(cn0).first(),
+      env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(cnMonth0).first(),
       env.D1_DB.prepare('SELECT file_type,COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY file_type').all(),
       env.D1_DB.prepare('SELECT chat_title,chat_id,COUNT(*) as c FROM files WHERE deleted_at IS NULL GROUP BY chat_title ORDER BY c DESC LIMIT 20').all(),
       // Random pool stats (curated pool separate from tg files)
@@ -2633,10 +2644,10 @@ async function handleShowConfigGet(env) {
 async function handleShowGroupsList(env) {
   try {
     const d = await env.D1_DB.prepare('SELECT id, name, images, mode, daily_count, updated_at, created_at FROM show_groups ORDER BY id DESC').all();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = cnTodayStr();
     return json({ ok: true, data: (d.results || []).map(function(g) {
       const arr = String(g.images || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean);
-      return { id: g.id, name: g.name, images: g.images || '', image_count: arr.length, mode: g.mode || 'fixed', daily_count: g.daily_count || 0, last_roll: g.updated_at || '', rolled_today: (g.updated_at || '').slice(0, 10) === today ? 1 : 0, created_at: g.created_at };
+      return { id: g.id, name: g.name, images: g.images || '', image_count: arr.length, mode: g.mode || 'fixed', daily_count: g.daily_count || 0, last_roll: g.updated_at || '', rolled_today: (g.updated_at && cnShift(new Date(g.updated_at)).toISOString().slice(0, 10) === today) ? 1 : 0, created_at: g.created_at };
     }) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -2702,10 +2713,10 @@ async function rotateProgramImages(env) {
     const raw = await getShowConfig(env);
     const sched = Array.isArray(raw.schedule) ? raw.schedule : [];
     if (!sched.length) return 0;
-    const now = new Date();
-    const today = now.toISOString().slice(0, 10);
-    const dow = now.getDay(); const dow1 = dow === 0 ? 7 : dow;
-    const hm = now.getHours() * 60 + now.getMinutes();
+    const cnNow = cnShift(new Date());
+    const today = cnNow.toISOString().slice(0, 10);
+    const dow = cnNow.getUTCDay(); const dow1 = dow === 0 ? 7 : dow;
+    const hm = cnNow.getUTCHours() * 60 + cnNow.getUTCMinutes();
     let rolled = 0;
     for (let i = 0; i < sched.length; i++) {
       const pg = sched[i];
@@ -3336,7 +3347,7 @@ function genApiKey() {
 async function handleAdminKeys(env) {
   try {
     const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,enabled,expires_at,created_at,last_used_at,usage_count FROM api_keys ORDER BY id DESC').all();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = cnTodayStr();
     const out = (d.results || []).map(function(k) {
       const exp = k.expires_at || '';
       k.expired = exp ? (exp < today ? 1 : 0) : 0;
@@ -4401,8 +4412,8 @@ async function sendDailyReport(env) {
     if (s && s.value) chatId = String(s.value).trim();
     if (!chatId && env.ADMIN_CHAT_ID) chatId = String(env.ADMIN_CHAT_ID).trim();
     if (!chatId) return;
-    const dayStart = new Date(Date.now() - 86400000).toISOString().slice(0, 10) + 'T00:00:00Z';
-    const dayEnd = new Date().toISOString().slice(0, 10) + 'T00:00:00Z';
+    const dayStart = cnDayIso(cnShift(new Date(Date.now() - 86400000)).toISOString().slice(0, 10));
+    const dayEnd = cnDayIso(cnTodayStr());
     const yNew = await env.D1_DB.prepare('SELECT COUNT(*) as c, COALESCE(SUM(file_size),0) as s FROM files WHERE created_at>=? AND created_at<?').bind(dayStart, dayEnd).first();
     const total = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
     const trash = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NOT NULL').first();
@@ -4414,7 +4425,7 @@ async function sendDailyReport(env) {
         storageTxt = 'R2 存储 ' + (rj.data.storage_bytes / 1073741824).toFixed(2) + ' GB / 10 GB（' + (rj.data.storage_pct !== null && rj.data.storage_pct !== undefined ? rj.data.storage_pct + '%' : '—') + '）';
       }
     } catch (e) {}
-    const dayStr = new Date().toISOString().slice(0, 10);
+    const dayStr = cnTodayStr();
     const reqs = await env.D1_DB.prepare('SELECT COALESCE(SUM(requests),0) as r FROM worker_stats WHERE day=?').bind(dayStr).first();
     const text = '\uD83D\uDCC5 图库日报\n\u2022 昨日新增：' + ((yNew && yNew.c) || 0) + ' 个 / ' + fmtSize((yNew && yNew.s) || 0) + '\n\u2022 文件总数：' + ((total && total.c) || 0) + ' 个\n\u2022 回收站待清：' + ((trash && trash.c) || 0) + ' 个（>30 天自动硬清）\n\u2022 ' + storageTxt + '\n\u2022 今日请求（本地计数）：' + ((reqs && reqs.r) || 0) + ' 次';
     await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
@@ -4705,8 +4716,8 @@ async function handleDashboard(env) {
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
     const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
-    const td = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now')").first();
-    const mo = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=date('now','start of month')").first();
+    const td = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(cnDayIso(cnTodayStr())).first();
+    const mo = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND created_at>=?').bind(cnDayIso(cnTodayStr().slice(0, 8) + '01')).first();
     sh = '<div class="card"><div class="ct2">Total</div><div class="sv">' + (t?.c || 0) + '</div></div>'
       + '<div class="card"><div class="ct2">Storage</div><div class="sv">' + fmtSize(s?.s || 0) + '</div></div>'
       + '<div class="card"><div class="ct2">Today</div><div class="sv">' + (td?.c || 0) + '</div></div>'
