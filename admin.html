@@ -3205,7 +3205,7 @@ async function loadUbotTasks() {
       '<td>' + escStr(t.title || "") + '</td>' +
       '<td>' + escStr(t.tags || "") + '</td>' +
       '<td>' + poolTxt + '</td>' +
-      '<td>' + escStr(t.level || "pt") + '</td>' +
+      '<td>' + levelBadge(t.level || "pt") + '</td>' +
       '<td>' + Math.round((t.max_size || 0) / 1048576) + '</td>' +
       '<td>' + (t.limit || 0) + '</td>' +
       '<td>' + (t.last_id || 0) + '</td>' +
@@ -4224,7 +4224,7 @@ function genDoc() {
 }
 // 密钥管理
 // 级别 badge：pt 灰 / vip 蓝 / svip 紫 / vvip 金
-var LEVEL_STYLES = { pt: "#9ca3af", vip: "#3b82f6", svip: "#8b5cf6", vvip: "#d97706" };
+var LEVEL_STYLES = { pt: "#9ca3af", n: "#6b7280", r: "#10b981", sr: "#3b82f6", ssr: "#8b5cf6", vip: "#3b82f6", svip: "#8b5cf6", vvip: "#d97706" };
 function levelBadge(lv) {
   lv = LEVEL_STYLES[lv] ? lv : "pt";
   var color = LEVEL_STYLES[lv];
