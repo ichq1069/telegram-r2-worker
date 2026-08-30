@@ -46,16 +46,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .guide-link:hover { background: #f1f5f9; color: var(--text); }
 
 /* Layout */
-.wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
+.wrap { max-width: 1400px; margin: 0 auto; padding: 20px; display: flex; gap: 20px; align-items: flex-start; }
 
-/* Tabs */
-.tabs { display: flex; gap: 4px; background: var(--card); padding: 5px; border-radius: var(--radius); box-shadow: var(--shadow); margin-bottom: 20px; }
-.tab { padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-secondary); transition: all .2s; }
+/* Sidebar navigation */
+.tabs { flex: 0 0 200px; position: sticky; top: 80px; display: flex; flex-direction: column; gap: 2px; background: var(--card); padding: 8px; border-radius: var(--radius); box-shadow: var(--shadow); align-self: flex-start; max-height: calc(100vh - 100px); overflow-y: auto; }
+.tab { padding: 9px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text-secondary); transition: all .2s; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.tab .tab-ico { width: 18px; text-align: center; font-size: 14px; flex-shrink: 0; }
 .tab:hover { color: var(--text); background: #f8fafc; }
 .tab.on { background: var(--primary); color: #fff; }
 
 /* Panel */
-.panel { display: none; } .panel.on { display: block; }
+.panel { display: none; } .panel.on { display: block; flex: 1; min-width: 0; }
 
 /* Card */
 .card { background: var(--card); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow); }
@@ -197,10 +198,11 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
 /* Responsive */
 @media (max-width: 640px) {
   .topbar { padding: 0 12px; }
-  .wrap { padding: 12px; }
+  .wrap { padding: 12px; display: block; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .tabs { overflow-x: auto; }
+  .tabs { position: static; flex: none; flex-direction: row; overflow-x: auto; max-height: none; margin-bottom: 12px; }
   .tab { padding: 8px 14px; font-size: 12px; white-space: nowrap; }
+  .panel.on { flex: none; }
 }
 .store-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
 .store-tab { padding: 6px 14px; border: 1px solid var(--border); background: #fff; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: all .15s; }
@@ -623,6 +625,7 @@ https://example.com/b.jpg"></textarea></div>
         <div class="toolbar" style="margin-bottom:12px">
           <input class="inp" id="poolKw" placeholder="标题/URL 关键词" style="max-width:180px">
           <input class="inp" id="poolTagsF" placeholder="标签筛选 (逗号分隔)" style="max-width:180px">
+          <select class="inp" id="poolLevel" style="max-width:110px"><option value="">全部等级</option><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select>
           <select class="inp" id="poolSource" style="max-width:120px"><option value="">全部来源</option><option value="manual">外链</option><option value="tg">TG导入</option></select>
           <select class="inp" id="poolEnabled" style="max-width:120px"><option value="">全部状态</option><option value="1">已启用</option><option value="0">已停用</option></select>
           <button class="btn btn-primary" id="poolSearchBtn">筛选</button>
@@ -630,6 +633,7 @@ https://example.com/b.jpg"></textarea></div>
         </div>
         <div class="toolbar" id="poolToolbar" style="display:none;margin-bottom:12px;padding:10px 14px;background:#eef2ff;border-radius:10px">
           <span style="font-size:12px;color:var(--text)">已选 <span id="poolSelCount" style="font-weight:700;color:var(--primary)">0</span> 张</span>
+          <button class="btn btn-ghost btn-sm" id="btnPoolClearSel" title="清空当前选择">取消选择</button>
           <button class="btn btn-primary btn-sm" id="btnPoolTagSel">打标签</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolLevelSel" title="批量设置所选图片的级别（级别对等）">设置级别</button>
           <button class="btn btn-ghost btn-sm" id="btnPoolPrivateSel" title="把所选图片转入私密库（等同 vvip，仅 vvip 密钥可访问，不进入共享库/公开输出）">转入私密库</button>
@@ -1158,11 +1162,11 @@ function switchTab(name) {
 
 function init() {
   // Tab 栏
-  var tabNames = [["stats","概览"],["files","Tele文件"],["quicktag","快速打标"],["trash","回收站"],["unsaved","未转存"],["pool","共享库"],["private","私密库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
+  var tabNames = [["stats","概览","📊"],["files","Tele文件","📁"],["quicktag","快速打标","⚡"],["trash","回收站","🗑"],["unsaved","未转存","⏳"],["pool","共享库","📚"],["private","私密库","🔒"],["tags","标签库","🏷"],["gen","接口生成","🔗"],["keys","密钥","🔑"],["users","用户","👥"],["show","轮播","🖼"],["cmds","命令","⚙"],["api","Bot API","🤖"],["ops","运维","🛠"]];
   var tabBar = document.getElementById("tabBar");
   var html = "";
   for (var i = 0; i < tabNames.length; i++) {
-    html += '<div class="tab' + (i === 0 ? " on" : "") + '" data-tab="' + tabNames[i][0] + '">' + tabNames[i][1] + '</div>';
+    html += '<div class="tab' + (i === 0 ? " on" : "") + '" data-tab="' + tabNames[i][0] + '" title="' + tabNames[i][1] + '"><span class="tab-ico">' + tabNames[i][2] + '</span><span>' + tabNames[i][1] + '</span></div>';
   }
   tabBar.innerHTML = html;
 
@@ -1454,7 +1458,7 @@ function init() {
   var pRB = document.getElementById("poolResetBtn");
   if (pRB) pRB.addEventListener("click", function() {
     ["poolKw","poolTagsF"].forEach(function(id){ var el = document.getElementById(id); if (el) el.value = ""; });
-    ["poolSource","poolEnabled"].forEach(function(id){ var el = document.getElementById(id); if (el) el.value = ""; });
+    ["poolSource","poolEnabled","poolLevel"].forEach(function(id){ var el = document.getElementById(id); if (el) el.value = ""; });
     loadPool();
   });
   ["poolKw","poolTagsF"].forEach(function(id) {
@@ -1581,6 +1585,8 @@ function init() {
     if (!ids.length) { toast("请先勾选图片", 0); return; }
     showTagModal(ids, "pool");
   });
+  var bPClear = document.getElementById("btnPoolClearSel");
+  if (bPClear) bPClear.addEventListener("click", function() { poolSel.clear(); updatePoolSel(); renderPoolCheckboxes(); });
   var bPLS = document.getElementById("btnPoolLevelSel");
   if (bPLS) bPLS.addEventListener("click", function() { setPoolLevelModal(); });
   var bPPriv = document.getElementById("btnPoolPrivateSel");
@@ -1720,14 +1726,7 @@ function init() {
       else fallbackCopy(dv);
       return;
     }
-    // 共享库操作
-    var poolCheck = t.closest("[data-pool-check]");
-    if (poolCheck) {
-      var pid3 = poolCheck.getAttribute("data-pool-check");
-      if (poolCheck.checked) poolSel.add(pid3); else poolSel.delete(pid3);
-      updatePoolSel();
-      return;
-    }
+    // 共享库操作（checkbox 选择已移到 change 事件处理）
     var poolOpen = t.closest("[data-pool-url]");
     if (poolOpen) { window.open(poolOpen.getAttribute("data-pool-url"), "_blank"); return; }
     var poolTog = t.closest("[data-action='pool-toggle']");
@@ -1747,14 +1746,7 @@ function init() {
       }
       return;
     }
-    // 私密库操作
-    var priCheck = t.closest("[data-private-check]");
-    if (priCheck) {
-      var priid = priCheck.getAttribute("data-private-check");
-      if (priCheck.checked) privateSel.add(priid); else privateSel.delete(priid);
-      updatePrivateSel();
-      return;
-    }
+    // 私密库操作（checkbox 选择已移到 change 事件处理）
     var priMove = t.closest("[data-action='private-move']");
     if (priMove) {
       api("POST", "/admin/api/pool/batch", { ids: [priMove.getAttribute("data-id")], is_private: 0 }).then(function(r) {
@@ -3460,6 +3452,11 @@ function updatePoolSel() {
   var c = document.getElementById("poolSelCount");
   if (c) c.textContent = n;
 }
+// 根据 poolSel 同步所有共享库 checkbox 的勾选状态（清空选择时调用）
+function renderPoolCheckboxes() {
+  var cs = document.querySelectorAll("[data-pool-check]");
+  for (var i = 0; i < cs.length; i++) cs[i].checked = poolSel.has(cs[i].getAttribute("data-pool-check"));
+}
 async function loadPool() {
   var el = document.getElementById("poolList");
   if (!el) return;
@@ -3467,11 +3464,13 @@ async function loadPool() {
   var source = document.getElementById("poolSource") ? document.getElementById("poolSource").value : "";
   var en = document.getElementById("poolEnabled") ? document.getElementById("poolEnabled").value : "";
   var tags = document.getElementById("poolTagsF") ? document.getElementById("poolTagsF").value.trim() : "";
+  var lv = document.getElementById("poolLevel") ? document.getElementById("poolLevel").value : "";
   var u = "/admin/api/pool?";
   if (kw) u += "keyword=" + encodeURIComponent(kw) + "&";
   if (source) u += "source=" + source + "&";
   if (en !== "") u += "enabled=" + en + "&";
   if (tags) u += "tags=" + encodeURIComponent(tags) + "&";
+  if (lv) u += "level=" + encodeURIComponent(lv) + "&";
   u += "limit=500";
   el.innerHTML = skImgs(6);
   var r = await api("GET", u);
@@ -3479,7 +3478,7 @@ async function loadPool() {
   var d = r.data || [];
   var cnt = document.getElementById("poolCount");
   if (cnt) cnt.textContent = d.length + (r.total !== undefined && r.total !== d.length ? " / " + r.total : "");
-  if (!d.length) { el.innerHTML = '<div class="empty">' + (kw || tags || source || en ? "没有符合筛选条件的图片" : "共享库为空：上方可导入外链，或在「文件」页勾选图片点「加入共享库」") + '</div>'; return; }
+  if (!d.length) { el.innerHTML = '<div class="empty">' + (kw || tags || source || en || lv ? "没有符合筛选条件的图片" : "共享库为空：上方可导入外链，或在「文件」页勾选图片点「加入共享库」") + '</div>'; return; }
   var h = "";
   for (var i = 0; i < d.length; i++) {
     var f = d[i];
@@ -4062,6 +4061,21 @@ function proxyExt(f) {
   });
   document.addEventListener("change", function(e) {
     var t = e.target;
+    // 共享库 checkbox（change 事件保证勾选/取消状态可靠，避免 click 委托的时序问题）
+    var poolCheck = t.closest && t.closest("[data-pool-check]");
+    if (poolCheck) {
+      var ppid = poolCheck.getAttribute("data-pool-check");
+      if (t.checked) poolSel.add(ppid); else poolSel.delete(ppid);
+      updatePoolSel();
+      return;
+    }
+    var priCheck = t.closest && t.closest("[data-private-check]");
+    if (priCheck) {
+      var ppid2 = priCheck.getAttribute("data-private-check");
+      if (t.checked) privateSel.add(ppid2); else privateSel.delete(ppid2);
+      updatePrivateSel();
+      return;
+    }
     if (t.classList && t.classList.contains("fck")) {
       var id = t.getAttribute("data-id");
       if (t.checked) selSet.add(id); else selSet.delete(id);

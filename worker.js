@@ -4084,11 +4084,13 @@ async function handleAdminPoolList(request, env) {
     const tagsParam = u.searchParams.get('tags') || '';
     const kw = u.searchParams.get('keyword') || '';
     const idsParam = u.searchParams.get('ids') || '';
+    const levelParam = u.searchParams.get('level') || '';
     const limit = clampInt(u.searchParams.get('limit') || '500', 500, 1, 500);
     const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
     let w = 'WHERE is_private=0'; const p = [];
     if (source) { w += ' AND source=?'; p.push(source); }
     if (enabled === '1' || enabled === '0') { w += ' AND enabled=?'; p.push(parseInt(enabled)); }
+    if (levelParam) { w += ' AND level=?'; p.push(sanitizeLevel(levelParam)); }
     if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
     if (kw) { w += ' AND (title LIKE ? OR url LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
     if (idsParam) {
