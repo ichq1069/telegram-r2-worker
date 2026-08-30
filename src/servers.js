@@ -234,7 +234,8 @@ def ensure_telethon():
         import telethon
     except ImportError:
         print("正在安装 telethon...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon", "-q"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "telethon", "-q"],
+                            stdin=subprocess.DEVNULL)
         print("telethon 安装完成\\n")
 
 
