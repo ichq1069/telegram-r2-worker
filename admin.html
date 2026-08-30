@@ -42,6 +42,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .topbar-right { display: flex; align-items: center; gap: 12px; }
 .btn-logout { padding: 7px 16px; background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; font-size: 13px; cursor: pointer; transition: all .2s; }
 .btn-logout:hover { background: var(--danger); color: #fff; }
+.guide-link { display: inline-flex; align-items: center; gap: 4px; padding: 7px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; color: var(--text-secondary); text-decoration: none; transition: all .15s; cursor: pointer; }
+.guide-link:hover { background: #f1f5f9; color: var(--text); }
 
 /* Layout */
 .wrap { max-width: 1200px; margin: 0 auto; padding: 20px; }
@@ -262,7 +264,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
     <div class="logo">⚡</div>
     <h1>Bot Admin</h1>
     <p class="sub">输入 API Key 以访问管理面板</p>
-    <input type="password" id="loginKey" placeholder="请输入 API Key" autocomplete="off">
+    <input type="password" id="loginKey" placeholder="请输入 API Key" autocomplete="off" aria-label="API Key">
     <button id="loginBtn">登 录</button>
   </div>
 </div>
@@ -278,7 +280,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
       </div>
     </div>
     <div class="topbar-right">
-      <a href="/admin/guide" target="_blank" style="display:inline-flex;align-items:center;gap:4px;padding:7px 14px;border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-secondary);text-decoration:none;transition:all .15s;cursor:pointer" onmouseover="this.style.background='#f1f5f9';this.style.color='var(--text)'" onmouseout="this.style.background='transparent';this.style.color='var(--text-secondary)'" title="管理员使用手册">使用手册</a>
+      <a href="/admin/guide" target="_blank" class="guide-link" title="管理员使用手册">使用手册</a>
       <button class="btn-logout" id="logoutBtn">退出登录</button>
     </div>
   </div>
@@ -1172,6 +1174,17 @@ function init() {
 
   // 键盘切换 Tab：Ctrl/Cmd + 1..9 跳转到前 9 个面板，Alt + [ ] 上一个/下一个
   document.addEventListener("keydown", function(e) {
+    // Lightbox 打开时优先响应键盘导航
+    if (document.getElementById("lightboxArea") && document.getElementById("lightboxArea").children.length) {
+      if (e.key === "ArrowLeft") { e.preventDefault(); lightboxNav(-1); return; }
+      if (e.key === "ArrowRight") { e.preventDefault(); lightboxNav(1); return; }
+      if (e.key === "Escape") { e.preventDefault(); closeLightbox(); return; }
+    }
+    // Escape 关闭当前弹窗
+    if (e.key === "Escape" && document.getElementById("modalArea").innerHTML) {
+      var mb = document.getElementById("modalArea").querySelector(".modal-bg");
+      if (mb) { e.preventDefault(); document.getElementById("modalArea").innerHTML = ""; return; }
+    }
     var panel = document.getElementById("panel-quicktag");
     var inQt = panel && panel.classList.contains("on") && !(e.ctrlKey || e.metaKey || e.altKey);
     if (e.ctrlKey || e.metaKey) {
