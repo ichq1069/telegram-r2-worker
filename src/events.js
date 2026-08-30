@@ -1,0 +1,502 @@
+// ==================== 事件 Webhook 通知 ====================
+// fireWebhook 事件派发、Webhook 配置管理、Random pool 管理、按条件查询/搜索/流/删除/回收站/R2 检查/机器人管理/配置管理。
+import { json } from "./util.js";
+import { sanitizeLevel, clampInt } from "./core.js";
+import { bumpR2Usage } from "./telegram.js";
+import { appendTagFilter } from "./public.js";
+// ==================== 事件 Webhook 通知 ====================
+// 入库/删除/失败时 POST JSON 到外部 URL（settings.webhook_cfg = { url, enabled, events: [] }）
+// events 空数组 = 全部事件；支持事件：file_imported / file_deleted / file_failed
+export async function getWebhookCfg(env) {
+  const out = { enabled: 0, url: '', events: [] };
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'webhook_cfg'").first();
+    if (s && s.value) {
+      const j = JSON.parse(s.value);
+      if (j) { out.enabled = j.enabled ? 1 : 0; out.url = j.url || ''; out.events = Array.isArray(j.events) ? j.events : []; }
+    }
+  } catch (e) {}
+  return out;
+}
+// fire and forget：不阻塞主流程；发送失败静默跳过
+export async function fireWebhook(env, event, payload) {
+  try {
+    if (!env.D1_DB) return;
+    const c = await getWebhookCfg(env);
+    if (!c.enabled || !c.url || !/^https?:\/\//i.test(c.url)) return;
+    if (c.events.length && c.events.indexOf(event) === -1) return;
+    const body = JSON.stringify({ event: event, ts: new Date().toISOString(), data: payload || {} });
+    await fetch(c.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body }).catch(function(e) { console.log('webhook send fail:', e.message); });
+  } catch (e) { console.log('fireWebhook error:', e.message); }
+}
+export async function handleAdminGetWebhook(env) {
+  try {
+    const c = await getWebhookCfg(env);
+    return json({ ok: true, data: c });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+export async function handleAdminSaveWebhook(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const url = b && b.url ? String(b.url).trim().slice(0, 500) : '';
+    const enabled = !!(b && b.enabled);
+    const events = Array.isArray(b && b.events) ? b.events.map(function(e){ return String(e); }).filter(Boolean) : [];
+    const cfg = { enabled: enabled, url: url, events: events };
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('webhook_cfg', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
+    return json({ ok: true, data: cfg });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+export async function handleAdminWebhookTest(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const url = b && b.url ? String(b.url).trim().slice(0, 500) : '';
+    if (!url || !/^https?:\/\//i.test(url)) return json({ ok: false, error: '请输入有效的 http(s) URL' }, 400);
+    const body = JSON.stringify({ event: 'webhook_test', ts: new Date().toISOString(), data: { message: 'webhook 通知测试（来自 telegram-r2-bot）', ok: true } });
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body });
+    return json({ ok: r.ok, status: r.status, error: r.ok ? '' : ('HTTP ' + r.status + ' ' + r.statusText) });
+  } catch (e) { return json({ ok: false, error: e.message }, 400); }
+}
+
+export async function handleAdminPoolTags(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    const mode = b.mode || 'set';
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean);
+    for (const id of b.ids) {
+      const cur = await env.D1_DB.prepare('SELECT tags FROM random_pool WHERE id = ?').bind(id).first();
+      let next = '';
+      if (mode === 'append') {
+        const set = new Set(((cur && cur.tags) || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean));
+        tags.forEach(function(t){ set.add(t); });
+        next = Array.from(set).join(',');
+      } else if (mode === 'remove') {
+        const set = new Set(((cur && cur.tags) || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean));
+        tags.forEach(function(t){ set.delete(t); });
+        next = Array.from(set).join(',');
+      } else {
+        next = tags.join(',');
+      }
+      await env.D1_DB.prepare('UPDATE random_pool SET tags = ? WHERE id = ?').bind(next, id).run();
+    }
+    return json({ ok: true, updated: b.ids.length });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminPoolBatch(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    for (const id of b.ids) {
+      if (b.level !== undefined) {
+        await env.D1_DB.prepare('UPDATE random_pool SET level = ? WHERE id = ?').bind(sanitizeLevel(b.level), id).run();
+      } else if (b.is_private !== undefined) {
+        // 转入私密库：等同 vvip 最高级，级别联动；移出私密库降级为 svip
+        if (b.is_private) {
+          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 1, level = ? WHERE id = ?').bind('vvip', id).run();
+        } else {
+          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 0, level = ? WHERE id = ?').bind('svip', id).run();
+        }
+      } else {
+        await env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, id).run();
+      }
+    }
+    return json({ ok: true, updated: b.ids.length });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminPoolBatchDelete(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    for (const id of b.ids) {
+      await env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id).run();
+      fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
+    }
+    return json({ ok: true, deleted: b.ids.length });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleSetFilePoolStatus(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    const status = b.status === 'ignored' ? 'ignored' : '';
+    let n = 0;
+    for (const id of b.ids) {
+      const r = await env.D1_DB.prepare('UPDATE files SET pool_status=? WHERE id=?').bind(status, parseInt(id, 10) || 0).run();
+      n += (r && r.meta && r.meta.changes) || 0;
+    }
+    return json({ ok: true, updated: n });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminGetAutoPoolTags(env) {
+  const tags = await getAutoPoolTags(env);
+  return json({ ok: true, data: { tags: tags } });
+}
+
+export async function handleAdminSaveAutoPoolTags(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const tags = Array.isArray(b && b.tags)
+      ? b.tags.map(String).map(function(t){ return t.trim(); }).filter(Boolean)
+      : [];
+    const uniq = Array.from(new Set(tags)).slice(0, 200);
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('auto_pool_tags', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(uniq)).run();
+    _autoPoolTagsCache = uniq; _autoPoolTagsAt = Date.now();
+    return json({ ok: true, data: { tags: uniq } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 自动入共享库标签集合（settings 键 auto_pool_tags，JSON 数组，30s 缓存）
+let _autoPoolTagsCache = null, _autoPoolTagsAt = 0;
+export async function getAutoPoolTags(env) {
+  const now = Date.now();
+  if (_autoPoolTagsCache !== null && now - _autoPoolTagsAt < 30000) return _autoPoolTagsCache;
+  _autoPoolTagsCache = [];
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'auto_pool_tags'").first();
+    if (s && s.value) {
+      try { const v = JSON.parse(s.value); if (Array.isArray(v)) _autoPoolTagsCache = v.map(String).map(function(t){ return t.trim(); }).filter(Boolean); } catch (e) {}
+    }
+  } catch (e) {}
+  _autoPoolTagsAt = now;
+  return _autoPoolTagsCache;
+}
+
+// 从 files 行导入共享库/私密库：以 tg_file_id 去重；支持 level/isPrivate 覆盖
+export async function importFileToPool(f, opts, env) {
+  const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE tg_file_id = ?').bind(f.id).first();
+  if (ex) return false;
+  const level = (opts && opts.level) || sanitizeLevel(f.level);
+  const isPrivate = (opts && opts.isPrivate) ? 1 : 0;
+  const useTags = (opts && opts.tags) || f.tags || '';
+  await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, width, height, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
+    .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, level, isPrivate, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, f.id, new Date().toISOString()).run();
+  return true;
+}
+
+export async function handleAdminPoolFromTg(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    // 可选 tags：导入时统一设置标签（覆盖文件现有标签并同步回 files.tags）；不传则沿用文件现有标签
+    const tagsOverride = Array.isArray(b.tags) ? b.tags.map(s => String(s).trim()).filter(Boolean) : [];
+    const finalTags = tagsOverride.length ? Array.from(new Set(tagsOverride)).join(',') : '';
+    // 级别对等：b.level 指定级别（默认继承文件级别）；b.private 标记私密（进私密库）
+    const levelOverride = sanitizeLevel(b.level);
+    const isPrivate = b.private ? 1 : 0;
+    let added = 0, skipped = 0;
+    for (const id of b.ids) {
+      const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags, level FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
+      if (!f) { skipped++; continue; }
+      const useTags = finalTags || f.tags || '';
+      const useLevel = b.level !== undefined ? levelOverride : sanitizeLevel(f.level);
+      const ok = await importFileToPool(f, { level: useLevel, isPrivate: isPrivate, tags: useTags }, env);
+      if (!ok) continue; // 已存在（含私密副本），跳过
+      if (finalTags) {
+        // 同步文件标签，保证标签计数一致（files 与 pool 同标签）
+        await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(finalTags, id).run();
+      }
+      added++;
+    }
+    return json({ ok: true, data: { added: added, skipped: skipped } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminPoolDelete(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = u.searchParams.get('id');
+    if (!id) return json({ ok: false, error: 'id required' }, 400);
+    await env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id).run();
+    fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 私密库列表（is_private=1，等同 vvip 最高级，不进入共享库）
+export async function handleAdminPrivatePoolList(request, env) {
+  try {
+    const u = new URL(request.url);
+    const kw = u.searchParams.get('keyword') || '';
+    const tagsParam = u.searchParams.get('tags') || '';
+    const limit = clampInt(u.searchParams.get('limit') || '500', 500, 1, 500);
+    const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
+    let w = 'WHERE is_private=1'; const p = [];
+    if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+    if (kw) { w += ' AND (title LIKE ? OR url LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    return json({ ok: true, data: d.results || [], total: t?.total || 0 });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 私密库 tele 转存：私密图片等同 vvip，仅 vvip 密钥可访问，不进入共享库
+export async function handleAdminPrivatePoolFromTg(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    const tagsOverride = Array.isArray(b.tags) ? b.tags.map(s => String(s).trim()).filter(Boolean) : [];
+    const finalTags = tagsOverride.length ? Array.from(new Set(tagsOverride)).join(',') : '';
+    let added = 0, skipped = 0;
+    for (const id of b.ids) {
+      const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags, level FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
+      if (!f) { skipped++; continue; }
+      const useTags = finalTags || f.tags || '';
+      // 私密内容级别固定为 vvip（最高级）
+      const ok = await importFileToPool(f, { level: 'vvip', isPrivate: 1, tags: useTags }, env);
+      if (!ok) continue; // 已存在（含共享库副本），跳过
+      if (finalTags) {
+        await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(finalTags, id).run();
+      }
+      added++;
+    }
+    return json({ ok: true, data: { added: added, skipped: skipped } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleByChat(request, env) {
+  const u = new URL(request.url); const ci = u.searchParams.get('chat_id'); const ct = u.searchParams.get('chat_title');
+  const pg = clampInt(u.searchParams.get('page') || '1', 1, 1); const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100); const off = (pg - 1) * ps;
+  let w = 'WHERE deleted_at IS NULL'; const p = [];
+  if (ci) { w += ' AND chat_id=?'; p.push(ci); } if (ct) { w += ' AND chat_title LIKE ?'; p.push('%' + ct + '%'); }
+  try { const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files ' + w).bind(...p).first(); const d = await env.D1_DB.prepare('SELECT * FROM files ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, ps, off).all(); return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, items: d.results || [] } }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleByUser(request, env) {
+  const u = new URL(request.url); const ui = u.searchParams.get('user_id'); const un = u.searchParams.get('username');
+  const pg = clampInt(u.searchParams.get('page') || '1', 1, 1); const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100); const off = (pg - 1) * ps;
+  let w = 'WHERE deleted_at IS NULL'; const p = [];
+  if (ui) { w += ' AND user_id=?'; p.push(parseInt(ui)); } if (un) { w += ' AND username LIKE ?'; p.push('%' + un + '%'); }
+  try { const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files ' + w).bind(...p).first(); const d = await env.D1_DB.prepare('SELECT * FROM files ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, ps, off).all(); return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, items: d.results || [] } }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleByDate(request, env) {
+  const u = new URL(request.url); const d2 = u.searchParams.get('date');
+  if (!d2) return json({ ok: false, error: 'date required' });
+  const pg = clampInt(u.searchParams.get('page') || '1', 1, 1); const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100); const off = (pg - 1) * ps;
+  try { const t = await env.D1_DB.prepare("SELECT COUNT(*) as total FROM files WHERE created_at LIKE ? AND deleted_at IS NULL").bind(d2 + '%').first(); const d = await env.D1_DB.prepare("SELECT * FROM files WHERE created_at LIKE ? AND deleted_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?").bind(d2 + '%', ps, off).all(); return json({ ok: true, data: { total: t?.total || 0, date: d2, page: pg, page_size: ps, items: d.results || [] } }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleSearch(request, env) {
+  const u = new URL(request.url); const q = u.searchParams.get('q') || '';
+  if (!q) return json({ ok: false, error: 'q required' });
+  const pg = clampInt(u.searchParams.get('page') || '1', 1, 1); const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100); const off = (pg - 1) * ps;
+  const lk = '%' + q + '%';
+  try { const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files WHERE (file_name LIKE ? OR caption LIKE ? OR chat_title LIKE ? OR username LIKE ? OR full_name LIKE ?) AND deleted_at IS NULL').bind(lk, lk, lk, lk, lk).first(); const d = await env.D1_DB.prepare('SELECT * FROM files WHERE (file_name LIKE ? OR caption LIKE ? OR chat_title LIKE ? OR username LIKE ? OR full_name LIKE ?) AND deleted_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?').bind(lk, lk, lk, lk, lk, ps, off).all(); return json({ ok: true, data: { total: t?.total || 0, keyword: q, page: pg, page_size: ps, items: d.results || [] } }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleLatest(request, env) {
+  const u = new URL(request.url); const lm = clampInt(u.searchParams.get('limit') || '10', 10, 1, 50); const tp = u.searchParams.get('type') || '';
+  let w = tp ? 'WHERE file_type=? AND deleted_at IS NULL' : 'WHERE deleted_at IS NULL'; const p = tp ? [lm] : [];
+  try { const d = await env.D1_DB.prepare('SELECT * FROM files ' + w + ' ORDER BY id DESC LIMIT ?').bind(...p).all(); return json({ ok: true, data: d.results || [] }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleStream(request, env) {
+  const u = new URL(request.url); const id = u.searchParams.get('id');
+  try { const f = await env.D1_DB.prepare('SELECT storage_key FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first(); if (!f) return json({ ok: false, error: 'not found' }, 404); const o = await env.R2_BUCKET.get(f.storage_key); if (!o) return json({ ok: false, error: 'gone' }, 404); bumpR2Usage(env, 'r2_class_b'); const h = new Headers(); o.writeHttpMetadata(h); h.set('Cache-Control', 'public,max-age=31536000'); h.set('Access-Control-Allow-Origin', '*'); return new Response(o.body, { headers: h }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleDeleteFile(request, env) {
+  // Soft delete: mark the row deleted_at and keep the R2 object in place.
+  // The file lands in the trash (recoverable); R2 cleanup happens on purge.
+  const u = new URL(request.url); const id = u.searchParams.get('id'); const ids = u.searchParams.get('ids');
+  const purge = u.searchParams.get('purge') === '1';
+  const purgeAll = purge && u.searchParams.get('all') === '1';
+  if (!id && !ids && !purgeAll) return json({ ok: false, error: 'id required' });
+  const now = new Date().toISOString();
+  let deleted = 0;
+  if (purgeAll) {
+    // Empty the whole trash: delete objects (last reference only) then the rows
+    const rows = await env.D1_DB.prepare('SELECT id, storage_key FROM files WHERE deleted_at IS NOT NULL').all();
+    for (const f of (rows.results || [])) {
+      try {
+        if (f.storage_key) {
+          const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
+          if (!ref || (ref.c || 0) <= 1) { try { await env.R2_BUCKET.delete(f.storage_key); } catch (e) {} }
+        }
+        const r = await env.D1_DB.prepare('DELETE FROM files WHERE id=?').bind(f.id).run();
+        if (r.meta && r.meta.changes) deleted++;
+      } catch (e) {}
+    }
+    return json({ ok: true, deleted: deleted, message: 'Purged ' + deleted + ' file(s)' });
+  }
+  const list = ids ? ids.split(',').map(function(s){return s.trim();}).filter(Boolean) : [id];
+  for (const one of list) {
+    try {
+      if (purge) {
+        // Hard delete from trash: remove the R2 object (last reference only) then the row
+        const f = await env.D1_DB.prepare('SELECT storage_key FROM files WHERE id=?').bind(one).first();
+        if (f?.storage_key) {
+          const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
+          if (!ref || (ref.c || 0) <= 1) { try { await env.R2_BUCKET.delete(f.storage_key); } catch (e) {} }
+        }
+        const r = await env.D1_DB.prepare('DELETE FROM files WHERE id=?').bind(one).run();
+        if (r.meta && r.meta.changes) deleted++;
+      } else {
+        const r = await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=? AND deleted_at IS NULL').bind(now, one).run();
+        if (r.meta && r.meta.changes) deleted++;
+      }
+      fireWebhook(env, 'file_deleted', { id: one, deleted: !purge, source: 'files' }).catch(function(){});
+    } catch (e) {}
+  }
+  return json({ ok: true, deleted: deleted, message: (purge ? 'Purged ' : 'Deleted ') + deleted + ' file(s)' });
+}
+
+// Trash list: rows marked deleted_at, newest first
+export async function handleTrashList(request, env) {
+  const u = new URL(request.url);
+  const pg = clampInt(u.searchParams.get('page') || '1', 1, 1);
+  const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100);
+  const off = (pg - 1) * ps;
+  try {
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files WHERE deleted_at IS NOT NULL').first();
+    const d = await env.D1_DB.prepare('SELECT id, file_name, file_type, file_size, chat_title, created_at, deleted_at, r2_url FROM files WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT ? OFFSET ?').bind(ps, off).all();
+    return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.total || 0) / ps), items: d.results || [] } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// Restore: clear deleted_at so the file is visible again
+export async function handleTrashRestore(request, env) {
+  const b = await request.json().catch(function(){ return null; });
+  const ids = b && Array.isArray(b.ids) ? b.ids.map(String) : [];
+  let restored = 0;
+  if (!ids.length) {
+    // Empty ids -> restore everything
+    try {
+      const r = await env.D1_DB.prepare('UPDATE files SET deleted_at=NULL WHERE deleted_at IS NOT NULL').run();
+      restored = (r.meta && r.meta.changes) || 0;
+    } catch (e) {}
+    return json({ ok: true, restored: restored, message: 'Restored ' + restored + ' file(s)' });
+  }
+  for (const one of ids) {
+    try {
+      const r = await env.D1_DB.prepare('UPDATE files SET deleted_at=NULL WHERE id=? AND deleted_at IS NOT NULL').bind(one).run();
+      if (r.meta && r.meta.changes) restored++;
+    } catch (e) {}
+  }
+  return json({ ok: true, restored: restored, message: 'Restored ' + restored + ' file(s)' });
+}
+
+// Collect every object key that is still referenced by D1:
+// - files.storage_key (including soft-deleted rows: their objects still live)
+// - thumbnails referenced via files.thumb_url (stored as <public_url>/<key>)
+// - the admin.html static page served from the same bucket
+export async function collectReferencedKeys(db) {
+  const refs = new Set(['admin.html']);
+  let lastId = 0;
+  while (true) {
+    const rows = await db.prepare('SELECT id, storage_key, thumb_url FROM files WHERE id > ? ORDER BY id LIMIT 5000').bind(lastId).all();
+    const res = rows.results || [];
+    if (!res.length) break;
+    for (const x of res) {
+      if (x.storage_key) refs.add(x.storage_key);
+      if (x.thumb_url && x.thumb_url.indexOf('/') >= 0) {
+        const tk = x.thumb_url.substring(x.thumb_url.lastIndexOf('/') + 1);
+        if (tk) refs.add(tk);
+      }
+    }
+    lastId = res[res.length - 1].id;
+  }
+  return refs;
+}
+
+// R2 orphan inspection: walk the bucket, list objects with no D1 reference.
+// Read-only. max= limits how many objects are scanned per call (CPU budget).
+export async function handleR2Inspect(request, env) {
+  try {
+    const u = new URL(request.url);
+    const maxObjects = clampInt(u.searchParams.get('max') || '50000', 50000, 1000, 200000);
+    const refs = await collectReferencedKeys(env.D1_DB);
+    const orphans = [];
+    let scanned = 0;
+    let cursor = null;
+    while (scanned < maxObjects) {
+      const list = cursor ? await env.R2_BUCKET.list({ limit: 1000, cursor: cursor }) : await env.R2_BUCKET.list({ limit: 1000 });
+      const objs = list.objects || [];
+      if (!objs.length) break;
+      for (const o of objs) {
+        scanned++;
+        if (!refs.has(o.key)) orphans.push({ key: o.key, size: o.size, uploaded: o.uploaded });
+      }
+      if (!list.truncated) break;
+      cursor = list.cursor;
+    }
+    return json({ ok: true, data: { referenced: refs.size, objects_scanned: scanned, orphan_count: orphans.length, orphans: orphans.slice(0, 2000) } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// R2 orphan cleanup: idempotent re-scan + delete every unreferenced object
+export async function handleR2Cleanup(env) {
+  try {
+    const refs = await collectReferencedKeys(env.D1_DB);
+    let deleted = 0;
+    let cursor = null;
+    while (true) {
+      const list = cursor ? await env.R2_BUCKET.list({ limit: 1000, cursor: cursor }) : await env.R2_BUCKET.list({ limit: 1000 });
+      const objs = list.objects || [];
+      if (!objs.length) break;
+      for (const o of objs) {
+        if (!refs.has(o.key)) {
+          try { await env.R2_BUCKET.delete(o.key); deleted++; } catch (e) {}
+        }
+      }
+      if (!list.truncated) break;
+      cursor = list.cursor;
+    }
+    return json({ ok: true, data: { deleted: deleted } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleListBots(env) {
+  try {
+    const bots = [];
+    if (env.TG_BOT_TOKEN) {
+      const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getMe');
+      const j = await r.json();
+      if (j.ok) bots.push({ token: env.TG_BOT_TOKEN.substring(0, 10) + '...', username: j.result.username, name: j.result.first_name, id: j.result.id });
+    }
+    return json({ ok: true, data: bots });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAddBot(request, env) {
+  return json({ ok: false, error: 'Bot management via env variables. Set TG_BOT_TOKEN in Worker settings.' });
+}
+
+export async function handleRemoveBot(request, env) {
+  return json({ ok: false, error: 'Bot management via env variables.' });
+}
+
+export async function handleGetConfig(env) {
+  const config = {
+    bot_token_set: !!env.TG_BOT_TOKEN,
+    api_key_set: !!env.API_KEY,
+    r2_public_url: env.R2_PUBLIC_URL || '',
+    tg_secret_set: !!env.TG_SECRET,
+  };
+  if (env.TG_BOT_TOKEN) {
+    try {
+      const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getMe');
+      const j = await r.json();
+      if (j.ok) { config.bot_username = j.result.username; config.bot_name = j.result.first_name; }
+    } catch (e) {}
+  }
+  return json({ ok: true, data: config });
+}
+
+export async function handleSetConfig(request, env) {
+  return json({ ok: false, error: 'Config is set via Worker environment variables in CF Dashboard.' });
+}
+
+export async function handleBotGetMeApi(env) {
+  if (!env.TG_BOT_TOKEN) return json({ ok: false, error: 'Bot token not set' });
+  try {
+    const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getMe');
+    const j = await r.json();
+    return json(j);
+  } catch (e) { return json({ ok: false, error: e.message }); }
+}
+

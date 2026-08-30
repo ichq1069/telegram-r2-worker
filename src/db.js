@@ -35,11 +35,13 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS worker_stats (day TEXT PRIMARY KEY, requests INTEGER DEFAULT 0, errors INTEGER DEFAULT 0, updated_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS user_stats (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, messages INTEGER DEFAULT 0, commands INTEGER DEFAULT 0, files INTEGER DEFAULT 0, inline_queries INTEGER DEFAULT 0, callback_clicks INTEGER DEFAULT 0, last_active_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS known_chats (chat_id TEXT PRIMARY KEY, chat_type TEXT DEFAULT '', chat_title TEXT, chat_username TEXT, last_active_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS redeem_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL, level TEXT DEFAULT 'pt', quota INTEGER DEFAULT 1, used_count INTEGER DEFAULT 0, note TEXT DEFAULT '', enabled INTEGER DEFAULT 1, created_at TEXT, expires_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS redeem_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL, level TEXT DEFAULT 'pt', quota INTEGER DEFAULT 1, used_count INTEGER DEFAULT 0, note TEXT DEFAULT '', enabled INTEGER DEFAULT 1, created_at TEXT, expires_at TEXT, type TEXT DEFAULT 'register', extend_days INTEGER DEFAULT 0);" +
     "CREATE INDEX IF NOT EXISTS idx_redeem_code ON redeem_codes(code);" +
     "CREATE TABLE IF NOT EXISTS api_call_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER, api_key TEXT, path TEXT, method TEXT, ip TEXT, status INTEGER DEFAULT 200, created_at TEXT);" +
     "CREATE INDEX IF NOT EXISTS idx_calls_key ON api_call_logs(key_id);" +
-    "CREATE INDEX IF NOT EXISTS idx_calls_created ON api_call_logs(created_at);"
+    "CREATE INDEX IF NOT EXISTS idx_calls_created ON api_call_logs(created_at);" +
+    "CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', created_at TEXT, updated_at TEXT);" +
+    "CREATE INDEX IF NOT EXISTS idx_ubot_chat ON userbot_tasks(chat_id);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -165,6 +167,27 @@ export async function ensureTables(db) {
         console.log('migrated: user_stats.' + uc[0] + ' column');
       }
     } catch (e8) { console.error('user_stats migration:', e8.message); }
+    // redeem_codes.type / extend_days：兑换码类型（register=注册码 / upgrade=权限升级码 / extend=延时码）与延时天数
+    try {
+      const rc = await db.prepare("PRAGMA table_info(redeem_codes)").all();
+      const rcn = (rc.results || []).map(function(c) { return c.name; });
+      if (rcn.indexOf('type') === -1) {
+        await db.exec("ALTER TABLE redeem_codes ADD COLUMN type TEXT DEFAULT 'register'");
+        console.log('migrated: redeem_codes.type column');
+      }
+      if (rcn.indexOf('extend_days') === -1) {
+        await db.exec("ALTER TABLE redeem_codes ADD COLUMN extend_days INTEGER DEFAULT 0");
+        console.log('migrated: redeem_codes.extend_days column');
+      }
+    } catch (e10) { console.error('redeem_codes migration:', e10.message); }
+    // webhook_logs：webhook 投递日志（最近正常/错误记录，供后台查看）
+    try {
+      await db.exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, status INTEGER DEFAULT 200, ok INTEGER DEFAULT 1, source TEXT DEFAULT 'webhook', error TEXT DEFAULT '', created_at TEXT)");
+    } catch (e11) { console.error('webhook_logs table:', e11.message); }
+    // userbot_tasks：MTProto 群历史抓取任务（每群一条，脚本从后台拉配置执行，断点 last_id 回写）
+    try {
+      await db.exec("CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', created_at TEXT, updated_at TEXT)");
+    } catch (e12) { console.error('userbot_tasks table:', e12.message); }
   } catch(e) { console.error('column migration:', e.message); throw e; }
   return true;
 }

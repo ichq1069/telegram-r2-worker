@@ -62,7 +62,7 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
 .login-card .err { color: var(--danger); font-size: 12px; margin-top: 10px; min-height: 18px; }
 .auth-tabs { display: flex; background: #f1f5f9; border-radius: 10px; padding: 4px; margin-bottom: 22px; }
 .auth-tab { flex: 1; padding: 9px 0; border: none; background: transparent; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--text-secondary); cursor: pointer; transition: all .2s; }
-.auth-tab.on { background: #fff; color: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.auth-tab.on { background: var(--primary); color: #fff; box-shadow: 0 2px 6px rgba(79,110,247,.35); }
 .auth-pane { display: none; }
 .auth-pane.on { display: block; }
 
@@ -149,6 +149,16 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
         <div class="stat-card"><div class="value" id="stCreated" style="font-size:16px">-</div><div class="label">创建时间</div></div>
         <div class="stat-card"><div class="value" id="stKey" style="font-size:13px;word-break:break-all">-</div><div class="label">API 密钥</div></div>
       </div>
+    </div>
+
+    <!-- 兑换码升级 / 续期 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>兑换码升级 / 续期 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">输入管理员发放的权限升级码或延时码，立即生效</span></div>
+      <div class="fbs" style="flex-wrap:wrap;margin-top:4px">
+        <div class="fr" style="flex:1;min-width:240px"><label>兑换码</label><input class="inp" id="rdCodeInput" placeholder="RZ-XXXXXXXX（升级码 / 延时码）" autocomplete="off" spellcheck="false"></div>
+        <button class="btn btn-primary" id="rdRedeemBtn" style="align-self:flex-end">兑 换</button>
+      </div>
+      <div class="err" id="rdRedeemErr" style="font-size:12px;margin-top:8px;min-height:16px;color:var(--danger)"></div>
     </div>
 
     <!-- 调用统计与日志 -->
@@ -363,6 +373,36 @@ document.querySelectorAll(".auth-tab").forEach(function(t) {
     document.getElementById("pane-" + t.getAttribute("data-auth")).classList.add("on");
   });
 });
+// 兑换码升级 / 续期（登录后，输入升级码或延时码）
+function doRedeemCode() {
+  var cd = document.getElementById("rdCodeInput").value.trim();
+  var errEl = document.getElementById("rdRedeemErr");
+  errEl.textContent = "";
+  if (!cd) { errEl.textContent = "请填写兑换码"; return; }
+  var btn = document.getElementById("rdRedeemBtn");
+  btn.disabled = true;
+  portal("POST", "/api/user/redeem", { code: cd }).then(function(r) {
+    btn.disabled = false;
+    if (!r.ok || !r.data) { errEl.textContent = r.error || "兑换失败"; return; }
+    if (r.data.action === "upgrade") {
+      toast("升级成功，当前级别：" + r.data.level.toUpperCase(), 1);
+    } else if (r.data.action === "extend") {
+      toast("续期成功，到期时间：" + r.data.expires_at + "（+" + r.data.days + " 天）", 1);
+    } else {
+      toast("兑换成功", 1);
+    }
+    document.getElementById("rdCodeInput").value = "";
+    refreshUserStats();
+  });
+}
+document.getElementById("rdRedeemBtn").addEventListener("click", doRedeemCode);
+document.getElementById("rdCodeInput").addEventListener("keydown", function(e) { if (e.key === "Enter") doRedeemCode(); });
+// 刷新当前密钥信息（升级/续期后更新展示）
+function refreshUserStats() {
+  portal("POST", "/api/user/stats").then(function(r) {
+    if (r.ok && r.data) showApp(r.data);
+  });
+}
 document.getElementById("loginBtn").addEventListener("click", doLogin);
 document.getElementById("regBtn").addEventListener("click", doRegister);
 ["loginKey", "loginPass"].forEach(function(id) {

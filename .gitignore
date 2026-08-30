@@ -2,3 +2,8 @@ node_modules/
 .wrangler/
 .dev.vars
 *.local
+__pycache__/
+backups/
+.agents/
+.impeccable/
+skills-lock.json

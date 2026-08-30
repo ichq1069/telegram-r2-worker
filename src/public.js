@@ -1,0 +1,1759 @@
+// ==================== PUBLIC 展示层 ====================
+// 幻灯片页（/show）、Show groups（节目单）、画廊瀑布流、公开 JSON API、公开上传、Random pool。
+// 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
+import { json } from "./util.js";
+import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genRedeemCode } from "./core.js";
+import { lastUploadError, putR2 } from "./telegram.js";
+import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
+import { extractFileInfo } from "./webhook.js";
+// ==================== Public slideshow page (random pool showcase) ====================
+// 30s in-memory cache so /show and /show/data skip D1 on hot requests (cold starts used to add seconds)
+let _showCfg = null, _showCfgAt = 0;
+export async function getShowConfig(env) {
+  const now = Date.now();
+  if (_showCfg && now - _showCfgAt < 30000) return _showCfg;
+  const def = { enabled: 1, interval: 5, showTitle: 1, showTags: 1, showCounter: 1, tags: '', type: '', count: 20, shuffle: 1, statsCode: '', schedule: [], autoAdvance: 1 };
+  let cfg = def;
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='show_config'").first();
+    if (r && r.value) { try { cfg = Object.assign({}, def, JSON.parse(r.value)); } catch (e) {} }
+  } catch (e) {}
+  _showCfg = cfg; _showCfgAt = now;
+  return cfg;
+}
+
+export async function handleShowConfigGet(env) {
+  return json({ ok: true, data: await getShowConfig(env) });
+}
+
+// ==================== Show groups (image playlists for schedule programs) ====================
+export async function handleShowGroupsList(env) {
+  try {
+    const d = await env.D1_DB.prepare('SELECT id, name, images, mode, daily_count, updated_at, created_at FROM show_groups ORDER BY id DESC').all();
+    const today = cnTodayStr();
+    return json({ ok: true, data: (d.results || []).map(function(g) {
+      const arr = String(g.images || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean);
+      return { id: g.id, name: g.name, images: g.images || '', image_count: arr.length, mode: g.mode || 'fixed', daily_count: g.daily_count || 0, last_roll: g.updated_at || '', rolled_today: (g.updated_at && cnShift(new Date(g.updated_at)).toISOString().slice(0, 10) === today) ? 1 : 0, created_at: g.created_at };
+    }) });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleShowGroupsSave(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.name) return json({ ok: false, error: 'name required' }, 400);
+    const name = String(b.name).trim().slice(0, 60);
+    const images = String(b.images || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean).slice(0, 200).join(',');
+    const mode = b.mode === 'daily_random' ? 'daily_random' : 'fixed';
+    const daily_count = Math.min(Math.max(parseInt(b.daily_count) || 0, 0), 100);
+    const id = parseInt(b.id, 10) || 0;
+    if (id) {
+      if (b.mode !== undefined) {
+        // 显式提交模式（每日随机/固定）时同时更新模式与数量
+        await env.D1_DB.prepare('UPDATE show_groups SET name=?, images=?, mode=?, daily_count=? WHERE id=?').bind(name, images, mode, daily_count, id).run();
+      } else {
+        // 仅选图/改名时不改动已配置的模式与每日数量
+        await env.D1_DB.prepare('UPDATE show_groups SET name=?, images=? WHERE id=?').bind(name, images, id).run();
+      }
+    } else {
+      await env.D1_DB.prepare('INSERT INTO show_groups (name, images, mode, daily_count, created_at) VALUES (?,?,?,?,?)').bind(name, images, mode, daily_count, new Date().toISOString()).run();
+    }
+    _showCfg = null; // schedules may reference groups
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleShowGroupsDelete(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = parseInt(u.searchParams.get('id') || '0', 10);
+    if (!id) return json({ ok: false, error: 'id required' }, 400);
+    await env.D1_DB.prepare('DELETE FROM show_groups WHERE id=?').bind(id).run();
+    _showCfg = null;
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 立即换图：从随机库抽 daily_count 张替换该节目组图片（返回本次结果）
+export async function handleShowGroupRoll(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = parseInt(u.searchParams.get('id') || '0', 10);
+    if (!id) return json({ ok: false, error: 'id required' }, 400);
+    const g = await env.D1_DB.prepare('SELECT id, mode, daily_count FROM show_groups WHERE id=?').bind(id).first();
+    if (!g) return json({ ok: false, error: 'group not found' }, 404);
+    const n = Math.min(Math.max(parseInt(g.daily_count) || 5, 1), 100);
+    const picked = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE enabled=1 AND level=\'pt\' AND is_private=0 ORDER BY RANDOM() LIMIT ?').bind(n).all();
+    const ids = (picked.results || []).map(function(r) { return r.id; });
+    if (!ids.length) return json({ ok: false, error: '共享库为空，无法换图（请先在共享库添加图片）' }, 400);
+    await env.D1_DB.prepare('UPDATE show_groups SET images=?, updated_at=? WHERE id=?').bind(ids.join(','), new Date().toISOString(), id).run();
+    _showCfg = null;
+    return json({ ok: true, data: { image_count: ids.length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 节目定时换图：遍历节目表，mode='daily_random' 的节目按 roll_time + weekdays 自动从随机库抽图
+export async function rotateProgramImages(env) {
+  if (!env.D1_DB) return 0;
+  try {
+    const raw = await getShowConfig(env);
+    const sched = Array.isArray(raw.schedule) ? raw.schedule : [];
+    if (!sched.length) return 0;
+    const cnNow = cnShift(new Date());
+    const today = cnNow.toISOString().slice(0, 10);
+    const dow = cnNow.getUTCDay(); const dow1 = dow === 0 ? 7 : dow;
+    const hm = cnNow.getUTCHours() * 60 + cnNow.getUTCMinutes();
+    let rolled = 0;
+    for (let i = 0; i < sched.length; i++) {
+      const pg = sched[i];
+      if (!pg || pg.mode !== 'daily_random') continue;
+      if (!pg.daily_count || pg.daily_count <= 0) continue;
+      // weekdays 检查：今天是否在允许的周期内
+      if (pg.weekdays && pg.weekdays.length && pg.weekdays.indexOf(dow1) === -1) continue;
+      // roll_time 检查：当前时间是否在 roll_time 的 ±2 分钟窗口内（cron 每 2 分钟触发一次）
+      if (pg.roll_time) {
+        const rt = parseHM(pg.roll_time);
+        if (Math.abs(hm - rt) > 2) continue;
+      }
+      // 防重复：检查该节目的 images 是否今天已换过（用 _program_roll_dates 记忆）
+      const rollKey = '_prog_roll_' + i + '_' + today;
+      try {
+        const seen = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind(rollKey).first();
+        if (seen && seen.value === '1') continue;
+      } catch (e) {}
+      // 抽图
+      const n = Math.min(Math.max(parseInt(pg.daily_count) || 5, 1), 100);
+      let pw = 'WHERE enabled=1 AND level=\'pt\' AND is_private=0'; const pp = [];
+      if (pg.source === 'tg') { pw += " AND source='tg'"; }
+      else if (pg.source === 'manual') { pw += " AND source='manual'"; }
+      if (pg.tags) { pw = appendTagFilter(pg.tags, pw, pp); }
+      if (pg.type) { pw += ' AND file_type=?'; pp.push(pg.type); }
+      const picked = await env.D1_DB.prepare('SELECT id FROM random_pool ' + pw + ' ORDER BY RANDOM() LIMIT ?').bind(...pp, n).all();
+      const ids = (picked.results || []).map(function(r) { return r.id; });
+      if (!ids.length) continue;
+      pg.images = ids.join(',');
+      rolled++;
+      // 标记今天已换
+      try {
+        await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES (?, '1') ON CONFLICT(key) DO UPDATE SET value='1'").bind(rollKey).run();
+      } catch (e) {}
+    }
+    if (rolled) {
+      // 回写 config
+      await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('show_config', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(raw)).run();
+      _showCfg = null;
+      console.log('rotateProgramImages: rolled ' + rolled + ' program(s)');
+    }
+    return rolled;
+  } catch (e) { console.error('rotateProgramImages:', e.message); return 0; }
+}
+
+export async function getGroup(env, id) {
+  try {
+    return await env.D1_DB.prepare('SELECT id, name, images FROM show_groups WHERE id=?').bind(parseInt(id, 10)).first();
+  } catch (e) { return null; }
+}
+
+// Turn a group's stored images (mix of random_pool ids and raw urls) into item list
+export async function groupItems(env, groupStr, limit) {
+  const items = [];
+  const ids = [], urls = [];
+  String(groupStr || '').split(',').forEach(function(x) {
+    x = x.trim();
+    if (!x) return;
+    if (/^\d+$/.test(x)) ids.push(parseInt(x, 10)); else urls.push(x);
+  });
+  if (ids.length) {
+    // 公开页匿名访问：仅 pt 且非私密（私密内容仅 vvip 密钥可见）
+    const stmt = env.D1_DB.prepare('SELECT id, url, thumb_url, title, tags FROM random_pool WHERE id IN (' + ids.map(function(){ return '?'; }).join(',') + ') AND level=\'pt\' AND is_private=0');
+    const d = await stmt.bind(...ids).all();
+    const map = {};
+    (d.results || []).forEach(function(r) { map[r.id] = r; });
+    ids.forEach(function(id) {
+      const r = map[id];
+      if (!r) return;
+      items.push({ url: r.url, thumb_url: r.thumb_url || r.url, title: r.title || '', tags: (r.tags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean) });
+    });
+  }
+  urls.forEach(function(u) { items.push({ url: u, thumb_url: u, title: '', tags: [] }); });
+  return items.slice(0, limit);
+}
+
+export async function handleShowConfigSet(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b) return json({ ok: false, error: 'body required' }, 400);
+    // 向后兼容：旧版 group 字段自动迁移到节目内 images
+    const schedule = normalizeSchedule(b.schedule);
+    for (const pg of schedule) {
+      if (pg.group && !pg.images) {
+        try {
+          const g = await env.D1_DB.prepare('SELECT images FROM show_groups WHERE id=?').bind(parseInt(pg.group, 10)).first();
+          if (g && g.images) pg.images = g.images;
+        } catch (e) {}
+        delete pg.group;
+      } else if (pg.group) {
+        delete pg.group; // images 优先，忽略 group
+      }
+    }
+    const cfg = {
+      enabled: b.enabled ? 1 : 0,
+      interval: Math.min(Math.max(parseInt(b.interval) || 5, 1), 60),
+      showTitle: b.showTitle ? 1 : 0,
+      showTags: b.showTags ? 1 : 0,
+      showCounter: b.showCounter ? 1 : 0,
+      tags: String(b.tags || '').trim(),
+      type: String(b.type || '').trim(),
+      count: Math.min(Math.max(parseInt(b.count) || 20, 1), 50),
+      shuffle: b.shuffle ? 1 : 0,
+      schedule: schedule,
+      autoAdvance: b.autoAdvance ? 1 : 0,
+      statsCode: String(b.statsCode || '')
+    };
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('show_config', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
+    _showCfg = null; // invalidate cache so the change applies immediately
+    return json({ ok: true, data: cfg });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleShowPage() {
+  // Fully static page: no D1 query. All config comes from /show/data at runtime.
+  return new Response(SHOW_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+// Data endpoint for the slideshow: random pool only, no api key needed (public showcase)
+// Supports TV-style schedule: current time picks a program -> its tags/type apply
+export async function handleShowData(request, env) {
+  const raw = await getShowConfig(env);
+  if (!raw.enabled) return json({ ok: false, error: '展示页已暂停' }, 404);
+  // Serve a conflict-free copy of the schedule (normalize each time so old overlapping
+  // configs also resolve to exactly one active program)
+  const cfg = Object.assign({}, raw, { schedule: normalizeSchedule(raw.schedule) });
+  const u = new URL(request.url);
+  const now = new Date();
+  const pg = matchProgram(cfg, now);
+  const tagsParam = u.searchParams.get('tags') || (pg && pg.tags) || cfg.tags || '';
+  const type = u.searchParams.get('type') || (pg && pg.type) || cfg.type || '';
+  // 节目张数用 daily_count（前端字段名），兼容旧配置的 count；URL 参数优先
+  const count = clampInt(u.searchParams.get('count') || String((pg && (pg.daily_count || pg.count)) || cfg.count) || '20', 20, 1, 50);
+  const shuffle = u.searchParams.get('shuffle') === '1' || (u.searchParams.get('shuffle') === null && cfg.shuffle === 1);
+  const pgName = pg ? (pg.name || ((pg.start || '') + '-' + (pg.end || ''))) : null;
+  // 节目内嵌图片：仅固定模式使用；每日随机模式实时按 count+过滤条件抽图，
+  // 避免旧 show_groups 迁移残留的 images 字段劫持导致数量错误（曾出现设置 10 张只播 5 张）
+  let explicit = null;
+  if (pg && pg.images && pg.mode !== 'daily_random') explicit = pg.images;
+  if (explicit) {
+    try {
+      const items = await groupItems(env, explicit, 500);
+      return json({ ok: true, data: { cfg: cfg, program: pgName ? { name: pgName } : null, items: items } });
+    } catch (e) { return json({ ok: false, error: e.message }, 500); }
+  }
+  // 按标签/类型/来源从随机库抽图（公开页匿名访问：仅 pt 且非私密）
+  let w = 'WHERE enabled=1 AND level=? AND is_private=0'; const p = ['pt'];
+  if (type) { w += ' AND file_type=?'; p.push(type); }
+  if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+  // 来源过滤：pg.source = 'tg' / 'manual' / ''(全部)
+  if (pg && pg.source === 'tg') { w += " AND source='tg'"; }
+  else if (pg && pg.source === 'manual') { w += " AND source='manual'"; }
+  try {
+    const d = await env.D1_DB.prepare('SELECT url, thumb_url, title, tags FROM random_pool ' + w + (shuffle ? ' ORDER BY RANDOM()' : ' ORDER BY id DESC') + ' LIMIT ?').bind(...p, count).all();
+    const items = (d.results || []).map(function(r) {
+      return { url: r.url, thumb_url: r.thumb_url || r.url, title: r.title || '', tags: (r.tags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean) };
+    });
+    return json({ ok: true, data: { cfg: cfg, program: pgName ? { name: pgName } : null, items: items } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 画廊瀑布流页（带 key 鉴权） ====================
+// /gallery 静态页；/gallery/data?api_key=xxx&tags=&type=&limit=&offset= 返回 JSON
+// 鉴权走 api_keys 表（级别对等：key 级别决定可见内容级别；is_private=1 仅 vvip 可见）
+export async function handleGalleryPage() {
+  return new Response(GALLERY_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+export async function handleGalleryData(request, env) {
+  const k = await checkApiKey(request, env);
+  if (!k) return json({ ok: false, error: 'Unauthorized or invalid API key' }, 401);
+  if (k.limited) return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+  const keyLevel = (k.rec && k.rec.level) || 'pt';
+  const u = new URL(request.url);
+  const tagsParam = u.searchParams.get('tags') || '';
+  const type = u.searchParams.get('type') || '';
+  const limit = clampInt(u.searchParams.get('limit') || '60', 60, 1, 100);
+  const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
+  let w = 'WHERE enabled=1'; const p = [];
+  const lf = levelFilter(keyLevel);
+  w += lf.sql; p.push.apply(p, lf.params);
+  if (keyLevel !== 'vvip') { w += ' AND is_private=0'; }
+  if (type) { w += ' AND file_type=?'; p.push(type); }
+  if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+  try {
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, level: keyLevel, items: (d.results || []).map(poolFileJson) } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// The gallery page (fully static; data fetched from /gallery/data with api_key)
+const GALLERY_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>图片画廊</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0b0f19; color:#e2e8f0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; min-height:100vh; }
+.head { position:sticky; top:0; z-index:20; background:rgba(11,15,25,.88); backdrop-filter:blur(8px); border-bottom:1px solid rgba(255,255,255,.1); padding:12px 16px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+.head h1 { font-size:16px; font-weight:700; margin-right:auto; }
+.head .inp { background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); color:#e2e8f0; border-radius:8px; padding:6px 10px; font-size:13px; outline:none; }
+.head .inp:focus { border-color:#4f6ef7; }
+.head .btn { background:#4f6ef7; border:none; color:#fff; border-radius:8px; padding:6px 14px; font-size:13px; cursor:pointer; }
+.head .btn:disabled { opacity:.4; cursor:not-allowed; }
+.head select.inp { max-width:130px; }
+.hint { font-size:11px; color:#7d8db0; padding:8px 16px 0; }
+.hint code { background:rgba(255,255,255,.08); padding:1px 6px; border-radius:4px; }
+#grid { columns:4 240px; column-gap:10px; padding:14px 16px 40px; }
+.card { break-inside:avoid; margin-bottom:10px; border-radius:10px; overflow:hidden; background:rgba(255,255,255,.05); position:relative; transition:transform .15s; }
+.card:hover { transform:translateY(-2px); }
+.card img { width:100%; display:block; }
+.card .cap { position:absolute; inset:auto 0 0 0; padding:18px 8px 8px; background:linear-gradient(transparent,rgba(0,0,0,.78)); font-size:12px; }
+.card .cap .t { font-weight:600; }
+.card .cap .g { color:#a8b4cc; margin-top:2px; font-size:11px; }
+#load { text-align:center; padding:20px 0 40px; }
+#load .btn { font-size:13px; }
+#empty { text-align:center; color:#7d8db0; padding:60px 20px; font-size:14px; }
+a.card { text-decoration:none; color:inherit; }
+@media (max-width:900px){ #grid { columns:2 150px; } }
+</style>
+</head>
+<body>
+<div class="head">
+  <h1>🖼 图片画廊</h1>
+  <input class="inp" id="kw" placeholder="标签筛选，如：风景,美女" style="width:220px">
+  <select class="inp" id="type">
+    <option value="">全部类型</option><option value="photo">图片</option><option value="video">视频</option>
+  </select>
+  <button class="btn" id="apply">筛选</button>
+  <button class="btn" id="loadBtn">加载更多</button>
+</div>
+<div class="hint">带 key 鉴权画廊：需在 URL 或下方提供 API 密钥（级别对等，低级别不会显示高级别内容）。示例：<code>/gallery?api_key=你的密钥</code></div>
+<div id="grid"></div>
+<div id="empty" style="display:none">没有匹配的内容</div>
+<div id="load"><button class="btn" id="loadBtn2" style="display:none">加载更多</button></div>
+<script>
+(function(){
+  var KEY = new URLSearchParams(location.search).get('api_key') || localStorage.getItem('gal_key') || '';
+  var kw = document.getElementById('kw');
+  var typeEl = document.getElementById('type');
+  var grid = document.getElementById('grid');
+  var empty = document.getElementById('empty');
+  var offset = 0, total = 0, loading = false;
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function load(reset){
+    if (loading) return; loading = true;
+    if (reset){ offset = 0; grid.innerHTML = ''; empty.style.display = 'none'; }
+    var q = 'offset=' + offset + '&limit=60';
+    if (kw.value.trim()) q += '&tags=' + encodeURIComponent(kw.value.trim());
+    if (typeEl.value) q += '&type=' + encodeURIComponent(typeEl.value);
+    fetch('/gallery/data?api_key=' + encodeURIComponent(KEY) + '&' + q).then(function(r){ return r.json(); }).then(function(j){
+      loading = false;
+      if (!j || !j.ok){ empty.style.display='block'; empty.textContent = (j && j.error) || '加载失败'; document.getElementById('loadBtn2').style.display='none'; return; }
+      var items = (j.data && j.data.items) || [];
+      total = (j.data && j.data.total) || 0;
+      if (!items.length){ empty.style.display='block'; document.getElementById('loadBtn2').style.display='none'; return; }
+      empty.style.display='none';
+      items.forEach(function(it){
+        var card = document.createElement('a');
+        card.className = 'card';
+        card.href = it.url;
+        card.target = '_blank';
+        var t = esc(it.title || '');
+        var g = (it.tags||[]).map(function(x){ return '#'+esc(x); }).join(' ');
+        card.innerHTML = '<img loading="lazy" src="' + esc(it.thumb_url || it.url) + '" alt=""><div class="cap"><div class="t">' + t + '</div><div class="g">' + g + '</div></div>';
+        grid.appendChild(card);
+      });
+      offset += items.length;
+      document.getElementById('loadBtn2').style.display = (offset < total) ? 'inline-block' : 'none';
+    }).catch(function(){ loading = false; });
+  }
+  document.getElementById('apply').addEventListener('click', function(){ load(true); });
+  document.getElementById('loadBtn').addEventListener('click', function(){ load(false); });
+  document.getElementById('loadBtn2').addEventListener('click', function(){ load(false); });
+  kw.addEventListener('keydown', function(e){ if (e.key === 'Enter') load(true); });
+  load(true);
+})();
+</script>
+</body>
+</html>`;
+
+// Match current time against the TV-style schedule. Returns the active program or null.
+// 支持 weekdays（周几筛选，1=周一..7=周日，空=每天）
+export function matchProgram(cfg, now) {
+  const sched = Array.isArray(cfg.schedule) ? cfg.schedule : [];
+  if (!sched.length) return null;
+  const hm = now.getHours() * 60 + now.getMinutes();
+  const dow = now.getDay(); // 0=Sun..6=Sat
+  const dow1 = dow === 0 ? 7 : dow; // 1=Mon..7=Sun
+  for (let i = 0; i < sched.length; i++) {
+    const s = sched[i];
+    if (!s || !s.start || !s.end) continue;
+    // weekdays 过滤：空=每天，数组=[1,3,5] 表示周一三五
+    if (s.weekdays && s.weekdays.length) {
+      if (s.weekdays.indexOf(dow1) === -1) continue;
+    }
+    const st = parseHM(s.start), en = parseHM(s.end);
+    if (st === en) return s; // 00:00-00:00 表示全天节目（任何时刻都匹配）
+    if (st <= en) { if (hm >= st && hm < en) return s; }
+    else { if (hm >= st || hm < en) return s; } // crosses midnight
+  }
+  return null;
+}
+export function parseHM(t) {
+  const p = String(t || '').split(':');
+  return parseInt(p[0] || '0', 10) * 60 + parseInt(p[1] || '0', 10);
+}
+
+// Resolve schedule conflicts: sort by start, clip overlapping programs so that
+export function normalizeSchedule(sched) {
+  const arr = (Array.isArray(sched) ? sched : []).filter(function(s) { return s && s.start && s.end; });
+  arr.sort(function(a, b) { return parseHM(a.start) - parseHM(b.start); });
+  const out = [];
+  for (let i = 0; i < arr.length; i++) {
+    const src = arr[i];
+    const cur = { name: String(src.name || ((src.start || '') + '-' + (src.end || ''))), start: String(src.start).trim(), end: String(src.end).trim(), tags: String(src.tags || '').trim(), type: String(src.type || '').trim(), images: String(src.images || '').trim(), group: String(src.group || '').trim() };
+    // 节目级图片规则（每日随机换图）与周期字段
+    if (src.mode) cur.mode = src.mode;
+    if (src.daily_count) cur.daily_count = parseInt(src.daily_count, 10) || 0;
+    if (src.roll_time) cur.roll_time = String(src.roll_time).trim();
+    if (src.source) cur.source = String(src.source).trim();
+    if (Array.isArray(src.weekdays) && src.weekdays.length) cur.weekdays = src.weekdays.map(Number).filter(function(n){ return n >= 1 && n <= 7; });
+    if (parseHM(cur.end) < parseHM(cur.start)) { // crosses midnight: keep as-is, do not clip
+      out.push(cur); continue;
+    }
+    const prev = out[out.length - 1];
+    if (prev && parseHM(cur.start) < parseHM(prev.end)) {
+      cur.start = prev.end; // clip overlap: start right where the previous ends
+      if (parseHM(cur.start) >= parseHM(cur.end)) continue; // fully covered, drop
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+// The slideshow page (fully static; config is fetched by the page from /show/data)
+const SHOW_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>图片轮播</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { height:100%; background:#0b0f19; overflow:hidden; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+#stage { position:fixed; inset:0; }
+#main { width:100%; height:100%; object-fit:contain; display:block; }
+#loading { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); color:#94a3b8; font-size:14px; }
+.zone { position:fixed; top:0; bottom:0; width:35%; cursor:pointer; z-index:10; }
+.zone.left { left:0; }
+.zone.right { right:0; }
+.zone:hover::after { content:""; position:absolute; top:50%; width:0; height:0; border-top:10px solid transparent; border-bottom:10px solid transparent; opacity:.35; }
+.zone.left:hover::after { left:24px; border-right:16px solid #fff; }
+.zone.right:hover::after { right:24px; border-left:16px solid #fff; }
+.info { position:fixed; bottom:18px; left:50%; transform:translateX(-50%); text-align:center; color:#e2e8f0; z-index:20; width:90%; max-width:700px; }
+#counter { font-size:13px; opacity:.7; margin-bottom:4px; }
+#title { font-size:15px; font-weight:600; text-shadow:0 1px 8px rgba(0,0,0,.6); }
+#tags { margin-top:6px; font-size:12px; }
+.tag { display:inline-block; background:rgba(255,255,255,.14); padding:2px 10px; border-radius:20px; margin:2px 3px; }
+#playBtn { position:fixed; bottom:20px; right:20px; z-index:30; background:rgba(255,255,255,.15); color:#fff; border:1px solid rgba(255,255,255,.25); border-radius:20px; padding:6px 16px; font-size:12px; cursor:pointer; }
+#dots { position:fixed; bottom:22px; left:20px; z-index:30; display:flex; gap:6px; max-width:40%; flex-wrap:wrap; }
+.dot { width:8px; height:8px; border-radius:50%; background:rgba(255,255,255,.25); }
+.dot.on { background:#fff; }
+#sidebar { position:fixed; top:64px; left:14px; z-index:26; width:215px; max-height:calc(100vh - 90px); overflow-y:auto; background:rgba(11,15,25,.66); backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,.12); border-radius:12px; padding:12px; color:#e2e8f0; font-size:12px; }
+#sidebar::-webkit-scrollbar { width:4px; }
+#sidebar::-webkit-scrollbar-thumb { background:rgba(255,255,255,.2); border-radius:2px; }
+.sb-title { font-size:13px; font-weight:700; margin-bottom:10px; color:#fff; }
+.sb-item { display:flex; gap:6px; align-items:center; padding:7px 8px; border-radius:8px; margin-bottom:4px; background:rgba(255,255,255,.05); }
+.sb-item.on { background:#4f6ef7; color:#fff; }
+.sb-item .sb-time { font-variant-numeric:tabular-nums; opacity:.8; white-space:nowrap; }
+.sb-item .sb-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sb-item em { font-style:normal; font-size:10px; background:rgba(255,255,255,.22); padding:1px 6px; border-radius:10px; }
+.sb-empty { color:#94a3b8; font-size:12px; padding:6px 0; }
+.program { position:fixed; top:18px; left:50%; transform:translateX(-50%); z-index:25; background:rgba(255,255,255,.12); color:#fff; padding:4px 16px; border-radius:20px; font-size:12px; letter-spacing:.5px; backdrop-filter:blur(4px); }
+#overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); backdrop-filter:blur(6px); z-index:100; display:none; align-items:center; justify-content:center; }
+.ov-box { background:#111827; border:1px solid #1f2937; border-radius:16px; padding:32px 40px; text-align:center; max-width:360px; width:90%; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.ov-box h2 { color:#f9fafb; font-size:18px; margin-bottom:8px; }
+.ov-box p { color:#9ca3af; font-size:13px; margin-bottom:20px; }
+.ov-actions { display:flex; gap:10px; justify-content:center; }
+.ov-actions button { padding:9px 20px; border:none; border-radius:10px; font-size:13px; cursor:pointer; font-weight:600; }
+#btnNextGroup { background:#4f6ef7; color:#fff; }
+#btnNextGroup:hover { background:#3b5de7; }
+#btnReplay { background:#1f2937; color:#e5e7eb; }
+#btnReplay:hover { background:#374151; }
+@media (max-width:640px){ .zone { width:25%; } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <img id="main" alt="">
+  <div id="loading">加载中...</div>
+  <div class="zone left" id="zLeft"></div>
+  <div class="zone right" id="zRight"></div>
+</div>
+<button id="playBtn">暂停</button>
+<div id="dots"></div>
+<div id="program" class="program" style="display:none"></div>
+<div id="sidebar">
+  <div class="sb-title">节目单</div>
+  <div id="scheduleList"></div>
+</div>
+<div class="info">
+  <div id="counter"></div>
+  <div id="title"></div>
+  <div id="tags"></div>
+</div>
+<div id="overlay">
+  <div class="ov-box">
+    <h2>本组播放完毕</h2>
+    <p id="ovProgram"></p>
+    <div class="ov-actions">
+      <button id="btnNextGroup">播放下一组</button>
+      <button id="btnReplay">重新播放本组</button>
+    </div>
+  </div>
+</div>
+<script>
+var items=[],idx=0,timer=null,AUTOSEC=5,paused=false,AUTOADVANCE=0;
+var curProgram='';
+var SHOW_TITLE=true,SHOW_TAGS=true,SHOW_COUNTER=true,statsInjected=false;
+var scheduleArr=[],boundaryTimer=null;
+function $(i){return document.getElementById(i);}
+export function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+export function p2m(t){var p=String(t||'').split(':');return (parseInt(p[0]||'0',10)||0)*60+(parseInt(p[1]||'0',10)||0);}
+export function renderScheduleList(){
+  var box=$('scheduleList');
+  if(!box) return;
+  if(!scheduleArr.length){box.innerHTML='<div class="sb-empty">未配置节目单</div>';return;}
+  var now=new Date(),hm=now.getHours()*60+now.getMinutes(),h='',hit=false;
+  for(var i=0;i<scheduleArr.length;i++){
+    var s=scheduleArr[i];
+    if(!s||!s.start||!s.end) continue;
+    var st=p2m(s.start),en=p2m(s.end);
+    var active=(st<=en)?(hm>=st&&hm<en):(hm>=st||hm<en);
+    if(active&&hit) active=false; // only highlight the first matching program
+    if(active) hit=true;
+    h+='<div class="sb-item'+(active?' on':'')+'"><span class="sb-time">'+esc(s.start)+'-'+esc(s.end)+'</span><span class="sb-name">'+esc(s.name||'')+'</span>'+(active?'<em>播放中</em>':'')+'</div>';
+  }
+  box.innerHTML=h||'<div class="sb-empty">未配置节目单</div>';
+}
+export function planBoundary(){
+  if(boundaryTimer){clearTimeout(boundaryTimer);boundaryTimer=null;}
+  if(!scheduleArr.length) return;
+  var now=new Date(),hm=now.getHours()*60+now.getMinutes(),next=null;
+  for(var i=0;i<scheduleArr.length;i++){
+    var s=scheduleArr[i];
+    if(!s||!s.start||!s.end) continue;
+    var st=p2m(s.start),en=p2m(s.end);
+    if(st>hm&&(next===null||st<next)) next=st;
+    if(en>hm&&(next===null||en<next)) next=en;
+  }
+  if(next!==null){
+    var ms=(next-hm)*60000-now.getSeconds()*1000-now.getMilliseconds();
+    boundaryTimer=setTimeout(function(){probe();planBoundary();},Math.max(ms,1000));
+  }
+}
+// Config comes from /show/data at runtime (no server-side config lookup on page load)
+export function injectStats(code){
+  if(statsInjected||!code) return;
+  statsInjected=true;
+  var div=document.createElement('div');
+  div.innerHTML=code;
+  var scripts=div.querySelectorAll('script');
+  for(var i=0;i<scripts.length;i++){
+    var s=document.createElement('script');
+    if(scripts[i].src){s.src=scripts[i].src;}
+    else{s.text=scripts[i].text;}
+    document.body.appendChild(s);
+  }
+  while(div.firstChild){document.body.appendChild(div.firstChild);}
+}
+export function applyCfg(cfg){
+  cfg=cfg||{};
+  AUTOSEC=parseInt(cfg.interval)||5;
+  AUTOADVANCE=cfg.autoAdvance?1:0;
+  SHOW_TITLE=cfg.showTitle?true:false;
+  SHOW_TAGS=cfg.showTags?true:false;
+  SHOW_COUNTER=cfg.showCounter?true:false;
+  $('counter').style.display=SHOW_COUNTER?'block':'none';
+  $('title').style.display=SHOW_TITLE?'block':'none';
+  $('tags').style.display=SHOW_TAGS?'block':'none';
+  scheduleArr=(cfg.schedule||[]).slice();
+  renderScheduleList();
+  planBoundary();
+  injectStats(cfg.statsCode);
+}
+export function load(){
+  $('overlay').style.display='none';
+  var done=false;
+  var to=setTimeout(function(){ if(!done){ $('loading').textContent='加载超时，请刷新或稍后再试'; } },20000);
+  fetch('/show/data'+location.search).then(function(r){return r.json();}).then(function(j){
+    done=true;clearTimeout(to);
+    if(!j||!j.ok){$('loading').textContent=(j&&j.error)?j.error:'加载失败';return;}
+    applyCfg(j.data&&j.data.cfg);
+    items=(j.data&&j.data.items)||[];
+    curProgram=(j.data&&j.data.program&&j.data.program.name)||'';
+    updateProgram();
+    if(!items.length){$('loading').textContent='共享库暂无图片';return;}
+    $('loading').style.display='none';
+    idx=0;show();start();
+  }).catch(function(){done=true;clearTimeout(to);$('loading').textContent='加载失败，请刷新重试';});
+}
+var errCount=0;
+export function updateProgram(){
+  var el=$('program');
+  if(el){if(curProgram){el.style.display='block';el.textContent='正在播放 · '+curProgram;}else{el.style.display='none';}}
+  var ov=$('ovProgram');
+  if(ov) ov.textContent=curProgram?('下一组将播放 · '+curProgram):'共享库暂无更多内容';
+  renderScheduleList();
+}
+export function show(){
+  var it=items[idx];
+  var img=$('main');
+  if(img._t) clearTimeout(img._t);
+  img.onload=function(){errCount=0;if(img._t){clearTimeout(img._t);img._t=null;}};
+  img.onerror=function(){
+    errCount++;
+    if(errCount>=items.length){$('loading').textContent='图片全部加载失败，请检查外链';$('loading').style.display='block';stop();return;}
+    $('loading').textContent='图片加载失败，自动跳过...';
+    $('loading').style.display='block';
+    setTimeout(function(){$('loading').style.display='none';next();},800);
+  };
+  img._t=setTimeout(function(){ // 15s 无响应：不卡页面，自动跳下一张
+    errCount++;
+    $('loading').textContent='图片加载缓慢，自动跳过...';
+    $('loading').style.display='block';
+    setTimeout(function(){$('loading').style.display='none';next();},800);
+  },15000);
+  img.src=it.url;
+  $('counter').textContent=(idx+1)+' / '+items.length;
+  $('title').textContent=esc(it.title||'');
+  var t='';
+  for(var i=0;i<it.tags.length;i++){t+='<span class="tag">#'+esc(it.tags[i])+'</span>';}
+  $('tags').innerHTML=t;
+  var d='';
+  for(var j=0;j<items.length;j++){d+='<span class="dot'+(j===idx?' on':'')+'"></span>';}
+  $('dots').innerHTML=d;
+  var nx=new Image();nx.src=items[(idx+1)%items.length].url;
+}
+export function next(){
+  idx=(idx+1)%items.length;
+  if(idx===0){show();groupEnd();return;}
+  show();
+}
+export function prev(){idx=(idx-1+items.length)%items.length;show();}
+export function groupEnd(){stop();$('overlay').style.display='flex';}
+export function start(){stop();timer=setInterval(next,AUTOSEC*1000);}
+export function stop(){if(timer){clearInterval(timer);timer=null;}}
+export function togglePlay(){if(timer){stop();paused=true;$('playBtn').textContent='播放';}else{start();paused=false;$('playBtn').textContent='暂停';}}
+export function probe(){
+  fetch('/show/data?count=1').then(function(r){return r.json();}).then(function(j){
+    if(!j||!j.ok) return;
+    applyCfg(j.data&&j.data.cfg);
+    var pg=(j.data&&j.data.program&&j.data.program.name)||'';
+    if(pg!==curProgram){
+      curProgram=pg;updateProgram();
+      if(AUTOADVANCE) load();
+    }
+  }).catch(function(){});
+}
+$('zLeft').addEventListener('click',function(){prev();});
+$('zRight').addEventListener('click',function(){next();});
+$('playBtn').addEventListener('click',togglePlay);
+$('btnNextGroup').addEventListener('click',function(){load();});
+$('btnReplay').addEventListener('click',function(){$('overlay').style.display='none';idx=0;show();start();});
+$('stage').addEventListener('mouseenter',stop);
+$('stage').addEventListener('mouseleave',function(){if(!paused)start();});
+document.addEventListener('keydown',function(e){if(e.key==='ArrowRight')next();if(e.key==='ArrowLeft')prev();if(e.key===' ')togglePlay();});
+setInterval(probe,30000);
+load();
+</script>
+</body>
+</html>`;
+
+// ==================== Public JSON API (third-party programs) ====================
+export async function checkApiKey(request, env) {
+  if (!env.D1_DB) return null;
+  const u = new URL(request.url);
+  const k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
+  if (!k) return null;
+  try {
+    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
+    if (!rec) return null;
+    // usage bump (fire and forget)
+    env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
+    // 限流：settings.api_rate_limit = {enabled, limit_per_min}
+    const limited = await applyRateLimit(env, k);
+    // 记录调用日志（fire and forget；路径/方法/IP 供后台查看与统计）
+    logApiCall(env, rec, request).catch(function(){});
+    return { rec: rec, limited: limited };
+  } catch (e) { console.error('checkApiKey:', e.message); return null; }
+}
+
+// 记录一次密钥调用（api_call_logs）。路径保留 /api/v1/... 原始地址（含 query），IP 取 CF 头。
+export async function logApiCall(env, rec, request) {
+  if (!env.D1_DB || !rec) return;
+  try {
+    const u = new URL(request.url);
+    const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+    await env.D1_DB.prepare('INSERT INTO api_call_logs (key_id, api_key, path, method, ip, status, created_at) VALUES (?,?,?,?,?,?,?)')
+      .bind(rec.id, rec.key, u.pathname + u.search, request.method || 'GET', String(ip).slice(0, 45), 200, new Date().toISOString()).run();
+  } catch (e) { console.error('logApiCall:', e.message); }
+}
+
+// 公开 API 限流逻辑已移入 src/ratelimit.js（applyRateLimit），由顶部 import 引入
+
+export function appendTagFilter(tagsParam, w, p, prefix) {
+  const q = prefix || '';
+  const tags = (tagsParam || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  if (tags.length) {
+    const ts = [];
+    tags.forEach(function(t) {
+      ts.push('(' + q + 'tags LIKE ? OR ' + q + 'tags LIKE ? OR ' + q + 'tags LIKE ? OR ' + q + 'tags = ?)');
+      p.push('%,' + t + ',%', t + ',%', '%,' + t, t);
+    });
+    w += ' AND (' + ts.join(' OR ') + ')';
+  }
+  return w;
+}
+
+export function publicFileJson(f) {
+  if (!f) return null;
+  return {
+    id: f.id, file_name: f.file_name, file_type: f.file_type, mime_type: f.mime_type,
+    file_size: f.file_size, width: f.width, height: f.height,
+    r2_url: f.r2_url, thumb_url: f.thumb_url,
+    level: sanitizeLevel(f.level),
+    tags: (f.tags || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean),
+    caption: f.caption, chat_title: f.chat_title, username: f.username,
+    created_at: f.created_at
+  };
+}
+
+export async function handlePublicFiles(request, env, keyLevel) {
+  const u = new URL(request.url);
+  const type = u.searchParams.get('type') || '';
+  const tagsParam = u.searchParams.get('tags') || '';
+  const kw = u.searchParams.get('keyword') || '';
+  const limit = clampInt(u.searchParams.get('limit') || '20', 20, 1, 100);
+  const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
+  const random = u.searchParams.get('random') === '1';
+  // pool=1: query the curated random pool instead of the Telegram files table
+  const fromPool = u.searchParams.get('pool') === '1' || u.searchParams.get('pool') === 'true';
+  const table = fromPool ? 'random_pool' : 'files';
+  let w = fromPool ? 'WHERE enabled=1' : "WHERE processing_state='completed' AND deleted_at IS NULL"; const p = [];
+  // 级别对等：只返回 level <= 密钥级别 的内容；私密内容(is_private=1)仅 vvip 密钥可见
+  const lf = levelFilter(keyLevel);
+  w += lf.sql; p.push.apply(p, lf.params);
+  if (keyLevel !== 'vvip') { w += ' AND is_private=0'; }
+  if (type) { w += ' AND file_type=?'; p.push(type); }
+  if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+  if (kw) {
+    if (fromPool) { w += ' AND (title LIKE ? OR url LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
+    else { w += ' AND (file_name LIKE ? OR caption LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
+  }
+  try {
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM ' + table + ' ' + w).bind(...p).first();
+    let d;
+    if (random || fromPool) {
+      // pool 模式默认随机排序（每次刷新内容不同）；非 pool 加 random=1 才随机
+      d = await env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, limit).all();
+    } else {
+      d = await env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    }
+    const mapper = fromPool ? poolFileJson : publicFileJson;
+    return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, items: (d.results || []).map(mapper) } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handlePublicRandom(request, env, keyLevel) {
+  const u = new URL(request.url);
+  const type = u.searchParams.get('type') || '';
+  const tagsParam = u.searchParams.get('tags') || '';
+  const count = clampInt(u.searchParams.get('count') || '1', 1, 1, 10);
+  // mode=img: 302 to a random file's direct URL (for <img>); default json
+  const mode = u.searchParams.get('mode') || 'json';
+  // Always from the curated random pool (enabled=1); never falls back to the Telegram bot files
+  let w = 'WHERE enabled=1'; const p = [];
+  // 级别对等：只抽 level <= 密钥级别 的内容；私密内容(is_private=1)仅 vvip 密钥可见
+  const lf = levelFilter(keyLevel);
+  w += lf.sql; p.push.apply(p, lf.params);
+  if (keyLevel !== 'vvip') { w += ' AND is_private=0'; }
+  if (type) { w += ' AND file_type=?'; p.push(type); }
+  if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+  try {
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, mode === 'img' ? 1 : count).all();
+    const items = (d.results || []).map(poolFileJson);
+    if (mode === 'img') {
+      if (!items.length) return json({ ok: false, error: 'No file matches' }, 404);
+      return new Response('', { status: 302, headers: { Location: items[0].url } });
+    }
+    return json({ ok: true, data: { items: items } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// Compact public JSON for a random_pool row
+export function poolFileJson(r) {
+  return {
+    id: r.id, url: r.url, thumb_url: r.thumb_url || r.url,
+    title: r.title || '', tags: (r.tags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean),
+    level: sanitizeLevel(r.level), is_private: r.is_private || 0,
+    file_type: r.file_type || 'photo', width: r.width, height: r.height, file_size: r.file_size,
+    source: r.source, created_at: r.created_at
+  };
+}
+
+// ==================== Public upload API ====================
+// POST /api/v1/upload?api_key=xxx&pool=1&tags=风景,美女&title=xxx&level=pt&is_private=1
+// Body: multipart/form-data, field "file" = 文件内容（默认进 files 表；pool=1 进共享库 random_pool）
+// 级别默认 = 密钥级别（级别对等：上传内容级别不得超过密钥级别）；is_private=1 仅 vvip 密钥可用
+const PUBLIC_UPLOAD_MAX = 19 * 1024 * 1024; // 19MB
+export async function handlePublicUpload(request, env, keyLevel) {
+  try {
+    if (!env.R2_BUCKET) return json({ ok: false, error: 'R2 not configured' }, 500);
+    const u = new URL(request.url);
+    const pool = u.searchParams.get('pool') === '1' || u.searchParams.get('pool') === 'true';
+    const tagsParam = u.searchParams.get('tags') || '';
+    const title = String(u.searchParams.get('title') || '').slice(0, 200);
+    // 请求级别不得超过密钥级别（级别对等）；未传 level 时默认 = 密钥级别
+    const reqLvRaw = u.searchParams.get('level');
+    let reqLevel = reqLvRaw ? sanitizeLevel(reqLvRaw) : keyLevel;
+    if (LEVEL_RANK[reqLevel] > LEVEL_RANK[keyLevel]) reqLevel = keyLevel;
+    const isPrivate = (u.searchParams.get('is_private') === '1' || u.searchParams.get('is_private') === 'true') && keyLevel === 'vvip' ? 1 : 0;
+    const useLevel = isPrivate ? 'vvip' : reqLevel;
+    const tags = tagsParam.split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+
+    const fd = await request.formData().catch(function(){ return null; });
+    if (!fd) return json({ ok: false, error: 'multipart/form-data required (field "file")' }, 400);
+    const file = fd.get('file');
+    if (!file || typeof file.arrayBuffer !== 'function') return json({ ok: false, error: 'file field required' }, 400);
+    if (file.size > PUBLIC_UPLOAD_MAX) return json({ ok: false, error: 'file too large (max 19MB)' }, 400);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!bytes.length) return json({ ok: false, error: 'empty file' }, 400);
+
+    const name = String(file.name || 'file.bin').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+    const mimeMap = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+      mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
+      mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+      pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain'
+    };
+    const ct = mimeMap[ext] || 'application/octet-stream';
+    const vids = ['mp4', 'mov', 'mkv', 'webm', 'avi'];
+    const auds = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'];
+    const imgs = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
+    let fileType = 'document';
+    if (vids.indexOf(ext) !== -1) fileType = 'video';
+    else if (auds.indexOf(ext) !== -1) fileType = 'audio';
+    else if (imgs.indexOf(ext) !== -1) fileType = 'photo';
+    const now = new Date();
+    const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    const key = (pool ? 'pool/' : 'files/') + ym + '/' + randHex(16) + '.' + ext;
+    const url = await putR2(key, bytes, ct, env);
+    if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
+
+    const iso = now.toISOString();
+    if (pool) {
+      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+        .bind(url, url, title || name, tags, useLevel, isPrivate, fileType, bytes.length, 'api', iso).run();
+      return json({ ok: true, data: { url: url, added: 1, pool: true, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length } });
+    }
+    const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+      .bind(key, url, name, bytes.length, fileType, ct, title, tags, useLevel, isPrivate, iso).run();
+    fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: name, file_type: fileType, level: useLevel, is_private: isPrivate, file_size: bytes.length, title: title, tags: tags }).catch(function(){});
+    return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== Admin: tags / api keys / users ====================
+export async function handleAdminTags(env) {
+  try {
+    const d1 = await env.D1_DB.prepare("SELECT tags FROM files WHERE processing_state='completed' AND deleted_at IS NULL AND tags IS NOT NULL AND tags != ''").all();
+    // random_pool 只统计非 TG 副本（source != 'tg'），避免与 files.tags 重复计数；
+    // 同一张 TG 图在 files 里计一次即可，pool 里的副本不再重复计
+    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND source != 'tg' AND tags IS NOT NULL AND tags != ''").all();
+    const cnt = {};
+    [d1, d2].forEach(function(res) {
+      (res.results || []).forEach(function(r) {
+        const seen = {};
+        (r.tags || '').split(',').forEach(function(t) {
+          t = t.trim();
+          if (t && !seen[t]) { seen[t] = 1; cnt[t] = (cnt[t] || 0) + 1; }  // 行内去重，防止 a,a 计两次
+        });
+      });
+    });
+    const arr = Object.keys(cnt).map(function(t) { return { tag: t, count: cnt[t] }; }).sort(function(a, b) { return b.count - a.count; });
+    return json({ ok: true, data: arr });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleSetFileTags(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const ids = b.ids || (b.id ? [b.id] : []);
+    if (!ids.length) return json({ ok: false, error: 'ids required' });
+    const mode = b.mode || 'set';
+    const tagsArr = (b.tags || []).map(function(s) { return String(s).trim(); }).filter(Boolean);
+    const autoTags = await getAutoPoolTags(env);
+    let updated = 0;
+    for (const id of ids) {
+      if (mode === 'set') {
+        await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(Array.from(new Set(tagsArr)).join(','), id).run();
+        // set 全量语义：命中自动入共享库标签即触发（去重由 importFileToPool 保证）
+        if (autoTags.length && tagsArr.some(function(t){ return autoTags.indexOf(t) !== -1; })) {
+          const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+          if (f) await importFileToPool(f, { level: f.level, isPrivate: 0 }, env);
+        }
+      } else {
+        const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+        const oldArr = (f && f.tags) ? f.tags.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+        let cur = oldArr.slice();
+        let hitAuto = false;
+        if (mode === 'append') {
+          tagsArr.forEach(function(t) { if (cur.indexOf(t) === -1) cur.push(t); });
+          // 仅「本次实际新增」的标签参与自动入共享库判定
+          hitAuto = autoTags.length && tagsArr.some(function(t){ return autoTags.indexOf(t) !== -1 && oldArr.indexOf(t) === -1; });
+        } else if (mode === 'remove') {
+          cur = cur.filter(function(t) { return tagsArr.indexOf(t) === -1; });
+        }
+        await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(Array.from(new Set(cur)).join(','), id).run();
+        if (f && hitAuto) await importFileToPool(f, { level: f.level, isPrivate: 0 }, env);
+      }
+      updated++;
+    }
+    return json({ ok: true, data: { updated: updated } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+
+// 校验 key-pass 登录（user.html 用户门户）：key + key_pass 匹配且密钥有效
+// 返回 api_keys 记录（不含 key_pass 字段），失败返回 null
+export async function checkUserPortal(request, env) {
+  if (!env.D1_DB) return null;
+  const b = await request.json().catch(function() { return {}; });
+  const key = String(b.key || b.api_key || '').trim();
+  const pass = String(b.key_pass || '').trim();
+  if (!key || !pass) return null;
+  try {
+    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(key).first();
+    if (!rec || !rec.key_pass) return null;
+    const hp = await hashKeyPass(pass, key);
+    if (hp !== rec.key_pass) return null;
+    delete rec.key_pass;
+    return rec;
+  } catch (e) { console.error('checkUserPortal:', e.message); return null; }
+}
+
+export async function handleAdminKeys(env) {
+  try {
+    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,level,enabled,expires_at,created_at,last_used_at,usage_count,key_pass,username FROM api_keys ORDER BY id DESC').all();
+    const today = cnTodayStr();
+    const out = (d.results || []).map(function(k) {
+      const exp = k.expires_at || '';
+      k.expired = exp ? (exp < today ? 1 : 0) : 0;
+      k.has_pass = !!(k.key_pass);
+      delete k.key_pass;
+      return k;
+    });
+    return json({ ok: true, data: out });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminKeysCreate(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const name = String(b.name || '').slice(0, 60);
+    const scopes = String(b.scopes || 'files:read').slice(0, 120);
+    const expires_at = String(b.expires_at || '').trim().slice(0, 10); // YYYY-MM-DD，空=永久
+    const level = sanitizeLevel(b.level);
+    const key = genApiKey();
+    const key_pass = String(b.key_pass || '').slice(0, 64);
+    const passHash = key_pass ? await hashKeyPass(key_pass, key) : '';
+    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username) VALUES (?,?,?,?,1,?,0,?,?,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at, passHash, '').run();
+    return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, name: name, scopes: scopes, level: level, expires_at: expires_at, has_pass: !!passHash } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 编辑密钥：改名称 / 改到期时间 / 改级别 / 设置或清除登录密码 key-pass（PATCH /admin/api/keys?id=xxx）
+export async function handleAdminKeysUpdate(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = parseInt(u.searchParams.get('id') || '0', 10);
+    if (!id) return json({ ok: false, error: 'id required' });
+    const b = await request.json().catch(function() { return {}; });
+    const fields = [], vals = [];
+    if (b.name !== undefined) { fields.push('name = ?'); vals.push(String(b.name).slice(0, 60)); }
+    if (b.expires_at !== undefined) { fields.push('expires_at = ?'); vals.push(String(b.expires_at || '').trim().slice(0, 10)); }
+    if (b.level !== undefined) { fields.push('level = ?'); vals.push(sanitizeLevel(b.level)); }
+    if (b.key_pass !== undefined) {
+      // 需要真实 key 做加盐哈希
+      const cur = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE id=?').bind(id).first();
+      if (cur && cur.key) {
+        const kp = String(b.key_pass || '').slice(0, 64);
+        fields.push('key_pass = ?');
+        vals.push(kp ? await hashKeyPass(kp, cur.key) : '');
+      }
+    }
+    if (!fields.length) return json({ ok: false, error: 'nothing to update' });
+    vals.push(id);
+    await env.D1_DB.prepare('UPDATE api_keys SET ' + fields.join(', ') + ' WHERE id = ?').bind(...vals).run();
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminKeysToggle(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    if (!b.id) return json({ ok: false, error: 'id required' });
+    await env.D1_DB.prepare('UPDATE api_keys SET enabled=? WHERE id=?').bind(b.enabled ? 1 : 0, b.id).run();
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminKeysDelete(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = u.searchParams.get('id');
+    if (!id) return json({ ok: false, error: 'id required' });
+    await env.D1_DB.prepare('DELETE FROM api_keys WHERE id=?').bind(id).run();
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 密钥用户管理 ====================
+// 列出注册用户（username 非空，即通过兑换码自助注册的账号），含密钥信息与调用统计
+export async function handleAdminKeyUsers(env) {
+  try {
+    const d = await env.D1_DB.prepare(
+      "SELECT a.id, a.key, a.name, a.scopes, a.level, a.enabled, a.created_at, a.last_used_at, a.usage_count, a.expires_at, a.username, a.key_pass, " +
+      "(SELECT COUNT(*) FROM api_call_logs c WHERE c.key_id = a.id) AS call_count, " +
+      "(SELECT COUNT(*) FROM api_call_logs c WHERE c.key_id = a.id AND c.created_at >= datetime('now', '-1 hour')) AS calls_1h " +
+      "FROM api_keys a WHERE a.username IS NOT NULL AND a.username != '' ORDER BY a.id DESC").all();
+    const today = cnTodayStr();
+    const out = (d.results || []).map(function(k) {
+      const exp = k.expires_at || '';
+      k.expired = exp ? (exp < today ? 1 : 0) : 0;
+      k.has_pass = !!(k.key_pass);
+      delete k.key_pass;
+      return k;
+    });
+    return json({ ok: true, data: out });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户名查重（注册前/后台编辑时校验）：username 已存在则返回 taken:true
+export async function handleAdminUsernameCheck(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const username = String(b.username || '').trim();
+    if (!username) return json({ ok: true, data: { taken: false } });
+    const cur = await env.D1_DB.prepare('SELECT id FROM api_keys WHERE username=? LIMIT 1').bind(username).first();
+    const excludeId = parseInt(b.exclude_id || '0', 10);
+    const taken = !!(cur && (!excludeId || cur.id !== excludeId));
+    return json({ ok: true, data: { taken: taken } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 兑换码管理 ====================
+export async function handleAdminRedeemList(env) {
+  try {
+    const d = await env.D1_DB.prepare('SELECT * FROM redeem_codes ORDER BY id DESC').all();
+    return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 生成兑换码：{count, type, level, quota, note, expires_at, days, extend_days}
+// type: register=注册码（默认，兑换后创建新密钥） / upgrade=权限升级码（兑换后提升已有密钥级别） / extend=延时码（兑换后延长已有密钥到期时间）
+export async function handleAdminRedeemCreate(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    let count = parseInt(b.count || '1', 10);
+    if (isNaN(count) || count < 1) count = 1;
+    if (count > 200) count = 200;
+    const type = ['register', 'upgrade', 'extend'].indexOf(b.type) !== -1 ? b.type : 'register';
+    const level = sanitizeLevel(b.level);
+    let quota = parseInt(b.quota || '1', 10);
+    if (isNaN(quota) || quota < 1) quota = 1;
+    const extendDays = clampInt(b.extend_days, 0, 0, 3650);
+    const note = String(b.note || '').slice(0, 120);
+    // 到期时间：优先取 days（从今天起），否则取明确日期
+    let expires_at = String(b.expires_at || '').trim().slice(0, 10);
+    const days = parseInt(b.days || '0', 10);
+    if (!expires_at && days > 0) {
+      const d = new Date(Date.now() + 8 * 3600 * 1000);
+      d.setDate(d.getDate() + days);
+      expires_at = d.toISOString().slice(0, 10);
+    }
+    const codes = [], now = new Date().toISOString();
+    for (let i = 0; i < count; i++) {
+      const code = genRedeemCode();
+      await env.D1_DB.prepare('INSERT INTO redeem_codes (code,level,quota,used_count,note,enabled,created_at,expires_at,type,extend_days) VALUES (?,?,?,0,?,1,?,?,?,?)').bind(code, level, quota, note, now, expires_at, type, extendDays).run();
+      codes.push(code);
+    }
+    return json({ ok: true, data: { count: codes.length, codes: codes, type: type, level: level, quota: quota, note: note, expires_at: expires_at, extend_days: extendDays } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminRedeemUpdate(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = parseInt(u.searchParams.get('id') || '0', 10);
+    if (!id) return json({ ok: false, error: 'id required' });
+    const b = await request.json().catch(function() { return {}; });
+    const fields = [], vals = [];
+    if (b.type !== undefined) { fields.push('type = ?'); vals.push(['register', 'upgrade', 'extend'].indexOf(b.type) !== -1 ? b.type : 'register'); }
+    if (b.level !== undefined) { fields.push('level = ?'); vals.push(sanitizeLevel(b.level)); }
+    if (b.quota !== undefined) {
+      let q = parseInt(b.quota, 10);
+      if (isNaN(q) || q < 1) q = 1;
+      fields.push('quota = ?'); vals.push(q);
+    }
+    if (b.extend_days !== undefined) { fields.push('extend_days = ?'); vals.push(clampInt(b.extend_days, 0, 0, 3650)); }
+    if (b.enabled !== undefined) { fields.push('enabled = ?'); vals.push(b.enabled ? 1 : 0); }
+    if (b.expires_at !== undefined) { fields.push('expires_at = ?'); vals.push(String(b.expires_at || '').trim().slice(0, 10)); }
+    if (b.note !== undefined) { fields.push('note = ?'); vals.push(String(b.note || '').slice(0, 120)); }
+    if (!fields.length) return json({ ok: false, error: 'nothing to update' });
+    vals.push(id);
+    await env.D1_DB.prepare('UPDATE redeem_codes SET ' + fields.join(', ') + ' WHERE id = ?').bind(...vals).run();
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminRedeemDelete(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = u.searchParams.get('id');
+    if (!id) return json({ ok: false, error: 'id required' });
+    await env.D1_DB.prepare('DELETE FROM redeem_codes WHERE id=?').bind(id).run();
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 调用日志 ====================
+// admin：全部调用日志（分页 + 按密钥/路径筛选）
+export async function handleAdminCallLogs(request, env) {
+  try {
+    const u = new URL(request.url);
+    const page = clampInt(u.searchParams.get('page') || '1', 1, 1);
+    const page_size = clampInt(u.searchParams.get('page_size') || '50', 50, 1, 200);
+    const key_id = u.searchParams.get('key_id');
+    const kw = u.searchParams.get('kw') || '';
+    let w = 'WHERE 1=1'; const p = [];
+    if (key_id) { w += ' AND key_id = ?'; p.push(parseInt(key_id, 10)); }
+    if (kw) {
+      w += ' AND (api_key LIKE ? OR path LIKE ? OR ip LIKE ?)';
+      p.push('%' + kw + '%', '%' + kw + '%', '%' + kw + '%');
+    }
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) AS total FROM api_call_logs ' + w).bind(...p).first();
+    const d = await env.D1_DB.prepare('SELECT * FROM api_call_logs ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, page_size, (page - 1) * page_size).all();
+    return json({ ok: true, data: { total: t?.total || 0, page: page, page_size: page_size, items: d.results || [] } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// admin：最近 1h/6h/24h 调用统计（总数 + 各密钥维度）
+export async function handleAdminCallStats(env) {
+  try {
+    const now = Date.now();
+    const mk = function(hours) {
+      const cutoff = new Date(now - hours * 3600 * 1000).toISOString();
+      return cutoff;
+    };
+    const total = function(cutoff) {
+      return env.D1_DB.prepare("SELECT COUNT(*) AS total FROM api_call_logs WHERE created_at >= ?").bind(cutoff).first();
+    };
+    const byKey = function(cutoff) {
+      return env.D1_DB.prepare(
+        "SELECT c.key_id, a.username, a.name, a.level, COUNT(*) AS calls " +
+        "FROM api_call_logs c LEFT JOIN api_keys a ON a.id = c.key_id " +
+        "WHERE c.created_at >= ? GROUP BY c.key_id ORDER BY calls DESC LIMIT 20").bind(cutoff).all();
+    };
+    const [t1, t6, t24, k1, k6, k24] = await Promise.all([total(mk(1)), total(mk(6)), total(mk(24)), byKey(mk(1)), byKey(mk(6)), byKey(mk(24))]);
+    return json({ ok: true, data: {
+      h1: { total: t1?.total || 0, byKey: (k1.results || []) },
+      h6: { total: t6?.total || 0, byKey: (k6.results || []) },
+      h24: { total: t24?.total || 0, byKey: (k24.results || []) }
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 用户门户：注册 / 调用日志 ====================
+// 用户自助注册：用兑换码兑换一个新密钥（生成 username + key-pass 自动登录）
+export async function handleUserRegister(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable' }, 500);
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const username = String(b.username || '').trim().slice(0, 40);
+    const pass = String(b.password || '').trim().slice(0, 64);
+    const code = String(b.code || b.redeem_code || '').trim().toUpperCase();
+    if (!username) return json({ ok: false, error: '请填写用户名' }, 400);
+    if (!pass) return json({ ok: false, error: '请填写登录密码' }, 400);
+    if (pass.length < 6) return json({ ok: false, error: '密码至少 6 位' }, 400);
+    if (!code) return json({ ok: false, error: '请填写兑换码' }, 400);
+    // 用户名唯一
+    const dup = await env.D1_DB.prepare('SELECT id FROM api_keys WHERE username=? LIMIT 1').bind(username).first();
+    if (dup) return json({ ok: false, error: '用户名已被占用，请换一个' }, 400);
+    // 兑换码校验：存在、启用、未过期、未用完
+    const rc = await env.D1_DB.prepare('SELECT * FROM redeem_codes WHERE code=? LIMIT 1').bind(code).first();
+    if (!rc) return json({ ok: false, error: '兑换码不存在' }, 400);
+    if (!rc.enabled) return json({ ok: false, error: '兑换码已停用' }, 400);
+    if (rc.expires_at && rc.expires_at < cnTodayStr()) return json({ ok: false, error: '兑换码已过期' }, 400);
+    if (rc.used_count >= rc.quota) return json({ ok: false, error: '兑换码已用完' }, 400);
+    // 生成密钥并兑换
+    const key = genApiKey();
+    const passHash = await hashKeyPass(pass, key);
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username) VALUES (?,?,?,?,1,?,0,\'\',?,?)')
+      .bind(key, username, 'files:read', rc.level, now, passHash, username).run();
+    await env.D1_DB.prepare('UPDATE redeem_codes SET used_count = used_count + 1 WHERE id = ?').bind(rc.id).run();
+    return json({ ok: true, data: { username: username, key: key, level: rc.level, name: username } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户门户：登录后兑换升级码 / 延时码
+// upgrade：提升密钥级别为目标 level（仅升不降）；extend：按 extend_days 延长密钥到期时间（在原到期基础上累加）
+export async function handleUserRedeem(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable' }, 500);
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const key = String(b.key || b.api_key || '').trim();
+    const pass = String(b.key_pass || '').trim();
+    const code = String(b.code || b.redeem_code || '').trim().toUpperCase();
+    if (!key || !pass) return json({ ok: false, error: '登录状态失效，请重新登录' }, 401);
+    if (!code) return json({ ok: false, error: '请填写兑换码' }, 400);
+    // 校验兑换码：存在、启用、未过期、未用完
+    const rc = await env.D1_DB.prepare('SELECT * FROM redeem_codes WHERE code=? LIMIT 1').bind(code).first();
+    if (!rc) return json({ ok: false, error: '兑换码不存在' }, 400);
+    if (!rc.enabled) return json({ ok: false, error: '兑换码已停用' }, 400);
+    if (rc.expires_at && rc.expires_at < cnTodayStr()) return json({ ok: false, error: '兑换码已过期' }, 400);
+    if (rc.used_count >= rc.quota) return json({ ok: false, error: '兑换码已用完' }, 400);
+    const type = rc.type || 'register';
+    if (type === 'register') return json({ ok: false, error: '注册码只能用于新用户注册，升级/续期请使用对应类型兑换码' }, 400);
+    if (type !== 'upgrade' && type !== 'extend') return json({ ok: false, error: '未知兑换码类型' }, 400);
+    // 校验当前登录密钥（仅需有效 key+key-pass，不要求未过期，便于续期到期账户）
+    const rec = await env.D1_DB.prepare('SELECT id,level,expires_at,key_pass,username FROM api_keys WHERE key=? AND enabled=1 LIMIT 1').bind(key).first();
+    if (!rec || !rec.key_pass) return json({ ok: false, error: '密钥不存在或已停用' }, 401);
+    const hp = await hashKeyPass(pass, key);
+    if (hp !== rec.key_pass) return json({ ok: false, error: '密码不正确' }, 401);
+    if (type === 'upgrade') {
+      const target = sanitizeLevel(rc.level);
+      const curRank = LEVEL_RANK[rec.level] === undefined ? 0 : LEVEL_RANK[rec.level];
+      const tgtRank = LEVEL_RANK[target] === undefined ? 0 : LEVEL_RANK[target];
+      if (tgtRank <= curRank) return json({ ok: false, error: '升级码级别不高于当前级别，无需升级' }, 400);
+      await env.D1_DB.prepare('UPDATE api_keys SET level=? WHERE id=?').bind(target, rec.id).run();
+      await env.D1_DB.prepare('UPDATE redeem_codes SET used_count = used_count + 1 WHERE id = ?').bind(rc.id).run();
+      return json({ ok: true, data: { action: 'upgrade', level: target } });
+    }
+    // extend：在原到期时间（或今天）基础上累加 extend_days 天
+    const days = clampInt(rc.extend_days, 0, 0, 3650);
+    if (days <= 0) return json({ ok: false, error: '该延时码未设置有效天数' }, 400);
+    let base = cnTodayStr();
+    if (rec.expires_at && rec.expires_at >= cnTodayStr() && rec.expires_at > base) base = rec.expires_at;
+    const d = new Date(base + 'T00:00:00+08:00');
+    d.setDate(d.getDate() + days);
+    const newExpires = d.toISOString().slice(0, 10);
+    await env.D1_DB.prepare('UPDATE api_keys SET expires_at=? WHERE id=?').bind(newExpires, rec.id).run();
+    await env.D1_DB.prepare('UPDATE redeem_codes SET used_count = used_count + 1 WHERE id = ?').bind(rc.id).run();
+    return json({ ok: true, data: { action: 'extend', expires_at: newExpires, days: days } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户门户：当前密钥的调用日志（最近 200 条）
+export async function handleUserCallLogs(rec, env) {  try {
+    const d = await env.D1_DB.prepare('SELECT id,path,method,ip,status,created_at FROM api_call_logs WHERE key_id=? ORDER BY id DESC LIMIT 200').bind(rec.id).all();
+    return json({ ok: true, data: (d.results || []) });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户门户：当前密钥最近 1h/6h/24h 调用统计
+export async function handleUserCallStats(rec, env) {
+  try {
+    const now = Date.now();
+    const total = function(hours) {
+      const cutoff = new Date(now - hours * 3600 * 1000).toISOString();
+      return env.D1_DB.prepare('SELECT COUNT(*) AS total FROM api_call_logs WHERE key_id=? AND created_at >= ?').bind(rec.id, cutoff).first();
+    };
+    const [t1, t6, t24] = await Promise.all([total(1), total(6), total(24)]);
+    return json({ ok: true, data: { h1: t1?.total || 0, h6: t6?.total || 0, h24: t24?.total || 0 } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户聊天交互统计：按 update 类型累加 user_stats 表（消息/命令/文件/Inline 查询/按钮回调）
+// 记录已知会话（known_chats）：从各类 update 中提取 chat 并 upsert。
+// 广播快捷回复键盘 / 告警通知依赖这张表（此前只从 files 表找 private，纯文本私聊没有文件记录导致广播 0 个）
+export async function recordKnownChat(update, env) {
+  try {
+    let chat = null;
+    if (update.message && update.message.chat) chat = update.message.chat;
+    else if (update.channel_post && update.channel_post.chat) chat = update.channel_post.chat;
+    else if (update.callback_query && update.callback_query.message && update.callback_query.message.chat) chat = update.callback_query.message.chat;
+    else if (update.inline_query && update.inline_query.from) {
+      // inline 查询没有 chat 对象，用 from.id 作为私聊 chat_id（@bot 搜索来自用户私聊/群，仍记一个已知用户）
+      chat = { id: update.inline_query.from.id, type: 'private', title: '', username: update.inline_query.from.username || '' };
+    }
+    if (!chat || !chat.id) return;
+    const cid = String(chat.id);
+    if (!cid) return;
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare(
+      "INSERT INTO known_chats (chat_id, chat_type, chat_title, chat_username, last_active_at) VALUES (?,?,?,?,?) " +
+      "ON CONFLICT(chat_id) DO UPDATE SET chat_type=excluded.chat_type, chat_title=excluded.chat_title, chat_username=excluded.chat_username, last_active_at=excluded.last_active_at"
+    ).bind(cid, String(chat.type || ''), String(chat.title || ''), String(chat.username || ''), now).run();
+  } catch (e) { console.error('recordKnownChat:', e.message); }
+}
+
+export async function recordUserInteraction(update, env) {
+  try {
+    // 提取用户身份
+    let user = null, type = null;
+    if (update.callback_query && update.callback_query.from) {
+      user = update.callback_query.from; type = 'callback_clicks';
+    } else if (update.inline_query && update.inline_query.from) {
+      user = update.inline_query.from; type = 'inline_queries';
+    } else {
+      const m = update.message || update.channel_post;
+      if (m && m.from) {
+        user = m.from;
+        const fi = extractFileInfo(m);
+        if (fi) type = 'files';
+        else if (m.text && String(m.text).indexOf('/') === 0) type = 'commands';
+        else type = 'messages';
+      }
+    }
+    if (!user || !user.id || !type) return;
+    const uid = parseInt(user.id, 10);
+    if (!uid) return;
+    const now = new Date().toISOString();
+    const uname = String(user.username || '').slice(0, 64);
+    const fname = String(user.first_name || user.last_name || '').slice(0, 128);
+    const col = type === 'messages' ? 'messages' : type === 'commands' ? 'commands' : type === 'files' ? 'files' : type === 'inline_queries' ? 'inline_queries' : 'callback_clicks';
+    await env.D1_DB.prepare(
+      "INSERT INTO user_stats (user_id, username, full_name, " + col + ", last_active_at) VALUES (?,?,?,1,?) " +
+      "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name, " + col + "=" + col + "+1, last_active_at=excluded.last_active_at"
+    ).bind(uid, uname, fname, now).run();
+  } catch (e) { console.error('recordUserInteraction:', e.message); }
+}
+
+export async function handleAdminUsers(env) {
+  try {
+    const d = await env.D1_DB.prepare("SELECT user_id, username, full_name, COUNT(*) as file_count, SUM(file_size) as total_size, MAX(created_at) as last_active FROM files WHERE deleted_at IS NULL GROUP BY user_id ORDER BY file_count DESC LIMIT 100").all();
+    return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户聊天交互统计：user_stats 表聚合（含总计）
+export async function handleAdminUsersInteractions(env) {
+  try {
+    const d = await env.D1_DB.prepare("SELECT user_id, username, full_name, messages, commands, files, inline_queries, callback_clicks, last_active_at FROM user_stats ORDER BY (messages+commands+files+inline_queries+callback_clicks) DESC, last_active_at DESC LIMIT 200").all();
+    const rows = d.results || [];
+    const sum = function(col) { return rows.reduce(function(a, r) { return a + (parseInt(r[col]) || 0); }, 0); };
+    return json({ ok: true, data: rows, total: {
+      messages: sum('messages'), commands: sum('commands'), files: sum('files'),
+      inline_queries: sum('inline_queries'), callback_clicks: sum('callback_clicks'),
+      users: rows.length
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== Random pool ====================
+export async function handleAdminPoolList(request, env) {
+  try {
+    const u = new URL(request.url);
+    const source = u.searchParams.get('source') || '';
+    const enabled = u.searchParams.get('enabled');
+    const tagsParam = u.searchParams.get('tags') || '';
+    const kw = u.searchParams.get('keyword') || '';
+    const idsParam = u.searchParams.get('ids') || '';
+    const levelParam = u.searchParams.get('level') || '';
+    const limit = clampInt(u.searchParams.get('limit') || '500', 500, 1, 500);
+    const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
+    let w = 'WHERE is_private=0'; const p = [];
+    if (source) { w += ' AND source=?'; p.push(source); }
+    if (enabled === '1' || enabled === '0') { w += ' AND enabled=?'; p.push(parseInt(enabled)); }
+    if (levelParam) { w += ' AND level=?'; p.push(sanitizeLevel(levelParam)); }
+    if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+    if (kw) { w += ' AND (title LIKE ? OR url LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
+    if (idsParam) {
+      const arr = idsParam.split(',').map(function(s){ return parseInt(s.trim(), 10); }).filter(function(n){ return n > 0; });
+      if (arr.length) { w += ' AND id IN (' + arr.map(function(){ return '?'; }).join(',') + ')'; arr.forEach(function(a){ p.push(a); }); }
+    }
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    return json({ ok: true, data: d.results || [], total: t?.total || 0 });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminPoolCreate(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.urls) || !b.urls.length) return json({ ok: false, error: 'urls required' }, 400);
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || '').slice(0, 200);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const now = new Date().toISOString();
+    let added = 0;
+    const urls = b.urls.map(function(x){ return String(x).trim(); }).filter(function(x){ return /^https?:\/\//i.test(x); });
+    if (!urls.length) return json({ ok: true, data: { added: 0 } });
+    // Check existing URLs one by one (per-row queries avoid D1's dynamic IN
+    // placeholder issue that crashes with "Cannot read properties of null
+    // (reading 'dbSession')" on some D1 instances)
+    const exSet = new Set();
+    for (const url of urls) {
+      const ex = await env.D1_DB.prepare('SELECT url FROM random_pool WHERE url = ? LIMIT 1').bind(url).first();
+      if (ex) exSet.add(ex.url);
+    }
+    for (const url of urls) {
+      if (exSet.has(url)) continue; // duplicate by original URL
+      const fsize = await probeImgSize(url);
+      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'manual\', 1, ?)')
+        .bind(url, url, title, tags, level, isPrivate, fsize, now).run();
+      added++;
+    }
+    return json({ ok: true, data: { added: added } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// Normalize an image URL against a base page URL (resolve relative paths)
+export function normUrl(u, base) {
+  u = String(u || '').trim();
+  if (!u || u.charAt(0) === '#') return null;
+  if (/^\/\//.test(u)) return 'https:' + u;
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.charAt(0) === '/') { try { var b = new URL(base); return b.origin + u; } catch (e) { return null; } }
+  try { return new URL(u, base).href; } catch (e) { return null; }
+}
+
+// Canonicalize zupimages URLs (www vs non-www are the same image)
+export function canonImgUrl(u) {
+  return u.replace(/^https?:\/\/zupimages\.net\//i, 'https://www.zupimages.net/');
+}
+
+// Convert a Zupimages viewer.php?id=<path> link into its direct image URL:
+//   https://zupimages.net/viewer.php?id=26/35/8rfb.png
+//     -> https://www.zupimages.net/up/26/35/8rfb.png
+export function zupViewerToDirect(u) {
+  try {
+    const url = new URL(String(u));
+    if (/viewer\.php$/i.test(url.pathname)) {
+      const id = url.searchParams.get('id');
+      if (id) return 'https://www.zupimages.net/up/' + String(id).replace(/^\/+/, '');
+    }
+  } catch (e) {}
+  return null;
+}
+
+// Fetch one or more page URLs (e.g. a Zupimages embed/gallery/viewer page),
+// extract image links from the HTML, then bulk-import them into random_pool.
+export async function handleAdminPoolImportPage(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const raw = b && b.url ? String(b.url).trim() : '';
+    if (!raw) return json({ ok: false, error: 'url required' }, 400);
+    const pageUrls = raw.split(/\r?\n/).map(function(s){ return s.trim(); }).filter(function(s){ return /^https?:\/\//i.test(s); });
+    if (!pageUrls.length) return json({ ok: false, error: 'url must be http(s)' }, 400);
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || '').slice(0, 200);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const now = new Date().toISOString();
+    const foundMap = {};
+    let fetched = 0;
+    for (const pu of pageUrls) {
+      // Zupimages viewer.php link -> direct image URL (no page fetch needed)
+      const direct = zupViewerToDirect(pu);
+      if (direct) { foundMap[canonImgUrl(direct)] = true; fetched++; continue; }
+      // Input is already a direct image link -> import as-is, no page fetch
+      if (/\.(?:jpg|jpeg|png|gif|webp)(?:\?|$)/i.test(pu)) { foundMap[canonImgUrl(pu)] = true; fetched++; continue; }
+      let html = '';
+      try {
+        const res = await fetch(pu, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PoolImporter/1.0)' } });
+        if (res.ok) html = await res.text();
+      } catch (e) { continue; }
+      fetched++;
+      // <img src / data-src / data-original / data-lazy tags (absolute or relative)
+      const re1 = /<img[^>]+(?:src|data-src|data-original|data-lazy)=["']([^"']+)["']/gi;
+      let m;
+      while ((m = re1.exec(html))) {
+        const u = normUrl(m[1], pu);
+        if (u) foundMap[canonImgUrl(u)] = true;
+      }
+      // bare image direct links (.jpg/.jpeg/.png/.gif/.webp)
+      const re2 = /https?:\/\/[^\s"'<>()]+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s"'<>()]*)?/gi;
+      while ((m = re2.exec(html))) {
+        if (/\.(?:jpg|jpeg|png|gif|webp)(?:\?|$)/i.test(m[0])) foundMap[canonImgUrl(m[0])] = true;
+      }
+    }
+    const urls = Object.keys(foundMap);
+    if (!urls.length) return json({ ok: false, error: 'no images found on page' }, 400);
+    let added = 0, skipped = 0;
+    for (const url of urls) {
+      const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE url = ? LIMIT 1').bind(url).first();
+      if (ex) { skipped++; continue; }
+      const fsize = await probeImgSize(url);
+      await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'manual\', 1, ?)')
+        .bind(url, url, title, tags, level, isPrivate, fsize, now).run();
+      added++;
+    }
+    return json({ ok: true, data: { fetched: fetched, found: urls.length, added: added, skipped: skipped } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export function b64ToBytes(b64) {
+  var bin = atob(b64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+// Byte size of an image from base64 (best effort)
+export function b64Size(b64) {
+  const s = String(b64 || '');
+  return Math.floor((s.length - (s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0)) * 3 / 4);
+}
+
+// Best-effort HEAD probe to get an image's Content-Length (for manual imports)
+export async function probeImgSize(url) {
+  try {
+    const r = await fetch(url, { method: 'HEAD', redirect: 'follow', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PoolImporter/1.0)' } });
+    if (!r.ok) return null;
+    const cl = r.headers.get('Content-Length');
+    return cl ? (parseInt(cl) || null) : null;
+  } catch (e) { return null; }
+}
+
+// Local multi-image upload: receive base64 image, store to R2, add to random_pool.
+// Body: { name: "a.jpg", data: "<base64>", tags: "a,b", title: "..." }
+export async function handleAdminPoolUpload(request, env) {
+  try {
+    if (!env.R2_BUCKET) return json({ ok: false, error: 'R2 not configured' }, 500);
+    const b = await request.json().catch(() => null);
+    if (!b || !b.data) return json({ ok: false, error: 'data (base64) required' }, 400);
+    if (b.data.length > 45 * 1024 * 1024) return json({ ok: false, error: 'file too large (max ~30MB)' }, 400);
+    let bytes;
+    try { bytes = b64ToBytes(String(b.data)); } catch (e) { return json({ ok: false, error: 'invalid base64' }, 400); }
+    if (!bytes || !bytes.length) return json({ ok: false, error: 'empty file' }, 400);
+    const name = String(b.name || 'image.jpg').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+    const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp' };
+    const ct = mimeMap[ext] || 'application/octet-stream';
+    const now = new Date();
+    const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    const key = 'pool/' + ym + '/' + randHex(16) + '.' + ext;
+    const url = await putR2(key, bytes, ct, env);
+    if (!url) return json({ ok: false, error: 'R2 upload failed: ' + lastUploadError }, 500);
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || name).slice(0, 200);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const iso = now.toISOString();
+    const fsize = (b.size && Number(b.size) > 0) ? Math.round(Number(b.size)) : b64Size(b.data);
+    await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'upload\', 1, ?)')
+      .bind(url, url, title, tags, level, isPrivate, fsize, iso).run();
+    return json({ ok: true, data: { url: url, added: 1, is_private: isPrivate } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 管理员本地上传到 Tele 库（files 表）：base64 → R2 files/ → INSERT files
+// Body: { name, data(base64), tags, title, size, level, is_private }
+export async function handleAdminFilesUpload(request, env) {
+  try {
+    if (!env.R2_BUCKET) return json({ ok: false, error: 'R2 not configured' }, 500);
+    const b = await request.json().catch(() => null);
+    if (!b || !b.data) return json({ ok: false, error: 'data (base64) required' }, 400);
+    if (b.data.length > 45 * 1024 * 1024) return json({ ok: false, error: 'file too large (max ~30MB)' }, 400);
+    let bytes;
+    try { bytes = b64ToBytes(String(b.data)); } catch (e) { return json({ ok: false, error: 'invalid base64' }, 400); }
+    if (!bytes || !bytes.length) return json({ ok: false, error: 'empty file' }, 400);
+    const name = String(b.name || 'file.bin').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+    const mimeMap = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+      mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
+      mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+      pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword'
+    };
+    const ct = mimeMap[ext] || 'application/octet-stream';
+    const typeMap = { photo: ['jpg','jpeg','png','gif','webp','bmp'], video: ['mp4','mov','mkv','webm','avi'], audio: ['mp3','wav','ogg','m4a','aac','flac'] };
+    let fileType = 'document';
+    for (const t of Object.keys(typeMap)) { if (typeMap[t].indexOf(ext) !== -1) { fileType = t; break; } }
+    const now = new Date();
+    const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    const key = 'files/' + ym + '/' + randHex(16) + '.' + ext;
+    const url = await putR2(key, bytes, ct, env);
+    if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    const fsize = (b.size && Number(b.size) > 0) ? Math.round(Number(b.size)) : b64Size(b.data);
+    const iso = now.toISOString();
+    const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+      .bind(key, url, name, fsize, fileType, ct, String(b.title || '').slice(0, 200), tags, level, isPrivate, iso).run();
+    return json({ ok: true, data: { id: res.meta.last_row_id, url: url, file_type: fileType } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 管理员外链导入到 Tele 库（files 表）：URL 直链入库，r2_url 指向外部地址（storage_key 占位 external）
+// Body: { urls: [...], tags, title, level, is_private }
+export async function handleAdminFilesImport(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.urls) || !b.urls.length) return json({ ok: false, error: 'urls required' }, 400);
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || '').slice(0, 200);
+    const level = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : 0;
+    const now = new Date().toISOString();
+    const urls = b.urls.map(function(x){ return String(x).trim(); }).filter(function(x){ return /^https?:\/\//i.test(x); });
+    if (!urls.length) return json({ ok: true, data: { added: 0 } });
+    const exSet = new Set();
+    for (const url of urls) {
+      const ex = await env.D1_DB.prepare('SELECT r2_url FROM files WHERE r2_url = ? LIMIT 1').bind(url).first();
+      if (ex) exSet.add(ex.r2_url);
+    }
+    const vids = ['mp4','mov','mkv','webm','avi'];
+    const auds = ['mp3','wav','ogg','m4a','aac','flac'];
+    const imgs = ['jpg','jpeg','png','gif','webp','bmp'];
+    let added = 0;
+    for (const url of urls) {
+      if (exSet.has(url)) continue;
+      const m = url.match(/\.([a-zA-Z0-9]{1,8})(?:\?.*)?$/);
+      const ext = m ? m[1].toLowerCase() : '';
+      let fileType = 'document';
+      if (vids.indexOf(ext) !== -1) fileType = 'video';
+      else if (auds.indexOf(ext) !== -1) fileType = 'audio';
+      else if (imgs.indexOf(ext) !== -1) fileType = 'photo';
+      let fileName = 'external';
+      try { const pu = new URL(url); const seg = pu.pathname.split('/').pop(); if (seg) fileName = decodeURIComponent(seg); } catch (e) {}
+      await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (\'external\', ?, ?, NULL, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+        .bind(url, String(fileName).slice(0, 255), fileType, '', title, tags, level, isPrivate, now).run();
+      added++;
+    }
+    return json({ ok: true, data: { added: added } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// Upload a base64 image to Postimages via its official API
+// (api.postimage.org/1/upload), then resolve the direct i.postimg.cc URL
+// and add it to random_pool. Body: { name, data(base64), key, gallery }
+export async function handleAdminPoolUploadPostimages(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.data) return json({ ok: false, error: 'data (base64) required' }, 400);
+    if (!b.key) return json({ ok: false, error: 'Postimages API Key required' }, 400);
+    if (b.data.length > 45 * 1024 * 1024) return json({ ok: false, error: 'file too large (Postimages free limit ~24MB)' }, 400);
+    const name = String(b.name || 'image.jpg').replace(/[\\/:*?"<>|]/g, '_');
+    const ext = (name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
+    const params = new URLSearchParams();
+    params.set('key', String(b.key).trim());
+    params.set('gallery', String(b.gallery || '').trim());
+    params.set('o', '2b819584285c102318568238c7d4a4c7');
+    params.set('m', '59c2ad4b46b0c1e12d5703302bff0120');
+    params.set('version', '1.0.1');
+    params.set('portable', '1');
+    params.set('name', name.replace(/\.[^.]+$/, ''));
+    params.set('type', ext);
+    params.set('image', String(b.data));
+    const res = await fetch('https://api.postimage.org/1/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'User-Agent': 'Mozilla/5.0 (compatible; PoolImporter/1.0)' },
+      body: params.toString()
+    });
+    const xml = await res.text();
+    const ok = /success="1"/.test(xml);
+    if (!ok) {
+      const err = (xml.match(/<error>([^<]*)<\/error>/) || [null, 'Postimages upload failed'])[1];
+      return json({ ok: false, error: String(err).trim() }, 502);
+    }
+    const page = (xml.match(/<page>([^<]*)<\/page>/) || [null, ''])[1];
+    if (!page) return json({ ok: false, error: 'no page url from Postimages' }, 502);
+    let direct = '';
+    try {
+      const pr = await fetch(page, { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PoolImporter/1.0)' } });
+      if (pr.ok) {
+        const ph = await pr.text();
+        const m = ph.match(/https:\/\/i\.postimg\.cc\/\w{8}\/[^"'<>\s]+/);
+        if (m) direct = m[0].replace(/\?dl=1$/, '');
+      }
+    } catch (e) {}
+    if (!direct) direct = page;
+    const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || name).slice(0, 200);
+    const isPrivate = b.is_private ? 1 : 0;
+    // 私密内容等同 vvip 最高级，级别固定
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const now = new Date().toISOString();
+    const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE url = ? LIMIT 1').bind(direct).first();
+    if (ex) return json({ ok: true, data: { url: direct, added: 0, duplicate: true } });
+    const fsize = b64Size(b.data);
+    await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, \'photo\', ?, \'postimages\', 1, ?)')
+      .bind(direct, direct, title, tags, level, isPrivate, fsize, now).run();
+    return json({ ok: true, data: { url: direct, added: 1 } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminGetPiKey(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'postimages_key'").first();
+    return json({ ok: true, data: { key: s && s.value ? s.value : '' } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminSavePiKey(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const key = b && b.key ? String(b.key).trim().slice(0, 200) : '';
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('postimages_key', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key).run();
+    return json({ ok: true, data: { saved: !!key } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 预设标签库（后台自定义，上传时点选，保证标签统一）
+export async function handleAdminGetPoolTags(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'pool_tags_preset'").first();
+    let tags = [];
+    if (s && s.value) {
+      try { tags = JSON.parse(s.value); } catch (e) { tags = String(s.value).split(',').map(function(t){ return t.trim(); }).filter(Boolean); }
+    }
+    return json({ ok: true, data: { tags: Array.isArray(tags) ? tags : [] } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminSavePoolTags(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const tags = Array.isArray(b && b.tags)
+      ? b.tags.map(String).map(function(t){ return t.trim(); }).filter(Boolean)
+      : [];
+    const uniq = Array.from(new Set(tags)).slice(0, 200);
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('pool_tags_preset', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(uniq)).run();
+    return json({ ok: true, data: { tags: uniq } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminPoolToggle(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.id) return json({ ok: false, error: 'id required' }, 400);
+    if (b.level !== undefined) {
+      await env.D1_DB.prepare('UPDATE random_pool SET enabled = ?, level = ? WHERE id = ?').bind(b.enabled ? 1 : 0, sanitizeLevel(b.level), b.id).run();
+    } else {
+      await env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, b.id).run();
+    }
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+

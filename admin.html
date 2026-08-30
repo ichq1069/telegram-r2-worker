@@ -92,6 +92,7 @@ tr:hover { background: #fafbfd; }
 .badge-green { background: #dcfce7; color: #16a34a; }
 .badge-red { background: #fee2e2; color: #dc2626; }
 .badge-blue { background: #dbeafe; color: #2563eb; }
+.badge-purple { background: #ede9fe; color: #7c3aed; }
 .badge-yellow { background: #fef9c3; color: #ca8a04; }
 .badge-ghost { background: #f1f5f9; color: #64748b; }
 
@@ -807,10 +808,12 @@ https://example.com/b.jpg"></textarea></div>
     <!-- 兑换码 -->
     <div class="panel" id="panel-redeem">
       <div class="card">
-        <div class="card-title"><span class="dot"></span>生成兑换码 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">用户凭兑换码在 /user 自助注册，获得对应级别的新密钥</span></div>
+        <div class="card-title"><span class="dot"></span>生成兑换码 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">注册码→新用户注册；权限升级码→提升已有用户级别；延时码→延长已有用户到期时间</span></div>
         <div class="fbs" style="flex-wrap:wrap">
+          <div class="fr" style="flex:0 0 auto"><label>类型</label><select class="inp" id="rdType"><option value="register">注册码</option><option value="upgrade">权限升级码</option><option value="extend">延时码</option></select></div>
           <div class="fr" style="flex:0 0 auto"><label>数量 (1-200)</label><input class="inp" type="number" id="rdCount" value="1" min="1" max="200" style="width:90px"></div>
-          <div class="fr" style="flex:0 0 auto"><label>级别（兑换后的密钥级别）</label><select class="inp" id="rdLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
+          <div class="fr" style="flex:0 0 auto" id="rdLevelWrap"><label>级别（兑换后的密钥级别）</label><select class="inp" id="rdLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
+          <div class="fr" style="flex:0 0 auto" id="rdExtendWrap"><label>延长天数（累加到到期时间）</label><input class="inp" type="number" id="rdExtendDays" value="30" min="1" max="3650" style="width:90px"></div>
           <div class="fr" style="flex:0 0 auto"><label>可用次数 / 码</label><input class="inp" type="number" id="rdQuota" value="1" min="1" style="width:90px"></div>
           <div class="fr" style="flex:0 0 auto"><label>有效天数（0=永久）</label><input class="inp" type="number" id="rdDays" value="30" min="0" style="width:90px"></div>
           <div class="fr" style="flex:1;min-width:200px"><label>备注</label><input class="inp" id="rdNote" placeholder="发给谁 / 用途"></div>
@@ -819,7 +822,7 @@ https://example.com/b.jpg"></textarea></div>
       </div>
       <div class="card">
         <div class="card-title"><span class="dot"></span>兑换码列表</div>
-        <div class="tbl-wrap"><table><thead><tr><th>兑换码</th><th>级别</th><th>已用/总量</th><th>状态</th><th>到期</th><th>备注</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="redeemList"></tbody></table></div>
+        <div class="tbl-wrap"><table><thead><tr><th>兑换码</th><th>类型</th><th>参数</th><th>已用/总量</th><th>状态</th><th>到期</th><th>备注</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="redeemList"></tbody></table></div>
       </div>
     </div>
 
@@ -1084,6 +1087,30 @@ https://example.com/b.jpg"></textarea></div>
         </div>
       </div>
     </div>
+
+    <!-- 群抓取 -->
+    <div class="panel" id="panel-ubot">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>全局配置 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">Telethon 脚本每次启动从后台拉取这里的所有配置，机器上不留任何敏感信息，换机/换 VPS 无感</span></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="fr" style="margin:0"><label>API ID</label><input class="inp" id="ubApiId" placeholder="从 my.telegram.org 获取"></div>
+          <div class="fr" style="margin:0"><label>API Hash</label><div class="keywrap"><input class="inp" id="ubApiHash" type="password" placeholder="从 my.telegram.org 获取" autocomplete="off"><button class="eyeBtn" id="ubApiHashEye" type="button" title="显示/隐藏">👁</button></div></div>
+        </div>
+        <div class="fr" style="margin-top:10px"><label>上传 API Key（脚本用它在 /api/v1/upload 上传，填后台「密钥管理」里生成的 key）</label><div class="keywrap"><input class="inp" id="ubApiKey" type="password" autocomplete="off" placeholder="ak_..."><button class="eyeBtn" id="ubApiKeyEye" type="button" title="显示/隐藏">👁</button></div></div>
+        <div class="fr" style="margin-top:10px"><label>StringSession（Telethon 登录凭证。首次需在本地运行一次 <code>python3 scripts/userbot_gen.py</code> 生成后粘到这里；只填不改不会丢失）</label><textarea class="inp" id="ubSession" style="min-height:88px;font-family:monospace;font-size:12px" placeholder="1BVtsOGcBu..." autocomplete="off"></textarea></div>
+        <div class="fb" style="margin-top:12px">
+          <button class="btn btn-primary" id="ubCfgSaveBtn">保存配置</button>
+          <span id="ubTokenBox" style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;flex-wrap:wrap"></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>抓取任务 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">每群一个任务，独立断点 last_id；在任意机器运行 <code>python3 scripts/userbot_pull.py --server &lt;worker地址&gt; --token &lt;ub_token&gt; --task &lt;任务ID&gt;</code> 即开始抓取</span></div>
+          <button class="btn btn-primary" id="ubAddBtn">+ 添加任务</button>
+        </div>
+        <div id="ubTaskList" style="margin-top:12px"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1186,7 +1213,7 @@ function toast(msg, ok) {
 }
 
 // 初始化
-var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","ops"];
+var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","ops","ubot"];
 function switchTab(name) {
   var panels = document.querySelectorAll(".panel");
   var tabs = document.querySelectorAll("#tabBar .tab");
@@ -1215,6 +1242,7 @@ function switchTab(name) {
   if (name === "show") loadShowConfig();
   if (name === "cmds") loadCmds();
   if (name === "ops") loadOpsPage();
+  if (name === "ubot") loadUbotPage();
   window.scrollTo(0, 0);
 }
 
@@ -1226,7 +1254,7 @@ function init() {
     { label: "素材库", items: [["pool","共享库","📚"],["private","私密库","🔒"],["quicktag","快速打标","⚡"],["tags","标签库","🏷"]] },
     { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"],["keyusers","密钥用户","👤"],["redeem","兑换码","🎟"],["logs","调用日志","📈"]] },
     { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"]] },
-    { label: "系统", items: [["ops","运维工具","🛠"]] }
+    { label: "系统", items: [["ops","运维工具","🛠"],["ubot","群抓取","📥"]] }
   ];
   var tabBar = document.getElementById("tabBar");
   var html = "";
@@ -2685,24 +2713,23 @@ async function loadWebhookStatus() {
     var statusColor = d.healthy ? '#16a34a' : '#dc2626';
     var statusTxt = d.healthy ? '正常' : '异常';
     var lines = [];
-    lines.push('<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">');
-    lines.push('<span class="badge" style="background:' + (d.healthy ? '#dcfce7' : '#fee2e2') + ';color:' + statusColor + '">' + statusTxt + '</span>');
+    lines.push('<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:8px">');
+    lines.push('<span class="badge" style="background:' + (d.healthy ? '#dcfce7' : '#fee2e2') + ';color:' + statusColor + ';font-size:12px">' + statusTxt + '</span>');
     lines.push('<span style="font-size:12px">webhook 地址：<code>' + escStr(d.url || '(未设置)') + '</code></span>');
     if (!d.url_match) lines.push('<span style="font-size:12px;color:#dc2626">≠ 期望 ' + escStr(d.expect_url) + '</span>');
     lines.push('</div>');
-    lines.push('<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">');
-    lines.push('· 积压消息：<b style="color:' + (d.pending > 0 ? '#d97706' : '#16a34a') + '">' + d.pending + '</b> 条（Telegram 重试队列）');
-    if (d.last_error) {
-      var errTxt = escStr(d.last_error) + '（' + (d.last_error_date ? new Date(d.last_error_date * 1000).toLocaleString() : '') + '）';
-      if (d.healthy) lines.push('· 最近错误（历史记录，已恢复）：<span style="color:var(--text-secondary)">' + errTxt + '</span>');
-      else lines.push('· 最近错误：<b style="color:#dc2626">' + errTxt + '</b>');
-    }
-    lines.push('· 本地 secret_token：' + (d.has_secret_token_configured ? '已配置' : '未配置（无需）'));
-    if (d.ip_address) lines.push('· 入口 IP：' + escStr(d.ip_address));
-    if (d.api_error) lines.push('· API 响应：' + escStr(d.api_error));
+    // 状态明细：两列网格
+    lines.push('<div style="display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px;max-width:640px">');
+    lines.push('<span style="color:var(--text-secondary);white-space:nowrap">积压消息</span><span><b style="color:' + (d.pending > 0 ? '#d97706' : '#16a34a') + '">' + d.pending + '</b> 条（Telegram 重试队列，会按顺序自动重投）</span>');
+    lines.push('<span style="color:var(--text-secondary);white-space:nowrap">最近错误</span><span>' + (d.last_error ? ((d.healthy ? '<span style="color:var(--text-secondary)">（历史记录，已恢复）</span> ' : '<b style="color:#dc2626">（当前异常）</b> ') + escStr(d.last_error) + '<span style="color:var(--text-secondary)">（' + (d.last_error_date ? new Date(d.last_error_date * 1000).toLocaleString() : '') + '）</span>') : '<span style="color:#16a34a">无</span>') + '</span>');
+    lines.push('<span style="color:var(--text-secondary);white-space:nowrap">本地 secret_token</span><span>' + (d.has_secret_token_configured ? '<span style="color:#16a34a">已配置</span>' : '<span style="color:var(--text-secondary)">未配置（无需，靠 URL 白名单兜底）</span>') + '</span>');
+    lines.push('<span style="color:var(--text-secondary);white-space:nowrap">入口 IP</span><span>' + (d.ip_address ? escStr(d.ip_address) : '-') + '</span>');
+    lines.push('<span style="color:var(--text-secondary);white-space:nowrap">最大连接数</span><span>' + (d.max_connections || 40) + '</span>');
     lines.push('</div>');
+    if (d.api_error) lines.push('<div style="margin-top:6px;font-size:12px;color:#dc2626">API 响应：' + escStr(d.api_error) + '</div>');
     lines.push('<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">');
     lines.push('<button class="btn btn-primary btn-sm" id="whFixBtn">一键修复 Webhook</button>');
+    lines.push('<button class="btn btn-ghost btn-sm" id="whLogsBtn">最近投递日志</button>');
     lines.push('<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" id="whDropPending"> 丢弃积压消息（默认保留自动重投）</label>');
     lines.push('</div>');
     body.innerHTML = lines.join('');
@@ -2717,7 +2744,44 @@ async function loadWebhookStatus() {
         else toast(r.error || "修复失败", 0);
       });
     });
+    var logsBtn = document.getElementById("whLogsBtn");
+    if (logsBtn) logsBtn.addEventListener("click", showWebhookLogs);
   } catch (e) { body.innerHTML = '检测失败'; }
+}
+
+// Webhook 最近投递日志弹窗（正常最近5次 + 错误最近5次）
+function showWebhookLogs() {
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:640px">' +
+    '<h3>Webhook 最近投递日志</h3>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">记录最近收到的 webhook 请求投递结果：正常最近 5 次 + 错误最近 5 次（错误为返回 500 的投递）</div>' +
+    '<div id="webhookLogsBody"><div class="sk" style="width:80%;height:14px;margin:2px 0"></div><div class="sk" style="width:60%;height:14px;margin:2px 0"></div></div>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="webhookLogsClose">关闭</button></div>' +
+    '</div></div>';
+  document.getElementById("webhookLogsClose").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  var bodyEl = document.getElementById("webhookLogsBody");
+  api("GET", "/admin/api/webhook-logs").then(function(r) {
+    if (!r.ok) { bodyEl.innerHTML = '<div style="color:#dc2626;font-size:13px">' + (r.error || "加载失败") + '</div>'; return; }
+    var d = r.data || {};
+    var okItems = d.ok_items || [];
+    var errItems = d.error_items || [];
+    if (!okItems.length && !errItems.length) {
+      bodyEl.innerHTML = '<div style="font-size:13px;color:var(--text-secondary);padding:16px 0;text-align:center">暂无投递记录（部署后收到 webhook 请求才会记录）</div>';
+      return;
+    }
+    function row(it, color, tag) {
+      return '<tr><td style="padding:7px 10px;border-top:1px solid var(--border);color:var(--text-secondary);white-space:nowrap">' + (it.created_at ? String(it.created_at).replace("T", " ").slice(0, 19) : "-") + '</td>' +
+        '<td style="padding:7px 10px;border-top:1px solid var(--border)"><span class="badge" style="background:' + (it.ok ? '#dcfce7' : '#fee2e2') + ';color:' + (it.ok ? '#16a34a' : '#dc2626') + '">' + (it.ok ? "正常" : "错误") + '</span></td>' +
+        '<td style="padding:7px 10px;border-top:1px solid var(--border);color:var(--text-secondary)">HTTP ' + (it.status || (it.ok ? 200 : 500)) + '</td>' +
+        '<td style="padding:7px 10px;border-top:1px solid var(--border);word-break:break-all;max-width:260px">' + (it.ok ? '<span style="color:var(--text-secondary)">-</span>' : escStr(it.error || "-")) + '</td></tr>';
+    }
+    var h = '<div style="font-size:13px;margin-bottom:8px"><span style="font-weight:600">正常</span> <span style="color:var(--text-secondary)">' + okItems.length + ' 次</span> &nbsp;·&nbsp; <span style="font-weight:600;color:#dc2626">错误</span> <span style="color:var(--text-secondary)">' + errItems.length + ' 次</span></div>';
+    h += '<div style="max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f8fafc"><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">时间</th><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">结果</th><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">状态</th><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">错误信息</th></tr></thead><tbody>';
+    for (var i = 0; i < errItems.length; i++) h += row(errItems[i], "#fee2e2", "错误");
+    for (var j = 0; j < okItems.length; j++) h += row(okItems[j], "#dcfce7", "正常");
+    h += '</tbody></table></div>';
+    bodyEl.innerHTML = h;
+  });
 }
 
 // Worker 用量卡（Cloudflare GraphQL 官方统计，CF_API_TOKEN 缺失时本地计数兜底）
@@ -3052,6 +3116,203 @@ document.getElementById("tagsAddBtn").addEventListener("click", function() {
 });
 
 // ==================== 运维页面（备份 + 告警） ====================
+// ---------------- 群抓取（userbot） ----------------
+var UBOT_TOKEN = ""; // admin 侧可见的脚本 token（复制命令/复制 token 用）
+async function loadUbotPage() {
+  try {
+    const rc = await api("GET", "/admin/api/settings/userbot");
+    if (rc && rc.ok && rc.data) {
+      document.getElementById("ubApiId").value = rc.data.api_id || "";
+      document.getElementById("ubApiHash").value = rc.data.api_hash || "";
+      document.getElementById("ubApiKey").value = rc.data.api_key || "";
+      document.getElementById("ubSession").value = rc.data.session || "";
+      UBOT_TOKEN = rc.data.token || "";
+      var tb = document.getElementById("ubTokenBox");
+      tb.innerHTML = "";
+      if (UBOT_TOKEN) {
+        tb.innerHTML = '<span>脚本 token：<code>' + escStr(UBOT_TOKEN) + '</code></span>' +
+          '<button class="btn btn-ghost btn-sm" id="ubTokenCopyBtn">复制 token</button>' +
+          '<button class="btn btn-ghost btn-sm" id="ubTokenResetBtn">重置 token</button>';
+      } else {
+        tb.innerHTML = '<span style="color:var(--danger, #e5484d)">未配置脚本 token</span>' +
+          '<button class="btn btn-ghost btn-sm" id="ubTokenResetBtn">生成 token</button>';
+      }
+      var copyBtn = document.getElementById("ubTokenCopyBtn");
+      if (copyBtn) copyBtn.onclick = function() {
+        if (!UBOT_TOKEN) { toast("暂无 token", 0); return; }
+        if (navigator.clipboard) navigator.clipboard.writeText(UBOT_TOKEN).then(function(){ toast("token 已复制", 1); });
+        else toast(UBOT_TOKEN, 0);
+      };
+      var resetBtn = document.getElementById("ubTokenResetBtn");
+      if (resetBtn) resetBtn.onclick = function() {
+        api("POST", "/admin/api/settings/userbot", { reset_token: true }).then(function(r) {
+          if (r && r.ok && r.data && r.data.new_token) {
+            UBOT_TOKEN = r.data.new_token;
+            toast("已生成新 token", 1);
+            loadUbotPage();
+          } else toast((r && r.error) || "生成失败", 0);
+        });
+      };
+    }
+  } catch (e) {}
+  loadUbotTasks();
+}
+
+async function loadUbotTasks() {
+  var box = document.getElementById("ubTaskList");
+  box.innerHTML = skRows(3);
+  var r = await api("GET", "/admin/api/userbot-tasks");
+  if (!r || !r.ok) { box.innerHTML = '<div style="color:var(--danger,#e5484d)">加载失败：' + escStr((r && r.error) || "") + '</div>'; return; }
+  var list = (r.data || []).slice();
+  if (!list.length) { box.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:12px 0">还没有任务。点击右上角「+ 添加任务」，填写群的 chat_id，然后在任意机器上运行拉取脚本。</div>'; return; }
+  var html = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>群 (chat_id)</th><th>标题</th><th>标签</th><th>库</th><th>级别</th><th>最大MB</th><th>限数</th><th>断点 last_id</th><th>累计</th><th>启用</th><th style="width:150px">操作</th></tr></thead><tbody>';
+  for (var i = 0; i < list.length; i++) {
+    var t = list[i];
+    var poolTxt = t.pool ? "共享库" : "私密库";
+    html += '<tr>' +
+      '<td>' + t.id + '</td>' +
+      '<td>' + escStr(t.chat_id) + '</td>' +
+      '<td>' + escStr(t.title || "") + '</td>' +
+      '<td>' + escStr(t.tags || "") + '</td>' +
+      '<td>' + poolTxt + '</td>' +
+      '<td>' + escStr(t.level || "pt") + '</td>' +
+      '<td>' + Math.round((t.max_size || 0) / 1048576) + '</td>' +
+      '<td>' + (t.limit || 0) + '</td>' +
+      '<td>' + (t.last_id || 0) + '</td>' +
+      '<td>完成 ' + (t.done || 0) + ' / 跳过 ' + (t.skipped || 0) + '</td>' +
+      '<td>' + (t.enabled ? "是" : "否") + '</td>' +
+      '<td>' +
+        '<button class="btn btn-ghost btn-sm" onclick="ubotEdit(' + t.id + ')">编辑</button> ' +
+        '<button class="btn btn-ghost btn-sm" onclick="ubotToggle(' + t.id + ',' + (t.enabled ? 0 : 1) + ')">' + (t.enabled ? "停用" : "启用") + '</button> ' +
+        '<button class="btn btn-ghost btn-sm" onclick="ubotCopyCmd(' + t.id + ')">命令</button> ' +
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger,#e5484d)" onclick="ubotDel(' + t.id + ')">删除</button>' +
+      '</td></tr>';
+  }
+  html += '</tbody></table></div>';
+  box.innerHTML = html;
+}
+
+function ubotCopyCmd(id) {
+  if (!UBOT_TOKEN) { toast("请先生成脚本 token", 0); return; }
+  var cmd = 'python3 scripts/userbot_pull.py --server ' + location.origin + ' --token ' + UBOT_TOKEN + ' --task ' + id;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(cmd).then(function() { toast("运行命令已复制", 1); });
+  } else {
+    var ta = document.createElement("textarea"); ta.value = cmd; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); toast("运行命令已复制", 1); } catch(e) { toast("复制失败：" + cmd, 0); }
+    document.body.removeChild(ta);
+  }
+}
+
+function ubotToggle(id, enabled) {
+  api("PATCH", "/admin/api/userbot-tasks/" + id, { enabled: enabled ? 1 : 0 }).then(function(r) {
+    if (r && r.ok) { toast("已" + (enabled ? "启用" : "停用"), 1); loadUbotTasks(); }
+    else toast((r && r.error) || "操作失败", 0);
+  });
+}
+
+function ubotDel(id) {
+  if (!confirm("确定删除任务 #" + id + "？")) return;
+  api("DELETE", "/admin/api/userbot-tasks/" + id).then(function(r) {
+    if (r && r.ok) { toast("已删除", 1); loadUbotTasks(); }
+    else toast((r && r.error) || "删除失败", 0);
+  });
+}
+
+function ubotEdit(id) {
+  api("GET", "/admin/api/userbot-tasks").then(function(r) {
+    var t = null;
+    if (r && r.ok) { var arr = r.data || []; for (var i = 0; i < arr.length; i++) if (arr[i].id === id) { t = arr[i]; break; } }
+    var poolTxt = {pt:"私密库(个人)", other:"其他"};
+    var title = t ? "编辑任务 #" + id : "添加任务";
+    document.getElementById("modalArea").innerHTML =
+      '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:560px">' +
+      '<h3>' + title + '</h3>' +
+      '<div class="fr"><label>群 chat_id（必填；Telegram 数字 ID 或 @用户名）</label><input class="inp" id="ubChatId" value="' + escStr(t ? t.chat_id : "") + '" placeholder="例如 -1001234567890"></div>' +
+      '<div class="fr"><label>标题（可选，仅备注）</label><input class="inp" id="ubTitle" value="' + escStr(t ? t.title : "") + '"></div>' +
+      '<div class="fr"><label>标签（逗号分隔，抓取到的图片入库时带上）</label><input class="inp" id="ubTags" value="' + escStr(t ? t.tags : "") + '" placeholder="风景,美女"></div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+        '<div class="fr" style="margin:0"><label>入库到</label><select class="inp" id="ubPool"><option value="0" ' + (t && t.pool ? "" : "selected") + '>私密库</option><option value="1" ' + (t && t.pool ? "selected" : "") + '>共享库</option></select></div>' +
+        '<div class="fr" style="margin:0"><label>级别</label><select class="inp" id="ubLevel"><option>pt</option><option>n</option><option>r</option><option>sr</option><option>ssr</option></select></div>' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
+        '<div class="fr" style="margin:0"><label>最大文件 MB（默认 19，与上传上限一致；超过跳过）</label><input class="inp" type="number" id="ubMaxSize" value="' + (t ? Math.round((t.max_size || 0) / 1048576) : 19) + '" min="1"></div>' +
+        '<div class="fr" style="margin:0"><label>最多抓取张数（0=不限制）</label><input class="inp" type="number" id="ubLimit" value="' + (t ? (t.limit || 0) : 0) + '" min="0"></div>' +
+      '</div>' +
+      '<div class="fr"><label>断点 last_id（一般不动；从该 id 之前的消息继续抓，0=从最新开始）</label><input class="inp" type="number" id="ubLastId" value="' + (t ? (t.last_id || 0) : 0) + '" min="0"></div>' +
+      '<div class="fr"><label>备注（可选）</label><input class="inp" id="ubNote" value="' + escStr(t ? t.note : "") + '"></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" id="modalCancel">取消</button>' +
+        '<button class="btn btn-primary" id="ubSave">保存</button>' +
+      '</div></div></div>';
+    // 级别默认值
+    if (t) {
+      var lv = document.getElementById("ubLevel");
+      if (lv) lv.value = t.level || "pt";
+    }
+    document.getElementById("modalCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+    document.getElementById("ubSave").onclick = function() { ubotSave(id); };
+    document.getElementById("ubChatId").focus();
+  });
+}
+
+function ubotSave(id) {
+  var chatId = document.getElementById("ubChatId").value.trim();
+  if (!chatId) { toast("请填写群 chat_id", 0); return; }
+  var b = {
+    chat_id: chatId,
+    title: document.getElementById("ubTitle").value,
+    tags: document.getElementById("ubTags").value,
+    pool: document.getElementById("ubPool").value === "1" ? 1 : 0,
+    level: document.getElementById("ubLevel").value,
+    max_size: Math.max(1, Math.round(parseFloat(document.getElementById("ubMaxSize").value) || 19)) * 1048576,
+    limit: Math.max(0, parseInt(document.getElementById("ubLimit").value) || 0),
+    last_id: Math.max(0, parseInt(document.getElementById("ubLastId").value) || 0),
+    note: document.getElementById("ubNote").value,
+    enabled: 1
+  };
+  var path = id ? ("/admin/api/userbot-tasks/" + id) : "/admin/api/userbot-tasks";
+  var method = id ? "PATCH" : "POST";
+  api(method, path, b).then(function(r) {
+    if (r && r.ok) { toast(id ? "任务已更新" : "任务已创建", 1); document.getElementById("modalArea").innerHTML = ""; loadUbotTasks(); }
+    else toast((r && r.error) || "保存失败", 0);
+  });
+}
+
+// 群抓取静态按钮事件（面板固定存在，绑定一次）
+document.getElementById("ubCfgSaveBtn").addEventListener("click", function() {
+  var b = {
+    api_id: document.getElementById("ubApiId").value.trim(),
+    api_hash: document.getElementById("ubApiHash").value.trim(),
+    api_key: document.getElementById("ubApiKey").value.trim(),
+    session: document.getElementById("ubSession").value.trim()
+  };
+  api("POST", "/admin/api/settings/userbot", b).then(function(r) {
+    if (r && r.ok) { toast("全局配置已保存", 1); loadUbotPage(); }
+    else toast((r && r.error) || "保存失败", 0);
+  });
+});
+
+document.getElementById("ubAddBtn").addEventListener("click", function() { ubotEdit(null); });
+
+// API Key 小眼睛：切换明文/掩码
+var ubApiHashEye = document.getElementById("ubApiHashEye");
+if (ubApiHashEye) ubApiHashEye.addEventListener("click", function() {
+  var inp = document.getElementById("ubApiHash");
+  var show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  ubApiHashEye.textContent = show ? "🙈" : "👁";
+  ubApiHashEye.title = show ? "隐藏" : "显示";
+});
+var ubApiKeyEye = document.getElementById("ubApiKeyEye");
+if (ubApiKeyEye) ubApiKeyEye.addEventListener("click", function() {
+  var inp = document.getElementById("ubApiKey");
+  var show = inp.type === "password";
+  inp.type = show ? "text" : "password";
+  ubApiKeyEye.textContent = show ? "🙈" : "👁";
+  ubApiKeyEye.title = show ? "隐藏" : "显示";
+});
+
 async function loadOpsPage() {
   loadBackupList();
   loadWebhookCfg();
@@ -3906,20 +4167,42 @@ document.addEventListener("click", function(e) {
   }
 });
 // ==================== 兑换码管理 ====================
+var rdType = document.getElementById("rdType");
+function rdTypeChange() {
+  var t = rdType ? rdType.value : "register";
+  var lv = document.getElementById("rdLevelWrap");
+  var ex = document.getElementById("rdExtendWrap");
+  if (t === "register") {
+    if (lv) lv.style.display = "";
+    if (ex) ex.style.display = "none";
+  } else if (t === "upgrade") {
+    if (lv) { lv.style.display = ""; lv.querySelector("label").textContent = "升级目标级别（兑换后密钥级别）"; }
+    if (ex) ex.style.display = "none";
+  } else {
+    if (lv) lv.style.display = "none";
+    if (ex) ex.style.display = "";
+  }
+}
+if (rdType) rdType.addEventListener("change", rdTypeChange);
+rdTypeChange();
+
 async function loadRedeem() {
   var el = document.getElementById("redeemList");
   if (!el) return;
   var r = await api("GET", "/admin/api/redeem");
-  if (!r.ok) { el.innerHTML = '<tr><td colspan="8">' + (r.error || "加载失败") + '</td></tr>'; return; }
+  if (!r.ok) { el.innerHTML = '<tr><td colspan="9">' + (r.error || "加载失败") + '</td></tr>'; return; }
   var d = r.data || [];
-  if (!d.length) { el.innerHTML = '<tr><td colspan="8"><div class="empty">暂无兑换码，上方生成后发给用户</div></td></tr>'; return; }
+  if (!d.length) { el.innerHTML = '<tr><td colspan="9"><div class="empty">暂无兑换码，上方生成后发给用户</div></td></tr>'; return; }
   var h = "";
   for (var i = 0; i < d.length; i++) {
     var c = d[i];
     var usedUp = (c.used_count || 0) >= (c.quota || 1);
     var expTxt = c.expires_at ? (c.expires_at < new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10) ? '<span class="badge badge-red">已过期</span>' : '<span class="badge badge-yellow">' + escStr(c.expires_at) + '</span>') : '<span style="font-size:11px;color:var(--text-secondary)">永久</span>';
+    var typeTxt = c.type === "upgrade" ? '<span class="badge badge-blue">权限升级</span>' : c.type === "extend" ? '<span class="badge badge-purple">延时</span>' : '<span class="badge badge-green">注册</span>';
+    var paramTxt = c.type === "extend" ? '+<b>' + (c.extend_days || 0) + '</b> 天' : levelBadge(c.level);
     h += '<tr><td><code style="font-size:12px;font-weight:600">' + escStr(c.code) + '</code> <button class="btn btn-ghost btn-sm" data-rd="copy" data-code="' + escStr(c.code) + '">复制</button></td>';
-    h += '<td>' + levelBadge(c.level) + '</td>';
+    h += '<td>' + typeTxt + '</td>';
+    h += '<td>' + paramTxt + '</td>';
     h += '<td>' + (c.used_count || 0) + '/' + (c.quota || 1) + '</td>';
     h += '<td>' + (usedUp ? '<span class="badge badge-red">已用完</span>' : (c.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>')) + '</td>';
     h += '<td>' + expTxt + '</td>';
@@ -3933,7 +4216,9 @@ async function loadRedeem() {
 document.getElementById("rdGenBtn").addEventListener("click", function() {
   var body = {
     count: parseInt(document.getElementById("rdCount").value || "1", 10),
+    type: rdType ? rdType.value : "register",
     level: document.getElementById("rdLevel").value,
+    extend_days: parseInt(document.getElementById("rdExtendDays").value || "30", 10),
     quota: parseInt(document.getElementById("rdQuota").value || "1", 10),
     days: parseInt(document.getElementById("rdDays").value || "0", 10),
     note: document.getElementById("rdNote").value.trim()
