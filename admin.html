@@ -54,6 +54,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .tab .tab-ico { width: 18px; text-align: center; font-size: 14px; flex-shrink: 0; }
 .tab:hover { color: var(--text); background: #f8fafc; }
 .tab.on { background: var(--primary); color: #fff; }
+.nav-group { margin-bottom: 4px; }
+.nav-group-title { padding: 10px 14px 4px; font-size: 11px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .5px; }
+.nav-group-items { display: flex; flex-direction: column; gap: 2px; }
+.nav-group .tab { padding-left: 20px; }
 
 /* Panel */
 .panel { display: none; } .panel.on { display: block; flex: 1; min-width: 0; }
@@ -1131,17 +1135,17 @@ function toast(msg, ok) {
 }
 
 // 初始化
-var allTabNames = ["stats","files","quicktag","trash","unsaved","pool","private","tags","gen","keys","users","show","cmds","api","ops"];
+var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","show","cmds","api","ops"];
 function switchTab(name) {
   var panels = document.querySelectorAll(".panel");
   var tabs = document.querySelectorAll("#tabBar .tab");
-  for (var i = 0; i < allTabNames.length; i++) {
-    panels[i].className = "panel";
-    tabs[i].className = "tab";
-    if (allTabNames[i] === name) {
-      panels[i].className = "panel on";
-      tabs[i].className = "tab on";
-    }
+  for (var i = 0; i < panels.length; i++) {
+    var on = panels[i].id === "panel-" + name;
+    panels[i].className = on ? "panel on" : "panel";
+  }
+  for (var j = 0; j < tabs.length; j++) {
+    var on2 = tabs[j].getAttribute("data-tab") === name;
+    tabs[j].className = on2 ? "tab on" : "tab";
   }
   if (name === "stats") loadStats();
   if (name === "files") loadFiles(1);
@@ -1161,12 +1165,24 @@ function switchTab(name) {
 }
 
 function init() {
-  // Tab 栏
-  var tabNames = [["stats","概览","📊"],["files","Tele文件","📁"],["quicktag","快速打标","⚡"],["trash","回收站","🗑"],["unsaved","未转存","⏳"],["pool","共享库","📚"],["private","私密库","🔒"],["tags","标签库","🏷"],["gen","接口生成","🔗"],["keys","密钥","🔑"],["users","用户","👥"],["show","轮播","🖼"],["cmds","命令","⚙"],["api","Bot API","🤖"],["ops","运维","🛠"]];
+  // 侧边栏分组导航
+  var tabGroups = [
+    { label: "概览", items: [["stats","概览","📊"],["users","用户统计","👥"]] },
+    { label: "文件", items: [["files","Tele文件","📁"],["unsaved","未转存","⏳"],["trash","回收站","🗑"]] },
+    { label: "素材库", items: [["pool","共享库","📚"],["private","私密库","🔒"],["quicktag","快速打标","⚡"],["tags","标签库","🏷"]] },
+    { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"]] },
+    { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"]] },
+    { label: "系统", items: [["ops","运维工具","🛠"]] }
+  ];
   var tabBar = document.getElementById("tabBar");
   var html = "";
-  for (var i = 0; i < tabNames.length; i++) {
-    html += '<div class="tab' + (i === 0 ? " on" : "") + '" data-tab="' + tabNames[i][0] + '" title="' + tabNames[i][1] + '"><span class="tab-ico">' + tabNames[i][2] + '</span><span>' + tabNames[i][1] + '</span></div>';
+  for (var g = 0; g < tabGroups.length; g++) {
+    html += '<div class="nav-group"><div class="nav-group-title">' + tabGroups[g].label + '</div><div class="nav-group-items">';
+    for (var i = 0; i < tabGroups[g].items.length; i++) {
+      var it = tabGroups[g].items[i];
+      html += '<div class="tab' + (g === 0 && i === 0 ? " on" : "") + '" data-tab="' + it[0] + '" title="' + it[1] + '"><span class="tab-ico">' + it[2] + '</span><span>' + it[1] + '</span></div>';
+    }
+    html += '</div></div>';
   }
   tabBar.innerHTML = html;
 
