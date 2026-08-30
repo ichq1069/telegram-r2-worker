@@ -4612,11 +4612,11 @@ async function handleAdminPoolBatch(request, env) {
       if (b.level !== undefined) {
         await env.D1_DB.prepare('UPDATE random_pool SET level = ? WHERE id = ?').bind(sanitizeLevel(b.level), id).run();
       } else if (b.is_private !== undefined) {
-        // 转入私密库：等同 vvip 最高级，级别联动；移出私密库保留原级别
+        // 转入私密库：等同 vvip 最高级，级别联动；移出私密库降级为 svip
         if (b.is_private) {
           await env.D1_DB.prepare('UPDATE random_pool SET is_private = 1, level = ? WHERE id = ?').bind('vvip', id).run();
         } else {
-          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 0 WHERE id = ?').bind(id).run();
+          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 0, level = ? WHERE id = ?').bind('svip', id).run();
         }
       } else {
         await env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, id).run();
