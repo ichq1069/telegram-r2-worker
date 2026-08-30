@@ -27,6 +27,7 @@ import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebh
 import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
 
 import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUserbotTasks, handleAdminUserbotTaskCreate, handleAdminUserbotTaskUpdate, handleAdminUserbotTaskDelete, handleUserbotTaskConfig, handleUserbotTaskProgress } from './src/userbot.js';
+import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript } from './src/servers.js';
 
 
 
@@ -204,6 +205,16 @@ export default {
     // 脚本侧（Telethon userbot）拉配置/回写断点，用 ub_token 鉴权，不走 isAdmin
     if (m === 'GET' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/config') > 0) return handleUserbotTaskConfig(request, env, p.split('/')[4]);
     if (m === 'POST' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/progress') > 0) return handleUserbotTaskProgress(request, env, p.split('/')[4]);
+    // 群抓取执行服务器节点：admin 管理 + 脚本侧心跳/任务拉取（server_token 鉴权）
+    if (m === 'GET' && p === '/admin/api/ub-servers') return isAdmin ? handleAdminServers(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/ub-servers') return isAdmin ? handleAdminServerCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'PATCH' && p.indexOf('/admin/api/ub-servers/') === 0) return isAdmin ? handleAdminServerUpdate(request, env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'DELETE' && p.indexOf('/admin/api/ub-servers/') === 0) return isAdmin ? handleAdminServerDelete(env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/api/ubot/heartbeat') return handleServerHeartbeat(request, env);
+    if (m === 'GET' && p === '/api/ubot/server/tasks') return handleServerTasks(request, env);
+    // VPS 一键部署脚本下发（无需鉴权，脚本本身不含密钥，参数由后台生成的 URL 携带）
+    if (m === 'GET' && p === '/deploy/ubot.sh') return handleDeployScript(request, env);
+    if (m === 'GET' && p === '/deploy/userbot_pull.py') return handleDeployPullScript(request, env);
 
     // Bot API routes (no auth needed, verified by Telegram)
     if (m === 'POST' && p === '/bot/sendMessage') return handleBotSendMessage(request, env);

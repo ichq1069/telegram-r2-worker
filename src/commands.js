@@ -2,7 +2,8 @@
 // 数字菜单交互、AI 管理（function calling）、R2 用量统计与套餐配额、Bot 命令处理器。
 // 依赖 telegram.js（回复/键盘/文件签名）与 admin.js（handleUnsavedRetry，循环 import，运行时调用安全）。
 import { json, fmtSize } from "./util.js";
-import { cnShift, cnTodayStr, cnDayIso, fileExtOf } from "./core.js";
+import { ensureTablesOnce } from "./db.js";
+import { cnShift, cnTodayStr, cnDayIso, fileExtOf, CN_OFFSET_MS } from "./core.js";
 import { replyText, replyTextPlain, MAIN_BUTTONS, sendQuickReplyKeyboard, replyTextWithKeyboard, fileTok } from "./telegram.js";
 import { handleUnsavedRetry } from "./admin.js";
 

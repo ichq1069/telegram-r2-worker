@@ -41,7 +41,8 @@ export async function ensureTables(db) {
     "CREATE INDEX IF NOT EXISTS idx_calls_key ON api_call_logs(key_id);" +
     "CREATE INDEX IF NOT EXISTS idx_calls_created ON api_call_logs(created_at);" +
     "CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', created_at TEXT, updated_at TEXT);" +
-    "CREATE INDEX IF NOT EXISTS idx_ubot_chat ON userbot_tasks(chat_id);"
+    "CREATE INDEX IF NOT EXISTS idx_ubot_chat ON userbot_tasks(chat_id);" +
+    "CREATE TABLE IF NOT EXISTS ub_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT '', token TEXT DEFAULT '', note TEXT DEFAULT '', status TEXT DEFAULT 'offline', last_seen_at TEXT, last_ip TEXT, last_info TEXT DEFAULT '', task_ids TEXT DEFAULT '', created_at TEXT, updated_at TEXT);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -188,6 +189,10 @@ export async function ensureTables(db) {
     try {
       await db.exec("CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', created_at TEXT, updated_at TEXT)");
     } catch (e12) { console.error('userbot_tasks table:', e12.message); }
+    // ub_servers：群抓取执行服务器节点（VPS/Containers），脚本定时心跳上报在线状态
+    try {
+      await db.exec("CREATE TABLE IF NOT EXISTS ub_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT '', token TEXT DEFAULT '', note TEXT DEFAULT '', status TEXT DEFAULT 'offline', last_seen_at TEXT, last_ip TEXT, last_info TEXT DEFAULT '', task_ids TEXT DEFAULT '', created_at TEXT, updated_at TEXT)");
+    } catch (e13) { console.error('ub_servers table:', e13.message); }
   } catch(e) { console.error('column migration:', e.message); throw e; }
   return true;
 }

@@ -8,13 +8,19 @@ Cloudflare D1（后台 admin → 群抓取 面板配置），本脚本只在本�
     pip install telethon httpx
 
 用法（无需任何本地配置，全部从后台拉取）：
-    python userbot_pull.py --server https://your.worker.dev --token ub_xxxxx --task 1
+    单次执行：
+        python userbot_pull.py --server https://your.worker.dev --token ub_xxxxx --task 1
+    常驻执行（VPS 一键部署使用，自动循环 + 心跳防掉线）：
+        python userbot_pull.py --daemon --server https://your.worker.dev --token ub_xxxxx --srv-token srv_xxxxx [--tasks 1,2]
 
-    --server  worker 域名
-    --token   后台「群抓取」生成的 ub_token（全局配置里可重置）
-    --task    任务 ID（后台任务列表里的 id）
-    --dry-run 只统计不上传
-    --limit   覆盖后台任务的 limit（0=用后台配置）
+    --server     worker 域名
+    --token      后台「群抓取」生成的 ub_token（全局配置里可重置）
+    --task       任务 ID（单次模式）
+    --daemon     常驻模式：循环执行任务 + 定时心跳上报
+    --srv-token  服务器节点 token（后台「群抓取 → 服务器」面板生成，心跳鉴权用）
+    --tasks      常驻模式要执行的任务 ID 列表（空=执行该服务器分配的全部任务）
+    --dry-run    只统计不上传
+    --limit      覆盖后台任务的 limit（0=用后台配置）
 
 流程：
     1. GET /api/ubot/task/<id>/config 拉取任务参数 + 全局 api_id/api_hash/StringSession
@@ -29,6 +35,7 @@ Cloudflare D1（后台 admin → 群抓取 面板配置），本脚本只在本�
 import argparse
 import asyncio
 import json
+import socket
 import sys
 import time
 
@@ -50,32 +57,101 @@ FORWARD_DELAY = 1.0
 # 每 N 张额外长休息
 BATCH_SIZE = 20
 BATCH_SLEEP = 8.0
+# 常驻模式：心跳间隔 / 每轮任务循环间隔
+HEARTBEAT_EVERY = 60
+DAEMON_LOOP_SLEEP = 120
+
+
+async def send_heartbeat(hc, server, srv_token, tasks):
+    """向 worker 上报本节点在线状态（server_token 鉴权），失败静默。"""
+    if not srv_token:
+        return
+    try:
+        ip = ""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+        info = {
+            "hostname": socket.gethostname(),
+            "version": "userbot_pull.py",
+            "ip": ip,
+            "tasks": tasks,
+            "uptime": int(time.time()),
+        }
+        r = await hc.post(f"{server}/api/ubot/heartbeat?token={srv_token}", json={"info": info}, timeout=15)
+        if r.status_code != 200:
+            print(f"心跳失败: HTTP {r.status_code}", file=sys.stderr)
+    except Exception as e:
+        print(f"心跳异常: {e}", file=sys.stderr)
 
 
 async def main():
     ap = argparse.ArgumentParser(description="群历史图片抓取（后台配置驱动）")
     ap.add_argument("--server", required=True, help="worker 域名，如 https://your.worker.dev")
     ap.add_argument("--token", required=True, help="后台生成的 ub_token（群抓取面板可重置）")
-    ap.add_argument("--task", required=True, type=int, help="任务 ID（后台任务列表）")
+    ap.add_argument("--task", type=int, default=None, help="任务 ID（后台任务列表）")
+    ap.add_argument("--daemon", action="store_true", help="常驻模式：循环执行任务 + 定时心跳上报")
+    ap.add_argument("--srv-token", default="", help="服务器节点 token（后台「服务器」面板生成，用于心跳鉴权）")
+    ap.add_argument("--tasks", default="", help="常驻模式要执行的任务 ID 列表，逗号分隔（空=该服务器全部分配任务）")
     ap.add_argument("--dry-run", action="store_true", help="只统计不上传")
     ap.add_argument("--limit", type=int, default=None, help="覆盖后台任务 limit（0=后台配置）")
     ap.add_argument("--timeout", type=int, default=60, help="HTTP 超时秒数")
     args = ap.parse_args()
 
     server = args.server.rstrip("/")
-    cfg_url = f"{server}/api/ubot/task/{args.task}/config?token={args.token}"
+
+    # 常驻模式：循环执行分配的任务 + 定时心跳，防掉线
+    if args.daemon:
+        tasks = [int(t) for t in (args.tasks or "").replace(" ", "").split(",") if t.isdigit()]
+        print(f"[daemon] server={server} 心跳间隔 {HEARTBEAT_EVERY}s，任务列表={tasks or '全部分配'}，循环间隔 {DAEMON_LOOP_SLEEP}s")
+        while True:
+            async with httpx.AsyncClient(timeout=args.timeout) as hc:
+                await send_heartbeat(hc, server, args.srv_token, [str(t) for t in tasks])
+                # 拉取本服务器分配的任务（task_ids 空=全部 enabled）
+                assigned = tasks
+                if not assigned:
+                    try:
+                        r = await hc.get(f"{server}/api/ubot/server/tasks?token={args.srv_token}", timeout=15)
+                        if r.status_code == 200:
+                            j = r.json()
+                            assigned = [t["id"] for t in (j.get("data") or {}).get("tasks", [])]
+                            print(f"[daemon] 拉到 {len(assigned)} 个任务: {assigned}")
+                    except Exception as e:
+                        print(f"[daemon] 拉取任务异常: {e}", file=sys.stderr)
+                # 逐个执行（异常不中断循环）
+                for tid in assigned:
+                    try:
+                        await run_task_once(hc, args, tid)
+                    except Exception as e:
+                        print(f"[daemon] 任务 #{tid} 执行异常: {e}", file=sys.stderr)
+            await asyncio.sleep(DAEMON_LOOP_SLEEP)
+        return
+
+    if not args.task:
+        ap.error("单次模式必须指定 --task；常驻请用 --daemon")
+
     async with httpx.AsyncClient(timeout=args.timeout) as hc:
-        r = await hc.get(cfg_url)
-        if r.status_code != 200:
-            print(f"拉取配置失败: HTTP {r.status_code} {r.text[:200]}", file=sys.stderr)
-            sys.exit(1)
-        j = r.json()
-        if not j.get("ok"):
-            print(f"拉取配置失败: {j}", file=sys.stderr)
-            sys.exit(1)
-        data = j["data"]
-        task = data["task"]
-        g = data["global"]
+        await run_task_once(hc, args, args.task)
+
+
+async def run_task_once(hc, args, task_id):
+    server = args.server.rstrip("/")
+    cfg_url = f"{server}/api/ubot/task/{task_id}/config?token={args.token}"
+    r = await hc.get(cfg_url)
+    if r.status_code != 200:
+        print(f"任务 #{task_id} 拉取配置失败: HTTP {r.status_code} {r.text[:200]}", file=sys.stderr)
+        return
+    j = r.json()
+    if not j.get("ok"):
+        print(f"任务 #{task_id} 拉取配置失败: {j}", file=sys.stderr)
+        return
+    data = j["data"]
+    task = data["task"]
+    g = data["global"]
 
     api_id = int(g.get("api_id") or 0)
     api_hash = g.get("api_hash") or ""
@@ -83,13 +159,13 @@ async def main():
     upload_api_key = g.get("api_key") or ""
     if not api_id or not api_hash:
         print("后台未配置 api_id / api_hash（群抓取 → 全局配置）", file=sys.stderr)
-        sys.exit(1)
+        return
     if not session_str:
         print("后台未配置 StringSession（首次需在本地生成后填入后台，见 README 说明）", file=sys.stderr)
-        sys.exit(1)
+        return
     if not upload_api_key:
         print("后台未配置上传 api_key（群抓取 → 全局配置，填后台「密钥管理」里生成的 key）", file=sys.stderr)
-        sys.exit(1)
+        return
 
     chat_id = int(task.get("chat_id") or 0)
     tags = task.get("tags") or ""
@@ -100,19 +176,18 @@ async def main():
     last_id = int(task.get("last_id") or 0)
     title_prefix = task.get("title") or ""
 
-    print(f"任务 #{task['id']}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool} level={level} max_size={max_size} limit={limit}")
+    print(f"任务 #{task_id}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool} level={level} max_size={max_size} limit={limit}")
     if last_id:
         print(f"断点续拉：跳过 message id >= {last_id}，向更早翻")
 
-    # 全程复用一个 httpx 客户端（上传 + 回写断点），避免 each request 重建
-    async with httpx.AsyncClient(timeout=args.timeout) as hc:
-        await run_pull(hc, client_kwargs=(session_str, api_id, api_hash), chat_id=chat_id,
-                       tags=tags, pool=pool, level=level, max_size=max_size, limit=limit,
-                       last_id=last_id, title_prefix=title_prefix, upload_api_key=upload_api_key,
-                       server=server, task=task, args=args)
+    # 复用外部传入的 httpx 客户端（上传 + 回写断点）
+    await run_pull(hc, client_kwargs=(session_str, api_id, api_hash), chat_id=chat_id,
+                   tags=tags, pool=pool, level=level, max_size=max_size, limit=limit,
+                   last_id=last_id, title_prefix=title_prefix, upload_api_key=upload_api_key,
+                   server=server, task=task, task_id=task_id, args=args)
 
 
-async def run_pull(hc, client_kwargs, chat_id, tags, pool, level, max_size, limit, last_id, title_prefix, upload_api_key, server, task, args):
+async def run_pull(hc, client_kwargs, chat_id, tags, pool, level, max_size, limit, last_id, title_prefix, upload_api_key, server, task, task_id, args):
     session_str, api_id, api_hash = client_kwargs
     async with TelegramClient(StringSession(session_str), api_id, api_hash) as client:
         await client.start()
@@ -134,7 +209,7 @@ async def run_pull(hc, client_kwargs, chat_id, tags, pool, level, max_size, limi
             pending_progress["done"] = done
             pending_progress["skipped"] = skipped
             try:
-                u = f"{server}/api/ubot/task/{args.task}/progress?token={args.token}"
+                u = f"{server}/api/ubot/task/{task_id}/progress?token={args.token}"
                 await hc.post(u, json=pending_progress)
             except Exception:
                 pass

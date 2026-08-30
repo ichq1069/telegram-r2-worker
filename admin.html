@@ -1110,6 +1110,13 @@ https://example.com/b.jpg"></textarea></div>
         </div>
         <div id="ubTaskList" style="margin-top:12px"></div>
       </div>
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>执行服务器 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">后台配置 N 台 VPS/Containers 节点，脚本常驻心跳上报，3 分钟无心跳即判定掉线；点「部署命令」一键拉取部署</span></div>
+          <button class="btn btn-primary" id="ubSrvAddBtn">+ 添加服务器</button>
+        </div>
+        <div id="ubSrvList" style="margin-top:12px"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -3156,6 +3163,7 @@ async function loadUbotPage() {
     }
   } catch (e) {}
   loadUbotTasks();
+  loadUbotServers();
 }
 
 async function loadUbotTasks() {
@@ -3192,7 +3200,119 @@ async function loadUbotTasks() {
   box.innerHTML = html;
 }
 
-function ubotCopyCmd(id) {
+// ---------------- 群抓取执行服务器（节点管理 + 心跳状态 + 一键部署命令） ----------------
+async function loadUbotServers() {
+  var box = document.getElementById("ubSrvList");
+  box.innerHTML = skRows(3);
+  var r = await api("GET", "/admin/api/ub-servers");
+  if (!r || !r.ok) { box.innerHTML = '<div style="color:var(--danger,#e5484d)">加载失败：' + escStr((r && r.error) || "") + '</div>'; return; }
+  var list = (r.data || []).slice();
+  if (!list.length) { box.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:12px 0">还没有服务器节点。点击右上角「+ 添加服务器」创建节点，然后在 VPS 上粘贴「部署命令」一键部署（自动安装依赖、注册常驻服务并心跳上报）。</div>'; return; }
+  var html = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>最近心跳</th><th>IP</th><th>信息</th><th>关联任务</th><th style="width:190px">操作</th></tr></thead><tbody>';
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    var statusHtml = s.online
+      ? '<span style="color:#46a758;font-weight:600">● 在线</span>'
+      : '<span style="color:#e5484d;font-weight:600">● 离线</span>';
+    var seen = s.seen_ago === null ? "从未" : (s.seen_ago < 60 ? s.seen_ago + "秒前" : (s.seen_ago < 3600 ? Math.floor(s.seen_ago / 60) + "分钟前" : Math.floor(s.seen_ago / 3600) + "小时前"));
+    var info = "";
+    try { var ii = s.last_info ? JSON.parse(s.last_info) : {}; if (ii.hostname) info += "主机:" + escStr(ii.hostname); if (ii.version) info += " · " + escStr(ii.version); } catch(e) {}
+    html += '<tr>' +
+      '<td>' + s.id + '</td>' +
+      '<td>' + escStr(s.name || "") + '</td>' +
+      '<td>' + statusHtml + '</td>' +
+      '<td>' + seen + '</td>' +
+      '<td>' + escStr(s.last_ip || "") + '</td>' +
+      '<td style="font-size:12px;color:var(--text-secondary)">' + info + '</td>' +
+      '<td style="font-size:12px">' + escStr(s.task_ids || "全部") + '</td>' +
+      '<td>' +
+        '<button class="btn btn-ghost btn-sm" onclick="srvCopyDeploy(' + s.id + ')">部署命令</button> ' +
+        '<button class="btn btn-ghost btn-sm" onclick="srvEdit(' + s.id + ')">编辑</button> ' +
+        '<button class="btn btn-ghost btn-sm" style="color:var(--danger,#e5484d)" onclick="srvDel(' + s.id + ')">删除</button>' +
+      '</td></tr>';
+  }
+  html += '</tbody></table></div>';
+  box.innerHTML = html;
+}
+
+function srvCopyDeploy(id) {
+  api("GET", "/admin/api/ub-servers").then(function(r) {
+    var s = null;
+    if (r && r.ok) { var arr = r.data || []; for (var i = 0; i < arr.length; i++) if (arr[i].id === id) { s = arr[i]; break; } }
+    if (!s || !s.token) { toast("找不到服务器或 token 缺失", 0); return; }
+    if (!UBOT_TOKEN) { toast("请先生成脚本 token（全局配置）", 0); return; }
+    var deployUrl = location.origin + '/deploy/ubot.sh?server=' + encodeURIComponent(location.origin) + '&token=' + encodeURIComponent(UBOT_TOKEN) + '&srv=' + encodeURIComponent(s.token) + '&tasks=' + encodeURIComponent(s.task_ids || "");
+    var cmd = 'bash -c "$(curl -fsSL \'' + deployUrl + '\')"';
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(cmd).then(function() { toast("一键部署命令已复制，在 VPS 上粘贴回车即可", 1); });
+    } else {
+      var ta = document.createElement("textarea"); ta.value = cmd; document.body.appendChild(ta); ta.select();
+      try { document.execCommand("copy"); toast("一键部署命令已复制", 1); } catch(e) { toast("复制失败", 0); }
+      document.body.removeChild(ta);
+    }
+  });
+}
+
+function srvEdit(id) {
+  api("GET", "/admin/api/ub-servers").then(function(r) {
+    var s = null;
+    if (r && r.ok) { var arr = r.data || []; for (var i = 0; i < arr.length; i++) if (arr[i].id === id) { s = arr[i]; break; } }
+    var title = s ? "编辑服务器 #" + id : "添加服务器";
+    document.getElementById("modalArea").innerHTML =
+      '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:520px">' +
+      '<h3>' + title + '</h3>' +
+      '<div class="fr"><label>名称（必填，如 VPS-东京 / 家里NAS）</label><input class="inp" id="srvName" value="' + escStr(s ? s.name : "") + '" placeholder="VPS-东京"></div>' +
+      '<div class="fr"><label>关联任务 ID（逗号分隔，空=执行全部启用的任务）</label><input class="inp" id="srvTasks" value="' + escStr(s ? s.task_ids : "") + '" placeholder="1,2"></div>' +
+      '<div class="fr"><label>备注（可选）</label><input class="inp" id="srvNote" value="' + escStr(s ? s.note : "") + '"></div>' +
+      (s ? '<div class="fr"><label>节点 token（心跳鉴权用，勿泄露）</label><div class="keywrap"><input class="inp" id="srvToken" type="password" value="' + escStr(s.token || "") + '" readonly><button class="eyeBtn" id="srvTokenEye" type="button" title="显示/隐藏">👁</button></div></div>' : '') +
+      (s ? '<div class="fb" style="margin-top:10px"><button class="btn btn-ghost btn-sm" id="srvResetTokenBtn">重置 token</button></div>' : '') +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" id="modalCancel">取消</button>' +
+        '<button class="btn btn-primary" id="srvSave">保存</button>' +
+      '</div></div></div>';
+    document.getElementById("modalCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+    var eye = document.getElementById("srvTokenEye");
+    if (eye) eye.onclick = function() {
+      var inp = document.getElementById("srvToken");
+      var show = inp.type === "password";
+      inp.type = show ? "text" : "password";
+      eye.textContent = show ? "🙈" : "👁";
+    };
+    var rbtn = document.getElementById("srvResetTokenBtn");
+    if (rbtn) rbtn.onclick = function() {
+      api("PATCH", "/admin/api/ub-servers/" + id, { reset_token: true }).then(function(rr) {
+        if (rr && rr.ok && rr.data && rr.data.new_token) { toast("已重置 token", 1); srvEdit(id); loadUbotServers(); }
+        else toast((rr && rr.error) || "重置失败", 0);
+      });
+    };
+    document.getElementById("srvSave").onclick = function() { srvSave(id); };
+    document.getElementById("srvName").focus();
+  });
+}
+
+function srvSave(id) {
+  var name = document.getElementById("srvName").value.trim();
+  if (!name) { toast("请填写服务器名称", 0); return; }
+  var b = {
+    name: name,
+    task_ids: document.getElementById("srvTasks").value.trim(),
+    note: document.getElementById("srvNote").value.trim()
+  };
+  var path = id ? ("/admin/api/ub-servers/" + id) : "/admin/api/ub-servers";
+  var method = id ? "PATCH" : "POST";
+  api(method, path, b).then(function(r) {
+    if (r && r.ok) { toast(id ? "服务器已更新" : "服务器已添加", 1); document.getElementById("modalArea").innerHTML = ""; loadUbotServers(); }
+    else toast((r && r.error) || "保存失败", 0);
+  });
+}
+
+function srvDel(id) {
+  if (!confirm("确定删除服务器 #" + id + "？节点将无法再心跳上报")) return;
+  api("DELETE", "/admin/api/ub-servers/" + id).then(function(r) {
+    if (r && r.ok) { toast("已删除", 1); loadUbotServers(); }
+    else toast((r && r.error) || "删除失败", 0);
+  });
+}
   if (!UBOT_TOKEN) { toast("请先生成脚本 token", 0); return; }
   var cmd = 'python3 scripts/userbot_pull.py --server ' + location.origin + ' --token ' + UBOT_TOKEN + ' --task ' + id;
   if (navigator.clipboard) {
@@ -3294,6 +3414,7 @@ document.getElementById("ubCfgSaveBtn").addEventListener("click", function() {
 });
 
 document.getElementById("ubAddBtn").addEventListener("click", function() { ubotEdit(null); });
+document.getElementById("ubSrvAddBtn").addEventListener("click", function() { srvEdit(null); });
 
 // API Key 小眼睛：切换明文/掩码
 var ubApiHashEye = document.getElementById("ubApiHashEye");

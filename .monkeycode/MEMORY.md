@@ -32,13 +32,15 @@ Entries discovered by the Agent during task execution should follow this format:
 ## Entries
 
 [Project Knowledge Summary]
-- Date: 2026-08-29
-- Context: Discovered by Agent while performing 内容分级功能开发与部署
+- Date: 2026-08-30
+- Context: Discovered by Agent while performing 群历史图片抓取功能开发与部署
 - Category: Operations & Deployment
 - Instructions:
-  - 部署链路:push 到 `main` 分支触发 GitHub Actions(`.github/workflows/deploy-worker.yml`)自动部署 worker.js 并上传 admin.html 到 R2;执行环境无本机 wrangler/Cloudflare token,只能通过 git push 触发部署
-  - 本地可做的验证:`node --check worker.js` 与 `node --check src/*.js` 语法检查;admin.html 内联 JS 用 `new Function` 包一层做语法检查
-  - 所有 secrets(TG_BOT_TOKEN/API_KEY/CF_API_TOKEN)只存 GitHub Secrets,推送代码时禁止写入任何配置或文档;文档中密钥一律用 `<API_KEY>` 占位
+  - 部署链路已验证:push 到 `main` 分支触发 GitHub Actions 自动部署;线上 worker 域名 `https://telegram-r2-bot.wo58.cn`,R2 admin.html 地址 `https://telegramup.wo58.cn/admin.html`
+  - 部署成功标志:线上 admin.html 的 `APP_VERSION` 变成 `v1.0.<run#>`(本地位 v1.0.0 占位),且页面含新面板标记;worker 路由无 token 返回 401 无法区分新旧,以 admin.html 版本为准
+  - 群抓取设计:worker 当控制面(全局配置存 settings 表键 `ub_api_id/ub_api_hash/ub_session/ub_token/ub_api_key`,任务存 `userbot_tasks` 表),Telethon 脚本在本地/VPS 跑,参数全从后台拉(`/api/ubot/task/<id>/config?token=<ub_token>`),换机无感
+  - `userbot_tasks` 表 `limit` 列名是 SQLite 保留字,建表/INSERT/UPDATE 必须写成 `"limit"`(双引号),否则报 `near "limit": syntax error`
+  - 脚本侧鉴权用专用 `ub_token`(admin 可重置),不把 admin API_KEY 交给脚本;上传走 `/api/v1/upload` 用 `api_key` query 参数,脚本从后台拉 `ub_api_key`
 
 [Project Knowledge Summary]
 - Date: 2026-08-29
