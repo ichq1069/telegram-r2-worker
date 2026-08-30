@@ -3313,6 +3313,8 @@ function srvDel(id) {
     else toast((r && r.error) || "删除失败", 0);
   });
 }
+
+function ubotCopyCmd(id) {
   if (!UBOT_TOKEN) { toast("请先生成脚本 token", 0); return; }
   var cmd = 'python3 scripts/userbot_pull.py --server ' + location.origin + ' --token ' + UBOT_TOKEN + ' --task ' + id;
   if (navigator.clipboard) {
