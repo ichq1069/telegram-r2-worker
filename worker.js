@@ -27,7 +27,7 @@ import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebh
 import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
 
 import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUserbotTasks, handleAdminUserbotTaskCreate, handleAdminUserbotTaskUpdate, handleAdminUserbotTaskDelete, handleUserbotTaskConfig, handleUserbotTaskProgress } from './src/userbot.js';
-import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript } from './src/servers.js';
+import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript, handleDeployGenScript } from './src/servers.js';
 
 
 
@@ -215,6 +215,7 @@ export default {
     // VPS 一键部署脚本下发（无需鉴权，脚本本身不含密钥，参数由后台生成的 URL 携带）
     if (m === 'GET' && p === '/deploy/ubot.sh') return handleDeployScript(request, env);
     if (m === 'GET' && p === '/deploy/userbot_pull.py') return handleDeployPullScript(request, env);
+    if (m === 'GET' && p === '/deploy/userbot_gen.py') return handleDeployGenScript();
 
     // Bot API routes (no auth needed, verified by Telegram)
     if (m === 'POST' && p === '/bot/sendMessage') return handleBotSendMessage(request, env);
