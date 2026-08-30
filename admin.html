@@ -156,7 +156,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
 /* Grid view */
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
 .file-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; cursor: pointer; transition: all .2s; position: relative; }
-.file-card:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(79,110,247,.15); }
+.file-card:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(15,23,42,.08); }
 .file-card .thumb { width: 100%; max-height: 260px; object-fit: contain; background: #f8fafc; display: block; }
 .file-card .thumb-placeholder { width: 100%; height: 140px; background: #f8fafc; display: flex; align-items: center; justify-content: center; font-size: 36px; }
 .file-card .thumb-video { width: 100%; height: 160px; background: #1e293b; display: flex; align-items: center; justify-content: center; position: relative; }
@@ -177,9 +177,9 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
 /* Progress */
 .progress-wrap { margin-bottom: 8px; }
 .progress-bar-bg { width: 100%; height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin-top: 6px; }
-.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #4f6ef7, #7c3aed); border-radius: 4px; transition: width .5s ease; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #4f6ef7, #7c3aed); border-radius: 4px; transform-origin: left; transform: scaleX(0); transition: transform .5s ease; }
 .progress-stats { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
-.sync-card { background: var(--card); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 16px; box-shadow: var(--shadow); border-left: 4px solid var(--primary); }
+.sync-card { background: var(--card); border-radius: var(--radius); padding: 16px 20px; margin-bottom: 16px; box-shadow: var(--shadow); border: 1px solid var(--border); }
 .sync-card .sync-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
 .sync-card .sync-title .live { width: 8px; height: 8px; background: var(--success); border-radius: 50%; animation: pulse 2s infinite; }
 #processingList:empty { display: none; }
@@ -338,7 +338,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
         <div class="sync-title"><span class="live"></span> 传输进度</div>
         <div id="processingList" style="margin-bottom:8px"></div>
         <div class="progress-wrap">
-          <div class="progress-bar-bg"><div class="progress-bar-fill" id="syncBar" style="width:0%"></div></div>
+          <div class="progress-bar-bg"><div class="progress-bar-fill" id="syncBar" style="transform:scaleX(0)"></div></div>
           <div class="progress-stats"><span id="syncText">加载中...</span><span id="syncPercent"></span></div>
         </div>
         <div style="display:flex;gap:16px;margin-top:8px;font-size:12px;color:var(--text-secondary)" id="syncDetail"></div>
@@ -1109,55 +1109,93 @@ function api(method, path, body) {
   }).catch(function(e) { return { ok: false, error: e.name === "AbortError" ? "请求超时" : e.message }; });
 }
 
-// Toast
+// Toast（堆叠显示，避免重叠遮挡）
 function toast(msg, ok) {
   var d = document.createElement("div");
   d.className = "toast " + (ok ? "ok" : "er");
+  var existing = document.querySelectorAll(".toast");
+  d.style.top = (20 + existing.length * 48) + "px";
   d.textContent = msg;
   document.body.appendChild(d);
-  setTimeout(function() { d.remove(); }, 3000);
+  setTimeout(function() {
+    d.remove();
+    var tts = document.querySelectorAll(".toast");
+    for (var i = 0; i < tts.length; i++) tts[i].style.top = (20 + i * 48) + "px";
+  }, 3000);
 }
 
 // 初始化
+var allTabNames = ["stats","files","quicktag","trash","unsaved","pool","private","tags","gen","keys","users","show","cmds","api","ops"];
+function switchTab(name) {
+  var panels = document.querySelectorAll(".panel");
+  var tabs = document.querySelectorAll("#tabBar .tab");
+  for (var i = 0; i < allTabNames.length; i++) {
+    panels[i].className = "panel";
+    tabs[i].className = "tab";
+    if (allTabNames[i] === name) {
+      panels[i].className = "panel on";
+      tabs[i].className = "tab on";
+    }
+  }
+  if (name === "stats") loadStats();
+  if (name === "files") loadFiles(1);
+  if (name === "quicktag") { if (!qtCandInited) initQuickTag(); loadQuickTag(1); }
+  if (name === "trash") loadTrash(1);
+  if (name === "unsaved") loadUnsaved(1);
+  if (name === "pool") { loadPool(); initPresetTags(); }
+  if (name === "private") { loadPrivatePool(); }
+  if (name === "tags") loadTagsPage();
+  if (name === "gen") loadGen();
+  if (name === "keys") { loadKeys(); loadRateLimitCfg(); }
+  if (name === "users") { loadUsers(); loadUserInteractions(); }
+  if (name === "show") loadShowConfig();
+  if (name === "cmds") loadCmds();
+  if (name === "ops") loadOpsPage();
+  window.scrollTo(0, 0);
+}
+
 function init() {
   // Tab 栏
-  var tabData = [["stats","概览"],["files","Tele文件"],["quicktag","快速打标"],["trash","回收站"],["unsaved","未转存"],["pool","共享库"],["private","私密库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
+  var tabNames = [["stats","概览"],["files","Tele文件"],["quicktag","快速打标"],["trash","回收站"],["unsaved","未转存"],["pool","共享库"],["private","私密库"],["tags","标签库"],["gen","接口生成"],["keys","密钥"],["users","用户"],["show","轮播"],["cmds","命令"],["api","Bot API"],["ops","运维"]];
   var tabBar = document.getElementById("tabBar");
   var html = "";
-  for (var i = 0; i < tabData.length; i++) {
-    html += '<div class="tab' + (i === 0 ? " on" : "") + '" data-tab="' + tabData[i][0] + '">' + tabData[i][1] + '</div>';
+  for (var i = 0; i < tabNames.length; i++) {
+    html += '<div class="tab' + (i === 0 ? " on" : "") + '" data-tab="' + tabNames[i][0] + '">' + tabNames[i][1] + '</div>';
   }
   tabBar.innerHTML = html;
 
   tabBar.addEventListener("click", function(e) {
     var tab = e.target.closest("[data-tab]");
     if (!tab) return;
-    var name = tab.getAttribute("data-tab");
-    var panels = document.querySelectorAll(".panel");
-    var tabs = tabBar.querySelectorAll(".tab");
-    var allNames = ["stats","files","quicktag","trash","unsaved","pool","private","tags","gen","keys","users","show","cmds","api","ops"];
-    for (var i = 0; i < allNames.length; i++) {
-      panels[i].className = "panel";
-      tabs[i].className = "tab";
-      if (allNames[i] === name) {
-        panels[i].className = "panel on";
-        tabs[i].className = "tab on";
+    switchTab(tab.getAttribute("data-tab"));
+  });
+
+  // 键盘切换 Tab：Ctrl/Cmd + 1..9 跳转到前 9 个面板，Alt + [ ] 上一个/下一个
+  document.addEventListener("keydown", function(e) {
+    var panel = document.getElementById("panel-quicktag");
+    var inQt = panel && panel.classList.contains("on") && !(e.ctrlKey || e.metaKey || e.altKey);
+    if (e.ctrlKey || e.metaKey) {
+      var n = parseInt(e.key, 10);
+      if (n >= 1 && n <= 9 && e.key.length === 1) {
+        e.preventDefault();
+        switchTab(allTabNames[n - 1]);
+        return;
+      }
+    } else if (e.altKey && (e.key === "ArrowLeft" || e.key === "[")) {
+      e.preventDefault();
+      var cur = document.querySelector(".tab.on");
+      var tabs = tabBar.querySelectorAll(".tab");
+      for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i] === cur) { switchTab(tabs[(i - 1 + tabs.length) % tabs.length].getAttribute("data-tab")); return; }
+      }
+    } else if (e.altKey && (e.key === "ArrowRight" || e.key === "]")) {
+      e.preventDefault();
+      var cur2 = document.querySelector(".tab.on");
+      var tabs2 = tabBar.querySelectorAll(".tab");
+      for (var j = 0; j < tabs2.length; j++) {
+        if (tabs2[j] === cur2) { switchTab(tabs2[(j + 1) % tabs2.length].getAttribute("data-tab")); return; }
       }
     }
-    if (name === "stats") loadStats();
-    if (name === "files") loadFiles(1);
-    if (name === "quicktag") { if (!qtCandInited) initQuickTag(); loadQuickTag(1); }
-    if (name === "trash") loadTrash(1);
-    if (name === "unsaved") loadUnsaved(1);
-    if (name === "pool") { loadPool(); initPresetTags(); }
-    if (name === "private") { loadPrivatePool(); }
-    if (name === "tags") loadTagsPage();
-    if (name === "gen") loadGen();
-    if (name === "keys") { loadKeys(); loadRateLimitCfg(); }
-    if (name === "users") { loadUsers(); loadUserInteractions(); }
-    if (name === "show") loadShowConfig();
-    if (name === "cmds") loadCmds();
-    if (name === "ops") loadOpsPage();
   });
 
   // 共享库 · 存储源切换（本地上传 / Zupimages / Postimages / 外链链接）
@@ -2203,7 +2241,7 @@ async function loadProgress() {
   var size = d.total_size_formatted || "0 B";
   var target = Math.max(today, 50);
   var pct = Math.min(Math.round((today / target) * 100), 100);
-  document.getElementById("syncBar").style.width = pct + "%";
+  document.getElementById("syncBar").style.transform = "scaleX(" + (pct / 100) + ")";
   document.getElementById("syncText").textContent = "今日已接收 " + today + " 个文件";
   document.getElementById("syncPercent").textContent = pct + "%";
   document.getElementById("syncDetail").innerHTML =
@@ -2241,7 +2279,7 @@ async function loadProcessing() {
       var pct = Math.min(Math.round(((f.progress_bytes || 0) / f.total_bytes) * 100), 100);
       var spd = calcSpeed(f.id, f.progress_bytes || 0);
       html += '<div style="flex:0 0 170px">';
-      html += '<div class="progress-bar-bg" style="height:6px;border-radius:3px;margin-bottom:3px"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>';
+      html += '<div class="progress-bar-bg" style="height:6px;border-radius:3px;margin-bottom:3px"><div class="progress-bar-fill" style="transform:scaleX(' + (pct / 100) + ')"></div></div>';
       html += '<div style="font-size:10px;color:var(--text-secondary);white-space:nowrap">' + pct + '% · ' + spd + ' · ' + fmtSize(f.progress_bytes) + '/' + fmtSize(f.total_bytes) + '</div>';
       html += '</div>';
     }
@@ -3543,7 +3581,7 @@ function setPoolLevelModal() {
   var ids = Array.from(poolSel);
   if (!ids.length) { toast("请先勾选图片", 0); return; }
   document.getElementById("modalArea").innerHTML =
-    '<div class="modal-mask"><div class="modal"><h3>设置级别 (' + ids.length + ' 张)</h3>' +
+    '<div class="modal-bg"><div class="modal"><h3>设置级别 (' + ids.length + ' 张)</h3>' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">级别（级别对等：低级别密钥不可见高级别内容）</label>' +
     '<select class="inp" id="plLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select>' +
     '<div class="modal-actions"><button class="btn btn-ghost" id="plCancel">取消</button><button class="btn btn-primary" id="plSave">保存</button></div>' +
@@ -3761,7 +3799,7 @@ function editKeyModal(id, name, expires, level) {
     lvOpts += '<option value="' + lvs[li] + '"' + ((level || "pt") === lvs[li] ? " selected" : "") + '>' + lvs[li] + '</option>';
   }
   document.getElementById("modalArea").innerHTML =
-    '<div class="modal-mask"><div class="modal"><h3>编辑密钥</h3>' +
+    '<div class="modal-bg"><div class="modal"><h3>编辑密钥</h3>' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">用途名称</label>' +
     '<input class="inp" id="ekName" value="' + escStr(name) + '" placeholder="用途说明">' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">级别（决定可获取内容级别，级别对等）</label>' +
