@@ -1512,6 +1512,13 @@ async function processUpdateCore(update, env, waitFn) {
       if (waitFn) waitFn(p); else p;
     } catch (e) {}
   }
+  // 记录已知会话（广播快捷键盘 / 后续通知用；私聊 + 群 + 频道都记，广播只挑 private）
+  if (env.D1_DB) {
+    try {
+      const p = recordKnownChat(update, env);
+      if (waitFn) waitFn(p); else p;
+    } catch (e) {}
+  }
   // 点击按钮回调（inline keyboard）
   if (update.callback_query) {
     return await handleCallbackQuery(update.callback_query, env);
@@ -2631,8 +2638,15 @@ async function sendQuickReplyKeyboard(chatId, env) {
 async function broadcastQuickReplyKeyboard(env) {
   if (!env.D1_DB || !env.TG_BOT_TOKEN) return { total: 0, sent: 0, failed: 0, error: 'D1 or token missing' };
   try {
-    const d = await env.D1_DB.prepare("SELECT DISTINCT chat_id FROM files WHERE chat_type='private' AND chat_id IS NOT NULL AND chat_id!='' ORDER BY chat_id").all();
-    const ids = (d.results || []).map(function(r) { return String(r.chat_id); });
+    // 私聊会话以 known_chats 为准（recordKnownChat 已在每条消息记录，含纯文本 /start /help 等）；
+    // 兼容老数据：files 表里 chat_type='private' 的历史记录合并去重
+    const d = await env.D1_DB.prepare("SELECT chat_id FROM known_chats WHERE chat_type='private' AND chat_id IS NOT NULL AND chat_id!='' ORDER BY last_active_at DESC").all();
+    const legacy = await env.D1_DB.prepare("SELECT DISTINCT chat_id FROM files WHERE chat_type='private' AND chat_id IS NOT NULL AND chat_id!=''").all();
+    const seen = {}, ids = [];
+    (d.results || []).concat(legacy.results || []).forEach(function(r) {
+      const c = String(r.chat_id);
+      if (c && !seen[c]) { seen[c] = 1; ids.push(c); }
+    });
     let sent = 0, failed = 0;
     for (const cid of ids) {
       if (sent + failed >= 100) break; // 单请求内限流，避免 worker 超时
@@ -4077,6 +4091,29 @@ async function handleAdminKeysDelete(request, env) {
 }
 
 // 用户聊天交互统计：按 update 类型累加 user_stats 表（消息/命令/文件/Inline 查询/按钮回调）
+// 记录已知会话（known_chats）：从各类 update 中提取 chat 并 upsert。
+// 广播快捷回复键盘 / 告警通知依赖这张表（此前只从 files 表找 private，纯文本私聊没有文件记录导致广播 0 个）
+async function recordKnownChat(update, env) {
+  try {
+    let chat = null;
+    if (update.message && update.message.chat) chat = update.message.chat;
+    else if (update.channel_post && update.channel_post.chat) chat = update.channel_post.chat;
+    else if (update.callback_query && update.callback_query.message && update.callback_query.message.chat) chat = update.callback_query.message.chat;
+    else if (update.inline_query && update.inline_query.from) {
+      // inline 查询没有 chat 对象，用 from.id 作为私聊 chat_id（@bot 搜索来自用户私聊/群，仍记一个已知用户）
+      chat = { id: update.inline_query.from.id, type: 'private', title: '', username: update.inline_query.from.username || '' };
+    }
+    if (!chat || !chat.id) return;
+    const cid = String(chat.id);
+    if (!cid) return;
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare(
+      "INSERT INTO known_chats (chat_id, chat_type, chat_title, chat_username, last_active_at) VALUES (?,?,?,?,?) " +
+      "ON CONFLICT(chat_id) DO UPDATE SET chat_type=excluded.chat_type, chat_title=excluded.chat_title, chat_username=excluded.chat_username, last_active_at=excluded.last_active_at"
+    ).bind(cid, String(chat.type || ''), String(chat.title || ''), String(chat.username || ''), now).run();
+  } catch (e) { console.error('recordKnownChat:', e.message); }
+}
+
 async function recordUserInteraction(update, env) {
   try {
     // 提取用户身份

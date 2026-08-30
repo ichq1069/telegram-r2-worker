@@ -33,7 +33,8 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, window TEXT NOT NULL, count INTEGER DEFAULT 0, UNIQUE(key, window));" +
     "CREATE TABLE IF NOT EXISTS worker_stats (day TEXT PRIMARY KEY, requests INTEGER DEFAULT 0, errors INTEGER DEFAULT 0, updated_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS user_stats (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, messages INTEGER DEFAULT 0, commands INTEGER DEFAULT 0, files INTEGER DEFAULT 0, inline_queries INTEGER DEFAULT 0, callback_clicks INTEGER DEFAULT 0, last_active_at TEXT);"
+    "CREATE TABLE IF NOT EXISTS user_stats (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, messages INTEGER DEFAULT 0, commands INTEGER DEFAULT 0, files INTEGER DEFAULT 0, inline_queries INTEGER DEFAULT 0, callback_clicks INTEGER DEFAULT 0, last_active_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS known_chats (chat_id TEXT PRIMARY KEY, chat_type TEXT DEFAULT '', chat_title TEXT, chat_username TEXT, last_active_at TEXT);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
