@@ -3195,7 +3195,15 @@ async function loadUbotTasks() {
   if (!r || !r.ok) { box.innerHTML = '<div style="color:var(--danger,#e5484d)">加载失败：' + escStr((r && r.error) || "") + '</div>'; return; }
   var list = (r.data || []).slice();
   if (!list.length) { box.innerHTML = '<div style="color:var(--text-secondary);font-size:13px;padding:12px 0">还没有任务。点击右上角「+ 添加任务」，填写群的 chat_id，然后在任意机器上运行拉取脚本。</div>'; return; }
-  var html = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>群 (chat_id)</th><th>标题</th><th>标签</th><th>库</th><th>级别</th><th>最大MB</th><th>限数</th><th>断点 last_id</th><th>累计</th><th>启用</th><th style="width:150px">操作</th></tr></thead><tbody>';
+  // 加载执行日志
+  var runsMap = {};
+  var rr = await api("GET", "/admin/api/ub-task-runs");
+  if (rr && rr.ok) {
+    (rr.data || []).forEach(function(run) {
+      if (!runsMap[run.task_id]) runsMap[run.task_id] = run;
+    });
+  }
+  var html = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>群 (chat_id)</th><th>标题</th><th>标签</th><th>库</th><th>级别</th><th>最大MB</th><th>限数</th><th>断点 last_id</th><th>累计</th><th>启用</th><th>最近执行</th><th style="width:150px">操作</th></tr></thead><tbody>';
   for (var i = 0; i < list.length; i++) {
     var t = list[i];
     var poolTxt = t.pool ? "共享库" : "私密库";
@@ -3211,6 +3219,15 @@ async function loadUbotTasks() {
       '<td>' + (t.last_id || 0) + '</td>' +
       '<td>完成 ' + (t.done || 0) + ' / 跳过 ' + (t.skipped || 0) + '</td>' +
       '<td>' + (t.enabled ? "是" : "否") + '</td>' +
+      '<td>' + (function() {
+        var run = runsMap[t.id];
+        if (!run) return '<span style="color:var(--text-secondary);font-size:11px">未执行</span>';
+        var statusColor = run.status === 'finished' ? '#46a758' : run.status === 'error' ? '#e5484d' : '#f59e0b';
+        var statusText = run.status === 'finished' ? '完成' : run.status === 'error' ? '失败' : '执行中';
+        var time = run.finished_at || run.started_at || '';
+        if (time) time = String(time).replace('T', ' ').slice(5, 16);
+        return '<span style="color:' + statusColor + ';font-size:11px;font-weight:600">' + statusText + '</span>' + (time ? '<br><span style="font-size:10px;color:var(--text-secondary)">' + time + '</span>' : '');
+      })() + '</td>' +
       '<td>' +
         '<button class="btn btn-ghost btn-sm" onclick="ubotEdit(' + t.id + ')">编辑</button> ' +
         '<button class="btn btn-ghost btn-sm" onclick="ubotToggle(' + t.id + ',' + (t.enabled ? 0 : 1) + ')">' + (t.enabled ? "停用" : "启用") + '</button> ' +

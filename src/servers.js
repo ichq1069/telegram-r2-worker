@@ -319,3 +319,110 @@ async function readScriptSource(env) {
   } catch (e) {}
   return PULL_SCRIPT_FALLBACK;
 }
+
+// ---------------- 脚本侧：上报任务执行状态 ----------------
+// POST /api/ubot/task/{id}/run-report  body: { status, server_id, server_name, done, skipped, error }
+export async function handleTaskRunReport(request, env, taskId) {
+  try {
+    const u = new URL(request.url);
+    const tok = u.searchParams.get('token') || request.headers.get('X-Ub-Token') || '';
+    const cfg = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('ub_token').first();
+    if (!tok || !cfg || !cfg.value || tok !== cfg.value) return json({ ok: false, error: 'Unauthorized' }, 401);
+    const b = await request.json().catch(function(){ return {}; });
+    const now = new Date().toISOString();
+    const status = String(b.status || 'running').slice(0, 20);
+    const serverId = Number(b.server_id) || 0;
+    const serverName = String(b.server_name || '').slice(0, 100);
+    const done = Number(b.done) || 0;
+    const skipped = Number(b.skipped) || 0;
+    const error = String(b.error || '').slice(0, 500);
+    if (status === 'running') {
+      const r = await env.D1_DB.prepare('INSERT INTO ub_task_runs (task_id, server_id, server_name, status, done, skipped, error, started_at) VALUES (?,?,?,?,?,?,?,?)')
+        .bind(taskId, serverId, serverName, status, done, skipped, error, now).run();
+      return json({ ok: true, data: { run_id: r.meta?.last_row_id || 0 } });
+    } else {
+      // finished / error：更新最近一条 running 记录
+      const last = await env.D1_DB.prepare('SELECT id FROM ub_task_runs WHERE task_id=? AND status=? ORDER BY id DESC LIMIT 1').bind(taskId, 'running').first();
+      if (last) {
+        await env.D1_DB.prepare('UPDATE ub_task_runs SET status=?, done=?, skipped=?, error=?, finished_at=? WHERE id=?')
+          .bind(status, done, skipped, error, now, last.id).run();
+      } else {
+        await env.D1_DB.prepare('INSERT INTO ub_task_runs (task_id, server_id, server_name, status, done, skipped, error, started_at, finished_at) VALUES (?,?,?,?,?,?,?,?,?)')
+          .bind(taskId, serverId, serverName, status, done, skipped, error, now, now).run();
+      }
+      // 同步更新 userbot_tasks 的 done/skipped
+      if (status === 'finished') {
+        await env.D1_DB.prepare('UPDATE userbot_tasks SET done=?, skipped=?, updated_at=? WHERE id=?').bind(done, skipped, now, taskId).run();
+      }
+      return json({ ok: true });
+    }
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ---------------- 脚本侧：长轮询拉取任务（等待新任务最多 hold 30 秒） ----------------
+// GET /api/ubot/server/tasks-poll?token=<server_token>&last_run_id=<上次最大run_id>
+// 有新任务立即返回；无新任务等 30 秒后返回空
+export async function handleServerTasksPoll(request, env) {
+  try {
+    const u = new URL(request.url);
+    const tok = u.searchParams.get('token') || request.headers.get('X-Ub-Token') || '';
+    const s = await env.D1_DB.prepare('SELECT * FROM ub_servers WHERE token=?').bind(tok).first();
+    if (!s) return json({ ok: false, error: 'Unauthorized' }, 401);
+    // 先拉一次任务
+    const g = await env.D1_DB.prepare('SELECT key,value FROM settings WHERE key IN (?,?,?,?)').bind('ub_api_id', 'ub_api_hash', 'ub_session', 'ub_api_key').all();
+    const gcfg = { api_id: '', api_hash: '', session: '', api_key: '' };
+    (g.results || []).forEach(function(r) {
+      if (r.key === 'ub_api_id') gcfg.api_id = r.value || '';
+      else if (r.key === 'ub_api_hash') gcfg.api_hash = r.value || '';
+      else if (r.key === 'ub_session') gcfg.session = r.value || '';
+      else if (r.key === 'ub_api_key') gcfg.api_key = r.value || '';
+    });
+    const ids = String(s.task_ids || '').split(',').map(function(x){ return x.trim(); }).filter(Boolean);
+    let tasks = [];
+    if (ids.length) {
+      const qmarks = ids.map(function(){ return '?'; }).join(',');
+      const rows = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE enabled=1 AND id IN (' + qmarks + ') ORDER BY id').bind(...ids).all();
+      tasks = rows.results || [];
+    } else {
+      const rows = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE enabled=1 ORDER BY id').all();
+      tasks = rows.results || [];
+    }
+    // 心跳
+    const nowIso = new Date().toISOString();
+    await env.D1_DB.prepare('UPDATE ub_servers SET status=?, last_seen_at=?, updated_at=? WHERE id=?').bind('online', nowIso, nowIso, s.id).run();
+    // 如果有任务直接返回
+    if (tasks.length) return json({ ok: true, data: { server: { id: s.id, name: s.name }, global: gcfg, tasks: tasks } });
+    // 无任务：等待最多 30 秒（Cloudflare Workers 最长 waitUntil 30 秒）
+    const deadline = Date.now() + 25000; // 留 5 秒余量
+    while (Date.now() < deadline) {
+      await new Promise(function(r){ setTimeout(r, 3000); });
+      let freshTasks = [];
+      if (ids.length) {
+        const qmarks2 = ids.map(function(){ return '?'; }).join(',');
+        const rows2 = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE enabled=1 AND id IN (' + qmarks2 + ') ORDER BY id').bind(...ids).all();
+        freshTasks = rows2.results || [];
+      } else {
+        const rows2 = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE enabled=1 ORDER BY id').all();
+        freshTasks = rows2.results || [];
+      }
+      if (freshTasks.length) return json({ ok: true, data: { server: { id: s.id, name: s.name }, global: gcfg, tasks: freshTasks } });
+    }
+    return json({ ok: true, data: { server: { id: s.id, name: s.name }, global: gcfg, tasks: [] } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ---------------- Admin：查询任务执行日志 ----------------
+// GET /admin/api/ub-task-runs?task_id=<可选>
+export async function handleAdminTaskRuns(request, env) {
+  try {
+    const u = new URL(request.url);
+    const taskId = u.searchParams.get('task_id');
+    let d;
+    if (taskId) {
+      d = await env.D1_DB.prepare('SELECT * FROM ub_task_runs WHERE task_id=? ORDER BY id DESC LIMIT 50').bind(taskId).all();
+    } else {
+      d = await env.D1_DB.prepare('SELECT * FROM ub_task_runs ORDER BY id DESC LIMIT 50').all();
+    }
+    return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}

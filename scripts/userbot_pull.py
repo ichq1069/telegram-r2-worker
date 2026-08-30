@@ -89,6 +89,24 @@ async def send_heartbeat(hc, server, srv_token, tasks):
         print(f"心跳异常: {e}", file=sys.stderr)
 
 
+async def report_run(hc, server, args, task_id, status, error=""):
+    """向 worker 上报任务执行状态（running/finished/error），失败静默。"""
+    if not args.token:
+        return
+    try:
+        url = f"{server}/api/ubot/task/{task_id}/run-report?token={args.token}"
+        await hc.post(url, json={
+            "status": status,
+            "server_id": 0,
+            "server_name": socket.gethostname(),
+            "done": 0,
+            "skipped": 0,
+            "error": error,
+        }, timeout=10)
+    except Exception:
+        pass
+
+
 async def main():
     ap = argparse.ArgumentParser(description="群历史图片抓取（后台配置驱动）")
     ap.add_argument("--server", required=True, help="worker 域名，如 https://your.worker.dev")
@@ -111,23 +129,33 @@ async def main():
         while True:
             async with httpx.AsyncClient(timeout=args.timeout) as hc:
                 await send_heartbeat(hc, server, args.srv_token, [str(t) for t in tasks])
-                # 拉取本服务器分配的任务（task_ids 空=全部 enabled）
+                # 长轮询拉取本服务器分配的任务（task_ids 空=全部 enabled，无任务时 hold 30秒等待）
                 assigned = tasks
                 if not assigned:
                     try:
-                        r = await hc.get(f"{server}/api/ubot/server/tasks?token={args.srv_token}", timeout=15)
+                        poll_url = f"{server}/api/ubot/server/tasks-poll?token={args.srv_token}"
+                        r = await hc.get(poll_url, timeout=35)
                         if r.status_code == 200:
                             j = r.json()
                             assigned = [t["id"] for t in (j.get("data") or {}).get("tasks", [])]
-                            print(f"[daemon] 拉到 {len(assigned)} 个任务: {assigned}")
+                            if assigned:
+                                print(f"[daemon] 拉到 {len(assigned)} 个任务: {assigned}")
+                            else:
+                                print(f"[daemon] 无任务，等待下一轮...")
                     except Exception as e:
                         print(f"[daemon] 拉取任务异常: {e}", file=sys.stderr)
                 # 逐个执行（异常不中断循环）
                 for tid in assigned:
                     try:
+                        await report_run(hc, server, args, tid, "running")
                         await run_task_once(hc, args, tid)
+                        await report_run(hc, server, args, tid, "finished")
                     except Exception as e:
-                        print(f"[daemon] 任务 #{tid} 执行异常: {e}", file=sys.stderr)
+                        print(f"任务 #{tid} 执行异常: {e}", file=sys.stderr)
+                        try:
+                            await report_run(hc, server, args, tid, "error", str(e))
+                        except Exception:
+                            pass
             await asyncio.sleep(DAEMON_LOOP_SLEEP)
         return
 
