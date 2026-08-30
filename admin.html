@@ -117,6 +117,9 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
 .keywrap .inp { padding-right: 38px; }
 .eyeBtn { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); background: transparent; border: none; cursor: pointer; font-size: 15px; line-height: 1; padding: 6px 8px; color: var(--text-secondary); border-radius: 6px; }
 .eyeBtn:hover { background: #f1f5f9; color: var(--text); }
+.cfg-status { display: inline-block; font-size: 11px; margin-top: 4px; padding: 2px 6px; border-radius: 4px; }
+.cfg-status.configured { background: #dcfce7; color: #16a34a; }
+.cfg-status.unconfigured { background: #fee2e2; color: #dc2626; }
 .fb { display:flex; gap: 8px; align-items: center; }
 .fbs { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
 
@@ -1093,11 +1096,11 @@ https://example.com/b.jpg"></textarea></div>
       <div class="card">
         <div class="card-title"><span class="dot"></span>全局配置 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">Telethon 脚本每次启动从后台拉取这里的所有配置，机器上不留任何敏感信息，换机/换 VPS 无感</span></div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-          <div class="fr" style="margin:0"><label>API ID</label><input class="inp" id="ubApiId" placeholder="从 my.telegram.org 获取"></div>
-          <div class="fr" style="margin:0"><label>API Hash</label><div class="keywrap"><input class="inp" id="ubApiHash" type="password" placeholder="从 my.telegram.org 获取" autocomplete="off"><button class="eyeBtn" id="ubApiHashEye" type="button" title="显示/隐藏">👁</button></div></div>
+          <div class="fr" style="margin:0"><label>API ID</label><input class="inp" id="ubApiId" placeholder="从 my.telegram.org 获取"><span class="cfg-status" id="ubApiIdStatus"></span></div>
+          <div class="fr" style="margin:0"><label>API Hash</label><div class="keywrap"><input class="inp" id="ubApiHash" type="password" placeholder="从 my.telegram.org 获取" autocomplete="off"><button class="eyeBtn" id="ubApiHashEye" type="button" title="显示/隐藏">👁</button></div><span class="cfg-status" id="ubApiHashStatus"></span></div>
         </div>
-        <div class="fr" style="margin-top:10px"><label>上传 API Key（脚本用它在 /api/v1/upload 上传，填后台「密钥管理」里生成的 key）</label><div class="keywrap"><input class="inp" id="ubApiKey" type="password" autocomplete="off" placeholder="ak_..."><button class="eyeBtn" id="ubApiKeyEye" type="button" title="显示/隐藏">👁</button></div></div>
-        <div class="fr" style="margin-top:10px"><label>StringSession（Telethon 登录凭证。首次需在本地运行一次 <code>python3 scripts/userbot_gen.py</code> 生成后粘到这里；只填不改不会丢失）</label><textarea class="inp" id="ubSession" style="min-height:88px;font-family:monospace;font-size:12px" placeholder="1BVtsOGcBu..." autocomplete="off"></textarea></div>
+        <div class="fr" style="margin-top:10px"><label>上传 API Key（脚本用它在 /api/v1/upload 上传，填后台「密钥管理」里生成的 key）</label><div class="keywrap"><input class="inp" id="ubApiKey" type="password" autocomplete="off" placeholder="ak_..."><button class="eyeBtn" id="ubApiKeyEye" type="button" title="显示/隐藏">👁</button></div><span class="cfg-status" id="ubApiKeyStatus"></span></div>
+        <div class="fr" style="margin-top:10px"><label>StringSession（Telethon 登录凭证。首次需在本地运行一次 <code>python3 scripts/userbot_gen.py</code> 生成后粘到这里；只填不改不会丢失）</label><textarea class="inp" id="ubSession" style="min-height:88px;font-family:monospace;font-size:12px" placeholder="1BVtsOGcBu..." autocomplete="off"></textarea><span class="cfg-status" id="ubSessionStatus"></span></div>
         <div class="fb" style="margin-top:12px">
           <button class="btn btn-primary" id="ubCfgSaveBtn">保存配置</button>
           <span id="ubTokenBox" style="font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:8px;flex-wrap:wrap"></span>
@@ -3134,6 +3137,25 @@ async function loadUbotPage() {
       document.getElementById("ubApiKey").value = rc.data.api_key || "";
       document.getElementById("ubSession").value = rc.data.session || "";
       UBOT_TOKEN = rc.data.token || "";
+      // 更新配置状态指示器
+      var cfgFields = [
+        { id: "ubApiId", val: rc.data.api_id },
+        { id: "ubApiHash", val: rc.data.api_hash },
+        { id: "ubApiKey", val: rc.data.api_key },
+        { id: "ubSession", val: rc.data.session }
+      ];
+      for (var i = 0; i < cfgFields.length; i++) {
+        var st = document.getElementById(cfgFields[i].id + "Status");
+        if (st) {
+          if (cfgFields[i].val) {
+            st.textContent = "已配置";
+            st.className = "cfg-status configured";
+          } else {
+            st.textContent = "未配置";
+            st.className = "cfg-status unconfigured";
+          }
+        }
+      }
       var tb = document.getElementById("ubTokenBox");
       tb.innerHTML = "";
       if (UBOT_TOKEN) {
