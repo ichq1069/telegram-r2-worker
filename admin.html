@@ -5373,6 +5373,15 @@ document.getElementById("mmSaveBtn").addEventListener("click", saveMainMenu);
 document.getElementById("mmBroadcastBtn").addEventListener("click", broadcastMainMenu);
 loadMainMenu();
 
+// 将 inline onclick 引用的函数暴露到全局作用域（IIFE 内函数外部不可见）
+window.srvCopyDeploy = srvCopyDeploy;
+window.srvEdit = srvEdit;
+window.srvDel = srvDel;
+window.ubotCopyCmd = ubotCopyCmd;
+window.ubotToggle = ubotToggle;
+window.ubotDel = ubotDel;
+window.ubotEdit = ubotEdit;
+
 // 格式化大小
 function fmtSize(b) {
   if (!b) return "0 B";
