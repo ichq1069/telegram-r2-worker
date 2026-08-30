@@ -49,6 +49,7 @@ export default {
     // 用户门户（普通用户用 key + key-pass 登录，查看密钥统计 + 生成公开接口 URL）
     if (m === 'GET' && p === '/user') return handleUserFromR2(env);
     if (m === 'POST' && p === '/api/user/login') return handleUserLogin(request, env);
+    if (m === 'POST' && p === '/api/user/register') return handleUserRegister(request, env);
     // 管理员使用手册（R2 静态页，与 admin.html 同源发布）
     if (m === 'GET' && p === '/admin/guide') return handleAdminGuideFromR2(env);
     if (m === 'GET' && p === '/favicon.ico') return new Response(null, { status: 204 });
@@ -98,6 +99,17 @@ export default {
     if (m === 'PATCH' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysUpdate(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/keys/toggle') return isAdmin ? handleAdminKeysToggle(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 密钥用户管理（注册用户列表 / 用户名查重 / 停用删除）
+    if (m === 'GET' && p === '/admin/api/key-users') return isAdmin ? handleAdminKeyUsers(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/key-users/username-check') return isAdmin ? handleAdminUsernameCheck(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 兑换码管理（生成/列表/编辑/删除）
+    if (m === 'GET' && p === '/admin/api/redeem') return isAdmin ? handleAdminRedeemList(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/redeem') return isAdmin ? handleAdminRedeemCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'PATCH' && p === '/admin/api/redeem') return isAdmin ? handleAdminRedeemUpdate(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'DELETE' && p === '/admin/api/redeem') return isAdmin ? handleAdminRedeemDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 调用日志（全部密钥调用记录 + 最近 1h/6h/24h 统计）
+    if (m === 'GET' && p === '/admin/api/call-logs') return isAdmin ? handleAdminCallLogs(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/call-stats') return isAdmin ? handleAdminCallStats(env) : json({ok:false,error:'Unauthorized'},401);
     // User stats
     if (m === 'GET' && p === '/admin/api/users') return isAdmin ? handleAdminUsers(env) : json({ok:false,error:'Unauthorized'},401);
     // 用户聊天交互统计（消息/命令/文件/Inline/回调 汇总 + 最近活跃）
@@ -225,12 +237,23 @@ export default {
       const today = cnTodayStr();
       const exp = rec.expires_at || '';
       rec.expired = exp ? (exp < today ? 1 : 0) : 0;
-      return json({ ok: true, data: { id: rec.id, key: rec.key, name: rec.name, scopes: rec.scopes, level: rec.level, enabled: rec.enabled, expires_at: rec.expires_at, expired: rec.expired, created_at: rec.created_at, last_used_at: rec.last_used_at, usage_count: rec.usage_count } });
+      return json({ ok: true, data: { id: rec.id, key: rec.key, name: rec.name, username: rec.username || '', scopes: rec.scopes, level: rec.level, enabled: rec.enabled, expires_at: rec.expires_at, expired: rec.expired, created_at: rec.created_at, last_used_at: rec.last_used_at, usage_count: rec.usage_count } });
     }
     if (m === 'POST' && p === '/api/user/tags') {
       const rec = await checkUserPortal(request, env);
       if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
       return handleAdminTags(env);
+    }
+    // 用户门户：当前密钥的调用日志（最近 200 条）+ 最近 1h/6h/24h 调用统计
+    if (m === 'POST' && p === '/api/user/logs') {
+      const rec = await checkUserPortal(request, env);
+      if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      return handleUserCallLogs(rec, env);
+    }
+    if (m === 'POST' && p === '/api/user/log-stats') {
+      const rec = await checkUserPortal(request, env);
+      if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      return handleUserCallStats(rec, env);
     }
 
     // API routes (require auth)
@@ -3754,8 +3777,21 @@ async function checkApiKey(request, env) {
     env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
     // 限流：settings.api_rate_limit = {enabled, limit_per_min}
     const limited = await applyRateLimit(env, k);
+    // 记录调用日志（fire and forget；路径/方法/IP 供后台查看与统计）
+    logApiCall(env, rec, request).catch(function(){});
     return { rec: rec, limited: limited };
   } catch (e) { console.error('checkApiKey:', e.message); return null; }
+}
+
+// 记录一次密钥调用（api_call_logs）。路径保留 /api/v1/... 原始地址（含 query），IP 取 CF 头。
+async function logApiCall(env, rec, request) {
+  if (!env.D1_DB || !rec) return;
+  try {
+    const u = new URL(request.url);
+    const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+    await env.D1_DB.prepare('INSERT INTO api_call_logs (key_id, api_key, path, method, ip, status, created_at) VALUES (?,?,?,?,?,?,?)')
+      .bind(rec.id, rec.key, u.pathname + u.search, request.method || 'GET', String(ip).slice(0, 45), 200, new Date().toISOString()).run();
+  } catch (e) { console.error('logApiCall:', e.message); }
 }
 
 // 公开 API 限流逻辑已移入 src/ratelimit.js（applyRateLimit），由顶部 import 引入
@@ -4016,7 +4052,7 @@ async function checkUserPortal(request, env) {
 
 async function handleAdminKeys(env) {
   try {
-    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,level,enabled,expires_at,created_at,last_used_at,usage_count,key_pass FROM api_keys ORDER BY id DESC').all();
+    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,level,enabled,expires_at,created_at,last_used_at,usage_count,key_pass,username FROM api_keys ORDER BY id DESC').all();
     const today = cnTodayStr();
     const out = (d.results || []).map(function(k) {
       const exp = k.expires_at || '';
@@ -4039,7 +4075,7 @@ async function handleAdminKeysCreate(request, env) {
     const key = genApiKey();
     const key_pass = String(b.key_pass || '').slice(0, 64);
     const passHash = key_pass ? await hashKeyPass(key_pass, key) : '';
-    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass) VALUES (?,?,?,?,1,?,0,?,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at, passHash).run();
+    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username) VALUES (?,?,?,?,1,?,0,?,?,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at, passHash, '').run();
     return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, name: name, scopes: scopes, level: level, expires_at: expires_at, has_pass: !!passHash } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -4087,6 +4123,218 @@ async function handleAdminKeysDelete(request, env) {
     if (!id) return json({ ok: false, error: 'id required' });
     await env.D1_DB.prepare('DELETE FROM api_keys WHERE id=?').bind(id).run();
     return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 生成兑换码（后台管理用），格式 RZ + 8 位随机大写
+function genRedeemCode() {
+  const arr = new Uint8Array(6);
+  crypto.getRandomValues(arr);
+  return 'RZ-' + Array.from(arr).map(function(b) { return '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ'[b % 32]; }).join('');
+}
+
+// ==================== 密钥用户管理 ====================
+// 列出注册用户（username 非空，即通过兑换码自助注册的账号），含密钥信息与调用统计
+async function handleAdminKeyUsers(env) {
+  try {
+    const d = await env.D1_DB.prepare(
+      "SELECT a.id, a.key, a.name, a.scopes, a.level, a.enabled, a.created_at, a.last_used_at, a.usage_count, a.expires_at, a.username, a.key_pass, " +
+      "(SELECT COUNT(*) FROM api_call_logs c WHERE c.key_id = a.id) AS call_count, " +
+      "(SELECT COUNT(*) FROM api_call_logs c WHERE c.key_id = a.id AND c.created_at >= datetime('now', '-1 hour')) AS calls_1h " +
+      "FROM api_keys a WHERE a.username IS NOT NULL AND a.username != '' ORDER BY a.id DESC").all();
+    const today = cnTodayStr();
+    const out = (d.results || []).map(function(k) {
+      const exp = k.expires_at || '';
+      k.expired = exp ? (exp < today ? 1 : 0) : 0;
+      k.has_pass = !!(k.key_pass);
+      delete k.key_pass;
+      return k;
+    });
+    return json({ ok: true, data: out });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户名查重（注册前/后台编辑时校验）：username 已存在则返回 taken:true
+async function handleAdminUsernameCheck(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const username = String(b.username || '').trim();
+    if (!username) return json({ ok: true, data: { taken: false } });
+    const cur = await env.D1_DB.prepare('SELECT id FROM api_keys WHERE username=? LIMIT 1').bind(username).first();
+    const excludeId = parseInt(b.exclude_id || '0', 10);
+    const taken = !!(cur && (!excludeId || cur.id !== excludeId));
+    return json({ ok: true, data: { taken: taken } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 兑换码管理 ====================
+async function handleAdminRedeemList(env) {
+  try {
+    const d = await env.D1_DB.prepare('SELECT * FROM redeem_codes ORDER BY id DESC').all();
+    return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 生成兑换码：{count, level, quota, note, expires_at, days}
+async function handleAdminRedeemCreate(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    let count = parseInt(b.count || '1', 10);
+    if (isNaN(count) || count < 1) count = 1;
+    if (count > 200) count = 200;
+    const level = sanitizeLevel(b.level);
+    let quota = parseInt(b.quota || '1', 10);
+    if (isNaN(quota) || quota < 1) quota = 1;
+    const note = String(b.note || '').slice(0, 120);
+    // 到期时间：优先取 days（从今天起），否则取明确日期
+    let expires_at = String(b.expires_at || '').trim().slice(0, 10);
+    const days = parseInt(b.days || '0', 10);
+    if (!expires_at && days > 0) {
+      const d = new Date(Date.now() + 8 * 3600 * 1000);
+      d.setDate(d.getDate() + days);
+      expires_at = d.toISOString().slice(0, 10);
+    }
+    const codes = [], now = new Date().toISOString();
+    for (let i = 0; i < count; i++) {
+      const code = genRedeemCode();
+      await env.D1_DB.prepare('INSERT INTO redeem_codes (code,level,quota,used_count,note,enabled,created_at,expires_at) VALUES (?,?,?,0,?,1,?,?)').bind(code, level, quota, note, now, expires_at).run();
+      codes.push(code);
+    }
+    return json({ ok: true, data: { count: codes.length, codes: codes, level: level, quota: quota, note: note, expires_at: expires_at } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminRedeemUpdate(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = parseInt(u.searchParams.get('id') || '0', 10);
+    if (!id) return json({ ok: false, error: 'id required' });
+    const b = await request.json().catch(function() { return {}; });
+    const fields = [], vals = [];
+    if (b.level !== undefined) { fields.push('level = ?'); vals.push(sanitizeLevel(b.level)); }
+    if (b.quota !== undefined) {
+      let q = parseInt(b.quota, 10);
+      if (isNaN(q) || q < 1) q = 1;
+      fields.push('quota = ?'); vals.push(q);
+    }
+    if (b.enabled !== undefined) { fields.push('enabled = ?'); vals.push(b.enabled ? 1 : 0); }
+    if (b.expires_at !== undefined) { fields.push('expires_at = ?'); vals.push(String(b.expires_at || '').trim().slice(0, 10)); }
+    if (b.note !== undefined) { fields.push('note = ?'); vals.push(String(b.note || '').slice(0, 120)); }
+    if (!fields.length) return json({ ok: false, error: 'nothing to update' });
+    vals.push(id);
+    await env.D1_DB.prepare('UPDATE redeem_codes SET ' + fields.join(', ') + ' WHERE id = ?').bind(...vals).run();
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleAdminRedeemDelete(request, env) {
+  try {
+    const u = new URL(request.url);
+    const id = u.searchParams.get('id');
+    if (!id) return json({ ok: false, error: 'id required' });
+    await env.D1_DB.prepare('DELETE FROM redeem_codes WHERE id=?').bind(id).run();
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 调用日志 ====================
+// admin：全部调用日志（分页 + 按密钥/路径筛选）
+async function handleAdminCallLogs(request, env) {
+  try {
+    const u = new URL(request.url);
+    const page = clampInt(u.searchParams.get('page') || '1', 1, 1);
+    const page_size = clampInt(u.searchParams.get('page_size') || '50', 50, 1, 200);
+    const key_id = u.searchParams.get('key_id');
+    const kw = u.searchParams.get('kw') || '';
+    let w = 'WHERE 1=1'; const p = [];
+    if (key_id) { w += ' AND key_id = ?'; p.push(parseInt(key_id, 10)); }
+    if (kw) {
+      w += ' AND (api_key LIKE ? OR path LIKE ? OR ip LIKE ?)';
+      p.push('%' + kw + '%', '%' + kw + '%', '%' + kw + '%');
+    }
+    const t = await env.D1_DB.prepare('SELECT COUNT(*) AS total FROM api_call_logs ' + w).bind(...p).first();
+    const d = await env.D1_DB.prepare('SELECT * FROM api_call_logs ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, page_size, (page - 1) * page_size).all();
+    return json({ ok: true, data: { total: t?.total || 0, page: page, page_size: page_size, items: d.results || [] } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// admin：最近 1h/6h/24h 调用统计（总数 + 各密钥维度）
+async function handleAdminCallStats(env) {
+  try {
+    const now = Date.now();
+    const mk = function(hours) {
+      const cutoff = new Date(now - hours * 3600 * 1000).toISOString();
+      return cutoff;
+    };
+    const total = function(cutoff) {
+      return env.D1_DB.prepare("SELECT COUNT(*) AS total FROM api_call_logs WHERE created_at >= ?").bind(cutoff).first();
+    };
+    const byKey = function(cutoff) {
+      return env.D1_DB.prepare(
+        "SELECT c.key_id, a.username, a.name, a.level, COUNT(*) AS calls " +
+        "FROM api_call_logs c LEFT JOIN api_keys a ON a.id = c.key_id " +
+        "WHERE c.created_at >= ? GROUP BY c.key_id ORDER BY calls DESC LIMIT 20").bind(cutoff).all();
+    };
+    const [t1, t6, t24, k1, k6, k24] = await Promise.all([total(mk(1)), total(mk(6)), total(mk(24)), byKey(mk(1)), byKey(mk(6)), byKey(mk(24))]);
+    return json({ ok: true, data: {
+      h1: { total: t1?.total || 0, byKey: (k1.results || []) },
+      h6: { total: t6?.total || 0, byKey: (k6.results || []) },
+      h24: { total: t24?.total || 0, byKey: (k24.results || []) }
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 用户门户：注册 / 调用日志 ====================
+// 用户自助注册：用兑换码兑换一个新密钥（生成 username + key-pass 自动登录）
+async function handleUserRegister(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable' }, 500);
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const username = String(b.username || '').trim().slice(0, 40);
+    const pass = String(b.password || '').trim().slice(0, 64);
+    const code = String(b.code || b.redeem_code || '').trim().toUpperCase();
+    if (!username) return json({ ok: false, error: '请填写用户名' }, 400);
+    if (!pass) return json({ ok: false, error: '请填写登录密码' }, 400);
+    if (pass.length < 6) return json({ ok: false, error: '密码至少 6 位' }, 400);
+    if (!code) return json({ ok: false, error: '请填写兑换码' }, 400);
+    // 用户名唯一
+    const dup = await env.D1_DB.prepare('SELECT id FROM api_keys WHERE username=? LIMIT 1').bind(username).first();
+    if (dup) return json({ ok: false, error: '用户名已被占用，请换一个' }, 400);
+    // 兑换码校验：存在、启用、未过期、未用完
+    const rc = await env.D1_DB.prepare('SELECT * FROM redeem_codes WHERE code=? LIMIT 1').bind(code).first();
+    if (!rc) return json({ ok: false, error: '兑换码不存在' }, 400);
+    if (!rc.enabled) return json({ ok: false, error: '兑换码已停用' }, 400);
+    if (rc.expires_at && rc.expires_at < cnTodayStr()) return json({ ok: false, error: '兑换码已过期' }, 400);
+    if (rc.used_count >= rc.quota) return json({ ok: false, error: '兑换码已用完' }, 400);
+    // 生成密钥并兑换
+    const key = genApiKey();
+    const passHash = await hashKeyPass(pass, key);
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username) VALUES (?,?,?,?,1,?,0,\'\',?,?)')
+      .bind(key, username, 'files:read', rc.level, now, passHash, username).run();
+    await env.D1_DB.prepare('UPDATE redeem_codes SET used_count = used_count + 1 WHERE id = ?').bind(rc.id).run();
+    return json({ ok: true, data: { username: username, key: key, level: rc.level, name: username } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户门户：当前密钥的调用日志（最近 200 条）
+async function handleUserCallLogs(rec, env) {
+  try {
+    const d = await env.D1_DB.prepare('SELECT id,path,method,ip,status,created_at FROM api_call_logs WHERE key_id=? ORDER BY id DESC LIMIT 200').bind(rec.id).all();
+    return json({ ok: true, data: (d.results || []) });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户门户：当前密钥最近 1h/6h/24h 调用统计
+async function handleUserCallStats(rec, env) {
+  try {
+    const now = Date.now();
+    const total = function(hours) {
+      const cutoff = new Date(now - hours * 3600 * 1000).toISOString();
+      return env.D1_DB.prepare('SELECT COUNT(*) AS total FROM api_call_logs WHERE key_id=? AND created_at >= ?').bind(rec.id, cutoff).first();
+    };
+    const [t1, t6, t24] = await Promise.all([total(1), total(6), total(24)]);
+    return json({ ok: true, data: { h1: t1?.total || 0, h6: t6?.total || 0, h24: t24?.total || 0 } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -5713,16 +5961,30 @@ async function handleUserFromR2(env) {
   }
 }
 
-// 用户门户登录：校验 key + key-pass，返回该密钥的统计信息（不含密码哈希）
+// 用户门户登录：支持「密钥 + key-pass」或「用户名 + 密码」两种方式，返回该密钥的统计信息（不含密码哈希）
 async function handleUserLogin(request, env) {
   try {
-    const rec = await checkUserPortal(request, env);
-    if (!rec) return json({ ok: false, error: '密钥或登录密码不正确' }, 401);
+    if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable' }, 500);
+    const b = await request.json().catch(function() { return {}; });
+    const username = String(b.username || '').trim();
+    let key = String(b.key || b.api_key || '').trim();
+    let pass = String(b.key_pass || b.password || '').trim();
+    // 用户名登录：先用用户名定位密钥，再用 key-pass 校验
+    if (!key && username) {
+      const byName = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE username=? LIMIT 1').bind(username).first();
+      if (!byName) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+      key = byName.key;
+    }
+    if (!key || !pass) return json({ ok: false, error: '请填写用户名/密钥与密码' }, 400);
+    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(key).first();
+    if (!rec || !rec.key_pass) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+    const hp = await hashKeyPass(pass, key);
+    if (hp !== rec.key_pass) return json({ ok: false, error: '用户名或密码不正确' }, 401);
     const today = cnTodayStr();
     const exp = rec.expires_at || '';
     rec.expired = exp ? (exp < today ? 1 : 0) : 0;
     return json({ ok: true, data: {
-      id: rec.id, key: rec.key, name: rec.name, scopes: rec.scopes, level: rec.level,
+      id: rec.id, key: rec.key, name: rec.name, username: rec.username || '', scopes: rec.scopes, level: rec.level,
       enabled: rec.enabled, expires_at: rec.expires_at, expired: rec.expired,
       created_at: rec.created_at, last_used_at: rec.last_used_at, usage_count: rec.usage_count
     } });

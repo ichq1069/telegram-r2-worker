@@ -60,6 +60,11 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
 .login-card button { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: background .2s; }
 .login-card button:hover { background: var(--primary-hover); }
 .login-card .err { color: var(--danger); font-size: 12px; margin-top: 10px; min-height: 18px; }
+.auth-tabs { display: flex; background: #f1f5f9; border-radius: 10px; padding: 4px; margin-bottom: 22px; }
+.auth-tab { flex: 1; padding: 9px 0; border: none; background: transparent; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--text-secondary); cursor: pointer; transition: all .2s; }
+.auth-tab.on { background: #fff; color: var(--primary); box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+.auth-pane { display: none; }
+.auth-pane.on { display: block; }
 
 /* App */
 .topbar { background: #fff; border-bottom: 1px solid var(--border); padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
@@ -90,11 +95,26 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
   <div class="login-card">
     <div class="logo">🔑</div>
     <h1>用户门户</h1>
-    <div class="sub">使用管理员发放的 API 密钥 + 登录密码查看统计并生成接口链接</div>
-    <div class="field"><label>API 密钥</label><input id="loginKey" placeholder="vk_..." autocomplete="off" spellcheck="false"></div>
-    <div class="field"><label>登录密码（key-pass）</label><input id="loginPass" type="password" placeholder="管理员告知的登录密码" autocomplete="current-password"></div>
-    <button id="loginBtn">登 录</button>
-    <div class="err" id="loginErr"></div>
+    <div class="sub">密钥统计 · 接口生成 · 调用日志</div>
+    <div class="auth-tabs">
+      <button class="auth-tab on" data-auth="login">登 录</button>
+      <button class="auth-tab" data-auth="register">注 册</button>
+    </div>
+    <!-- 登录 -->
+    <div class="auth-pane on" id="pane-login">
+      <div class="field"><label>用户名 或 API 密钥</label><input id="loginKey" placeholder="用户名 / vk_..." autocomplete="username" spellcheck="false"></div>
+      <div class="field"><label>密码 / key-pass</label><input id="loginPass" type="password" placeholder="注册时设置的密码 或 管理员告知的 key-pass" autocomplete="current-password"></div>
+      <button id="loginBtn">登 录</button>
+      <div class="err" id="loginErr"></div>
+    </div>
+    <!-- 注册 -->
+    <div class="auth-pane" id="pane-register">
+      <div class="field"><label>用户名</label><input id="regName" placeholder="登录用的用户名（唯一）" autocomplete="username" spellcheck="false"></div>
+      <div class="field"><label>密码（至少 6 位）</label><input id="regPass" type="password" placeholder="登录密码" autocomplete="new-password"></div>
+      <div class="field"><label>兑换码</label><input id="regCode" placeholder="RZ-XXXXXXXX（管理员发放）" autocomplete="off" spellcheck="false"></div>
+      <button id="regBtn">注 册</button>
+      <div class="err" id="regErr"></div>
+    </div>
   </div>
 </div>
 
@@ -128,6 +148,22 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
         <div class="stat-card"><div class="value" id="stLastUsed" style="font-size:16px">-</div><div class="label">最近调用</div></div>
         <div class="stat-card"><div class="value" id="stCreated" style="font-size:16px">-</div><div class="label">创建时间</div></div>
         <div class="stat-card"><div class="value" id="stKey" style="font-size:13px;word-break:break-all">-</div><div class="label">API 密钥</div></div>
+      </div>
+    </div>
+
+    <!-- 调用统计与日志 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>调用统计与日志 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">本密钥调用公开接口的记录</span></div>
+      <div class="stats-grid" style="margin-bottom:14px">
+        <div class="stat-card"><div class="value" id="stH1">-</div><div class="label">近1小时调用</div></div>
+        <div class="stat-card"><div class="value" id="stH6">-</div><div class="label">近6小时调用</div></div>
+        <div class="stat-card"><div class="value" id="stH24">-</div><div class="label">近24小时调用</div></div>
+      </div>
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:10px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="background:#f8fafc"><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">时间</th><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">方法</th><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">路径</th><th style="padding:8px 10px;text-align:left;color:var(--text-secondary)">IP</th></tr></thead>
+          <tbody id="callLogBody"><tr><td colspan="4" style="padding:20px;text-align:center;color:var(--text-secondary)">加载中...</td></tr></tbody>
+        </table>
       </div>
     </div>
 
@@ -209,7 +245,7 @@ function portal(method, path, body) {
 function showApp(data) {
   document.getElementById("loginScreen").style.display = "none";
   document.getElementById("appMain").style.display = "block";
-  document.getElementById("keyNameTop").textContent = data.name || data.key;
+  document.getElementById("keyNameTop").textContent = data.username || data.name || data.key;
   document.getElementById("levelTop").innerHTML = levelBadge(data.level);
   document.getElementById("kiLevel").innerHTML = "级别 " + levelBadge(data.level);
   document.getElementById("kiStatus").innerHTML = data.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>';
@@ -222,7 +258,36 @@ function showApp(data) {
   document.getElementById("stCreated").textContent = fmtDT(data.created_at);
   document.getElementById("stKey").textContent = data.key;
   loadTags();
+  loadCallStatsAndLogs();
   genUrl();
+}
+
+// 调用统计（1h/6h/24h）+ 最近日志
+function loadCallStatsAndLogs() {
+  portal("POST", "/api/user/log-stats").then(function(r) {
+    if (r.ok && r.data) {
+      document.getElementById("stH1").textContent = r.data.h1 || 0;
+      document.getElementById("stH6").textContent = r.data.h6 || 0;
+      document.getElementById("stH24").textContent = r.data.h24 || 0;
+    }
+  });
+  portal("POST", "/api/user/logs").then(function(r) {
+    var tb = document.getElementById("callLogBody");
+    if (!r.ok || !r.data || !r.data.length) {
+      tb.innerHTML = '<tr><td colspan="4" style="padding:20px;text-align:center;color:var(--text-secondary)">' + (r.ok ? "暂无调用记录" : (r.error || "加载失败")) + '</td></tr>';
+      return;
+    }
+    var h = "";
+    var n = Math.min(r.data.length, 50);
+    for (var i = 0; i < n; i++) {
+      var L = r.data[i];
+      h += '<tr><td style="padding:7px 10px;border-top:1px solid var(--border);color:var(--text-secondary);white-space:nowrap">' + fmtDT(L.created_at) + '</td>' +
+        '<td style="padding:7px 10px;border-top:1px solid var(--border)">' + escStr(L.method || "GET") + '</td>' +
+        '<td style="padding:7px 10px;border-top:1px solid var(--border);word-break:break-all"><code>' + escStr(L.path) + '</code></td>' +
+        '<td style="padding:7px 10px;border-top:1px solid var(--border);color:var(--text-secondary)">' + escStr(L.ip || "-") + '</td></tr>';
+    }
+    tb.innerHTML = h;
+  });
 }
 
 // 登录
@@ -231,26 +296,80 @@ function doLogin() {
   var p = document.getElementById("loginPass").value.trim();
   var errEl = document.getElementById("loginErr");
   errEl.textContent = "";
-  if (!k || !p) { errEl.textContent = "请填写 API 密钥和登录密码"; return; }
+  if (!k || !p) { errEl.textContent = "请填写用户名/密钥和密码"; return; }
   document.getElementById("loginBtn").disabled = true;
+  var body = { key_pass: p };
+  if (k.indexOf("vk_") === 0) body.key = k; else body.username = k;
   fetch(OR + "/api/user/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: k, key_pass: p })
+    body: JSON.stringify(body)
   }).then(function(r) { return r.json(); }).then(function(j) {
     document.getElementById("loginBtn").disabled = false;
-    if (!j.ok || !j.data) { errEl.textContent = j.error || "登录失败，请检查密钥与密码"; return; }
-    AK = k; KP = p;
-    try { localStorage.setItem("up_key", k); } catch (e) {}
+    if (!j.ok || !j.data) { errEl.textContent = j.error || "登录失败，请检查用户名/密钥与密码"; return; }
+    AK = j.data.key; KP = p;
+    try { localStorage.setItem("up_key", j.data.key); } catch (e) {}
     showApp(j.data);
   }).catch(function() {
     document.getElementById("loginBtn").disabled = false;
     errEl.textContent = "网络错误，请重试";
   });
 }
+
+// 注册（兑换码兑换新密钥）
+function doRegister() {
+  var nm = document.getElementById("regName").value.trim();
+  var pw = document.getElementById("regPass").value.trim();
+  var cd = document.getElementById("regCode").value.trim();
+  var errEl = document.getElementById("regErr");
+  errEl.textContent = "";
+  if (!nm || !pw || !cd) { errEl.textContent = "请填写用户名、密码和兑换码"; return; }
+  if (pw.length < 6) { errEl.textContent = "密码至少 6 位"; return; }
+  document.getElementById("regBtn").disabled = true;
+  fetch(OR + "/api/user/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: nm, password: pw, code: cd })
+  }).then(function(r) { return r.json(); }).then(function(j) {
+    document.getElementById("regBtn").disabled = false;
+    if (!j.ok || !j.data) { errEl.textContent = j.error || "注册失败，请检查兑换码"; return; }
+    // 注册成功 → 自动登录
+    toast("注册成功，已自动登录", 1);
+    AK = j.data.key; KP = pw;
+    try { localStorage.setItem("up_key", j.data.key); } catch (e) {}
+    fetch(OR + "/api/user/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: j.data.username, key_pass: pw })
+    }).then(function(r) { return r.json(); }).then(function(j2) {
+      if (j2.ok && j2.data) showApp(j2.data);
+      else showApp(j.data);
+    }).catch(function() { showApp(j.data); });
+    document.getElementById("regName").value = "";
+    document.getElementById("regPass").value = "";
+    document.getElementById("regCode").value = "";
+  }).catch(function() {
+    document.getElementById("regBtn").disabled = false;
+    errEl.textContent = "网络错误，请重试";
+  });
+}
+
+// 登录/注册标签切换
+document.querySelectorAll(".auth-tab").forEach(function(t) {
+  t.addEventListener("click", function() {
+    document.querySelectorAll(".auth-tab").forEach(function(x) { x.classList.remove("on"); });
+    document.querySelectorAll(".auth-pane").forEach(function(x) { x.classList.remove("on"); });
+    t.classList.add("on");
+    document.getElementById("pane-" + t.getAttribute("data-auth")).classList.add("on");
+  });
+});
 document.getElementById("loginBtn").addEventListener("click", doLogin);
+document.getElementById("regBtn").addEventListener("click", doRegister);
 ["loginKey", "loginPass"].forEach(function(id) {
   document.getElementById(id).addEventListener("keydown", function(e) { if (e.key === "Enter") doLogin(); });
+});
+["regName", "regPass", "regCode"].forEach(function(id) {
+  document.getElementById(id).addEventListener("keydown", function(e) { if (e.key === "Enter") doRegister(); });
 });
 document.getElementById("logoutBtn").addEventListener("click", function() {
   AK = ""; KP = "";

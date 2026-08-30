@@ -795,6 +795,56 @@ https://example.com/b.jpg"></textarea></div>
       </div>
     </div>
 
+    <!-- 密钥用户（注册用户管理） -->
+    <div class="panel" id="panel-keyusers">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>密钥用户管理 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">通过兑换码在 /user 自助注册的账号，可直接按用户名管理</span></div>
+        <div style="font-size:12px;color:var(--text-secondary);margin:0 0 12px">注册用户默认级别来自其兑换码。编辑/停用/删除操作与密钥管理一致（改名 → 在「密钥管理」页编辑）。</div>
+        <div class="tbl-wrap"><table><thead><tr><th>用户名</th><th>密钥</th><th>级别</th><th>状态</th><th>累计调用</th><th>近1小时</th><th>到期</th><th>注册时间</th><th>最近调用</th><th>操作</th></tr></thead><tbody id="keyUserList"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- 兑换码 -->
+    <div class="panel" id="panel-redeem">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>生成兑换码 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">用户凭兑换码在 /user 自助注册，获得对应级别的新密钥</span></div>
+        <div class="fbs" style="flex-wrap:wrap">
+          <div class="fr" style="flex:0 0 auto"><label>数量 (1-200)</label><input class="inp" type="number" id="rdCount" value="1" min="1" max="200" style="width:90px"></div>
+          <div class="fr" style="flex:0 0 auto"><label>级别（兑换后的密钥级别）</label><select class="inp" id="rdLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
+          <div class="fr" style="flex:0 0 auto"><label>可用次数 / 码</label><input class="inp" type="number" id="rdQuota" value="1" min="1" style="width:90px"></div>
+          <div class="fr" style="flex:0 0 auto"><label>有效天数（0=永久）</label><input class="inp" type="number" id="rdDays" value="30" min="0" style="width:90px"></div>
+          <div class="fr" style="flex:1;min-width:200px"><label>备注</label><input class="inp" id="rdNote" placeholder="发给谁 / 用途"></div>
+          <button class="btn btn-primary" id="rdGenBtn" style="align-self:flex-end">+ 生成</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>兑换码列表</div>
+        <div class="tbl-wrap"><table><thead><tr><th>兑换码</th><th>级别</th><th>已用/总量</th><th>状态</th><th>到期</th><th>备注</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="redeemList"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- 调用日志 -->
+    <div class="panel" id="panel-logs">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>调用统计 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">密钥调用公开接口的次数（最近 1h / 6h / 24h）</span></div>
+        <div class="stats-grid" id="callStatsGrid"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>调用日志</div>
+        <div class="fbs" style="flex-wrap:wrap;margin-bottom:10px">
+          <input class="inp" id="clKw" placeholder="搜索密钥/路径/IP" style="flex:1;min-width:200px">
+          <select class="inp" id="clKeySel"><option value="">全部密钥</option></select>
+          <button class="btn btn-primary" id="clSearchBtn">查询</button>
+        </div>
+        <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>密钥</th><th>方法</th><th>路径</th><th>IP</th><th>状态</th><th>时间</th></tr></thead><tbody id="callLogList"></tbody></table></div>
+        <div class="fb" style="margin-top:10px">
+          <button class="btn btn-ghost btn-sm" id="clPrev">上一页</button>
+          <span style="font-size:12px;color:var(--text-secondary)" id="clPageInfo">-</span>
+          <button class="btn btn-ghost btn-sm" id="clNext">下一页</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 用户 -->
     <div class="panel" id="panel-users">
       <div class="card">
@@ -1136,7 +1186,7 @@ function toast(msg, ok) {
 }
 
 // 初始化
-var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","show","cmds","api","ops"];
+var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","ops"];
 function switchTab(name) {
   var panels = document.querySelectorAll(".panel");
   var tabs = document.querySelectorAll("#tabBar .tab");
@@ -1158,6 +1208,9 @@ function switchTab(name) {
   if (name === "tags") loadTagsPage();
   if (name === "gen") loadGen();
   if (name === "keys") { loadKeys(); loadRateLimitCfg(); }
+  if (name === "keyusers") loadKeyUsers();
+  if (name === "redeem") loadRedeem();
+  if (name === "logs") { loadCallStats(); loadCallKeySel(); loadCallLogs(1); }
   if (name === "users") { loadUsers(); loadUserInteractions(); }
   if (name === "show") loadShowConfig();
   if (name === "cmds") loadCmds();
@@ -1171,7 +1224,7 @@ function init() {
     { label: "概览", items: [["stats","概览","📊"],["users","用户统计","👥"]] },
     { label: "文件", items: [["files","Tele文件","📁"],["unsaved","未转存","⏳"],["trash","回收站","🗑"]] },
     { label: "素材库", items: [["pool","共享库","📚"],["private","私密库","🔒"],["quicktag","快速打标","⚡"],["tags","标签库","🏷"]] },
-    { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"]] },
+    { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"],["keyusers","密钥用户","👤"],["redeem","兑换码","🎟"],["logs","调用日志","📈"]] },
     { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"]] },
     { label: "系统", items: [["ops","运维工具","🛠"]] }
   ];
@@ -3805,6 +3858,187 @@ async function loadKeys() {
   h += '</tbody></table>';
   el.innerHTML = h;
 }
+// ==================== 密钥用户管理 ====================
+async function loadKeyUsers() {
+  var el = document.getElementById("keyUserList");
+  if (!el) return;
+  var r = await api("GET", "/admin/api/key-users");
+  if (!r.ok) { el.innerHTML = '<tr><td colspan="10">' + (r.error || "加载失败") + '</td></tr>'; return; }
+  var d = r.data || [];
+  if (!d.length) { el.innerHTML = '<tr><td colspan="10"><div class="empty">暂无注册用户。在「兑换码」页生成兑换码发给用户，对方在 /user 自助注册后即出现在这里。</div></td></tr>'; return; }
+  var h = "";
+  for (var i = 0; i < d.length; i++) {
+    var u = d[i];
+    var expTxt = u.expires_at ? (u.expired ? '<span class="badge badge-red">已过期 ' + escStr(u.expires_at) + '</span>' : '<span class="badge badge-yellow">' + escStr(u.expires_at) + '</span>') : '<span style="font-size:11px;color:var(--text-secondary)">永久</span>';
+    h += '<tr><td><strong>' + escStr(u.username) + '</strong>' + (u.name && u.name !== u.username ? '<div style="font-size:11px;color:var(--text-secondary)">' + escStr(u.name) + '</div>' : '') + '</td>';
+    h += '<td><code style="font-size:11px">' + escStr(u.key) + '</code> <button class="btn btn-ghost btn-sm" data-ku="copy" data-key="' + escStr(u.key) + '">复制</button></td>';
+    h += '<td>' + levelBadge(u.level) + '</td>';
+    h += '<td>' + (u.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>') + '</td>';
+    h += '<td>' + (u.usage_count || 0) + '</td>';
+    h += '<td>' + (u.calls_1h || 0) + '</td>';
+    h += '<td>' + expTxt + '</td>';
+    h += '<td class="file-date">' + (u.created_at ? String(u.created_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
+    h += '<td class="file-date">' + (u.last_used_at ? String(u.last_used_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
+    h += '<td><button class="btn btn-ghost btn-sm" data-ku="edit" data-id="' + u.id + '" data-name="' + escStr(u.username) + '" data-level="' + escStr(u.level) + '" data-expires="' + (u.expires_at || "") + '" data-has-pass="' + (u.has_pass ? 1 : 0) + '">编辑</button> ';
+    h += '<button class="btn btn-ghost btn-sm" data-ku="toggle" data-id="' + u.id + '" data-enabled="' + u.enabled + '">' + (u.enabled ? "停用" : "启用") + '</button> ';
+    h += '<button class="btn btn-danger btn-sm" data-ku="del" data-id="' + u.id + '">删除</button></td></tr>';
+  }
+  el.innerHTML = h;
+}
+document.addEventListener("click", function(e) {
+  var t = e.target.closest("[data-ku]");
+  if (!t) return;
+  var act = t.getAttribute("data-ku");
+  if (act === "copy") {
+    var kv = t.getAttribute("data-key");
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(kv).then(function() { toast("密钥已复制", 1); }, function() { fallbackCopy(kv); });
+    else fallbackCopy(kv);
+  } else if (act === "edit") {
+    editKeyModal(parseInt(t.getAttribute("data-id"), 10), t.getAttribute("data-name") || "", t.getAttribute("data-expires") || "", t.getAttribute("data-level") || "pt", t.getAttribute("data-has-pass") === "1");
+  } else if (act === "toggle") {
+    var kid = parseInt(t.getAttribute("data-id"), 10);
+    api("POST", "/admin/api/keys/toggle", { id: kid, enabled: t.getAttribute("data-enabled") === "0" }).then(function(r) { if (r.ok) { toast("已更新", 1); loadKeyUsers(); loadKeys(); } });
+  } else if (act === "del") {
+    var kid2 = parseInt(t.getAttribute("data-id"), 10);
+    if (confirm("确定删除该用户及其密钥? 其程序将无法再调用接口")) {
+      api("DELETE", "/admin/api/keys?id=" + kid2).then(function(r) { if (r.ok) { toast("已删除", 1); loadKeyUsers(); loadKeys(); } });
+    }
+  }
+});
+// ==================== 兑换码管理 ====================
+async function loadRedeem() {
+  var el = document.getElementById("redeemList");
+  if (!el) return;
+  var r = await api("GET", "/admin/api/redeem");
+  if (!r.ok) { el.innerHTML = '<tr><td colspan="8">' + (r.error || "加载失败") + '</td></tr>'; return; }
+  var d = r.data || [];
+  if (!d.length) { el.innerHTML = '<tr><td colspan="8"><div class="empty">暂无兑换码，上方生成后发给用户</div></td></tr>'; return; }
+  var h = "";
+  for (var i = 0; i < d.length; i++) {
+    var c = d[i];
+    var usedUp = (c.used_count || 0) >= (c.quota || 1);
+    var expTxt = c.expires_at ? (c.expires_at < new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10) ? '<span class="badge badge-red">已过期</span>' : '<span class="badge badge-yellow">' + escStr(c.expires_at) + '</span>') : '<span style="font-size:11px;color:var(--text-secondary)">永久</span>';
+    h += '<tr><td><code style="font-size:12px;font-weight:600">' + escStr(c.code) + '</code> <button class="btn btn-ghost btn-sm" data-rd="copy" data-code="' + escStr(c.code) + '">复制</button></td>';
+    h += '<td>' + levelBadge(c.level) + '</td>';
+    h += '<td>' + (c.used_count || 0) + '/' + (c.quota || 1) + '</td>';
+    h += '<td>' + (usedUp ? '<span class="badge badge-red">已用完</span>' : (c.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>')) + '</td>';
+    h += '<td>' + expTxt + '</td>';
+    h += '<td>' + escStr(c.note || "-") + '</td>';
+    h += '<td class="file-date">' + (c.created_at ? String(c.created_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
+    h += '<td><button class="btn btn-ghost btn-sm" data-rd="toggle" data-id="' + c.id + '" data-enabled="' + (c.enabled ? 1 : 0) + '">' + (c.enabled ? "停用" : "启用") + '</button> ';
+    h += '<button class="btn btn-danger btn-sm" data-rd="del" data-id="' + c.id + '">删除</button></td></tr>';
+  }
+  el.innerHTML = h;
+}
+document.getElementById("rdGenBtn").addEventListener("click", function() {
+  var body = {
+    count: parseInt(document.getElementById("rdCount").value || "1", 10),
+    level: document.getElementById("rdLevel").value,
+    quota: parseInt(document.getElementById("rdQuota").value || "1", 10),
+    days: parseInt(document.getElementById("rdDays").value || "0", 10),
+    note: document.getElementById("rdNote").value.trim()
+  };
+  document.getElementById("rdGenBtn").disabled = true;
+  api("POST", "/admin/api/redeem", body).then(function(r) {
+    document.getElementById("rdGenBtn").disabled = false;
+    if (!r.ok) { toast(r.error || "生成失败", 0); return; }
+    var txt = r.data.codes.join("\n");
+    toast("已生成 " + r.data.count + " 个兑换码（已复制到剪贴板）", 1);
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt);
+    else fallbackCopy(txt);
+    loadRedeem();
+  });
+});
+document.addEventListener("click", function(e) {
+  var t = e.target.closest("[data-rd]");
+  if (!t) return;
+  var act = t.getAttribute("data-rd");
+  if (act === "copy") {
+    var cv = t.getAttribute("data-code");
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(cv).then(function() { toast("已复制", 1); });
+    else fallbackCopy(cv);
+  } else if (act === "toggle") {
+    var id = parseInt(t.getAttribute("data-id"), 10);
+    api("PATCH", "/admin/api/redeem?id=" + id, { enabled: t.getAttribute("data-enabled") === "0" }).then(function(r) { if (r.ok) { toast("已更新", 1); loadRedeem(); } });
+  } else if (act === "del") {
+    var id2 = parseInt(t.getAttribute("data-id"), 10);
+    if (confirm("确定删除该兑换码?")) {
+      api("DELETE", "/admin/api/redeem?id=" + id2).then(function(r) { if (r.ok) { toast("已删除", 1); loadRedeem(); } });
+    }
+  }
+});
+// ==================== 调用日志 ====================
+var clPage = 1;
+var clKeyId = "";
+async function loadCallStats() {
+  var grid = document.getElementById("callStatsGrid");
+  if (!grid) return;
+  var r = await api("GET", "/admin/api/call-stats");
+  if (!r.ok) { grid.innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
+  var d = r.data || {};
+  var def = function(o) { return o || { total: 0, byKey: [] }; };
+  var h1 = def(d.h1), h6 = def(d.h6), h24 = def(d.h24);
+  var topKey = function(o) { return (o.byKey && o.byKey.length) ? escStr(o.byKey[0].username || o.byKey[0].name || ("#" + o.byKey[0].key_id)) + " " + o.byKey[0].calls + "次" : "-"; };
+  var cards = [
+    ["近1小时调用", h1.total, "最高 " + topKey(h1)],
+    ["近6小时调用", h6.total, "最高 " + topKey(h6)],
+    ["近24小时调用", h24.total, "最高 " + topKey(h24)]
+  ];
+  var gh = "";
+  for (var i = 0; i < cards.length; i++) {
+    gh += '<div class="stat-card"><div class="value">' + (cards[i][1] > 9999 ? (cards[i][1] / 1000).toFixed(1) + "k" : cards[i][1]) + '</div><div class="label">' + cards[i][0] + '</div><div style="font-size:10px;color:var(--text-secondary);margin-top:2px;word-break:break-all">' + cards[i][2] + '</div></div>';
+  }
+  grid.innerHTML = gh;
+}
+async function loadCallLogs(page) {
+  if (page) clPage = page;
+  var el = document.getElementById("callLogList");
+  if (!el) return;
+  var kw = document.getElementById("clKw").value.trim();
+  var q = "page=" + clPage + "&page_size=50";
+  if (clKeyId) q += "&key_id=" + clKeyId;
+  if (kw) q += "&kw=" + encodeURIComponent(kw);
+  var r = await api("GET", "/admin/api/call-logs?" + q);
+  if (!r.ok) { el.innerHTML = '<tr><td colspan="7">' + (r.error || "加载失败") + '</td></tr>'; return; }
+  var d = r.data || {};
+  var items = d.items || [];
+  var h = "";
+  if (!items.length) { el.innerHTML = '<tr><td colspan="7"><div class="empty">暂无调用记录</div></td></tr>'; }
+  else {
+    for (var i = 0; i < items.length; i++) {
+      var L = items[i];
+      h += '<tr><td>' + L.id + '</td>';
+      h += '<td><code style="font-size:11px">' + escStr(L.api_key) + '</code></td>';
+      h += '<td>' + escStr(L.method || "GET") + '</td>';
+      h += '<td style="word-break:break-all;max-width:360px"><code style="font-size:11px">' + escStr(L.path) + '</code></td>';
+      h += '<td>' + escStr(L.ip || "-") + '</td>';
+      h += '<td>' + (L.status === 200 ? '<span class="badge badge-green">' + L.status + '</span>' : '<span class="badge badge-red">' + L.status + '</span>') + '</td>';
+      h += '<td class="file-date">' + (L.created_at ? String(L.created_at).replace("T", " ").slice(0, 16) : "-") + '</td></tr>';
+    }
+  }
+  el.innerHTML = h;
+  document.getElementById("clPageInfo").textContent = "共 " + (d.total || 0) + " 条 · 第 " + (d.page || 1) + " 页";
+  var maxPg = Math.max(1, Math.ceil((d.total || 0) / (d.page_size || 50)));
+  var pn = document.getElementById("clNext"), pp = document.getElementById("clPrev");
+  if (pn) pn.style.visibility = clPage >= maxPg ? "hidden" : "visible";
+  if (pp) pp.style.visibility = clPage <= 1 ? "hidden" : "visible";
+}
+async function loadCallKeySel() {
+  var sel = document.getElementById("clKeySel");
+  if (!sel) return;
+  var r = await api("GET", "/admin/api/key-users");
+  var opts = '<option value="">全部密钥</option>';
+  var d = (r.ok && r.data) ? r.data : [];
+  for (var i = 0; i < d.length; i++) {
+    opts += '<option value="' + d[i].id + '">' + escStr(d[i].username) + ' (#' + d[i].id + ')</option>';
+  }
+  sel.innerHTML = opts;
+}
+document.getElementById("clSearchBtn").addEventListener("click", function() { loadCallLogs(1); });
+document.getElementById("clKw").addEventListener("keydown", function(e) { if (e.key === "Enter") loadCallLogs(1); });
+document.getElementById("clKeySel").addEventListener("change", function() { clKeyId = this.value; loadCallLogs(1); });
+document.getElementById("clPrev").addEventListener("click", function() { if (clPage > 1) loadCallLogs(clPage - 1); });
+document.getElementById("clNext").addEventListener("click", function() { loadCallLogs(clPage + 1); });
 function createKey() {
   var name = document.getElementById("keyName").value.trim();
   var expires_at = document.getElementById("keyExpires") ? document.getElementById("keyExpires").value : "";

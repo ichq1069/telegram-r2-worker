@@ -27,14 +27,19 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);" +
     "CREATE TABLE IF NOT EXISTS bot_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT UNIQUE, response TEXT, description TEXT, enabled INTEGER, created_at TEXT, menu TEXT DEFAULT '');" +
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);" +
-    "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0, expires_at TEXT, level TEXT DEFAULT 'pt', key_pass TEXT);" +
+    "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0, expires_at TEXT, level TEXT DEFAULT 'pt', key_pass TEXT, username TEXT);" +
     "CREATE TABLE IF NOT EXISTS random_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, thumb_url TEXT, title TEXT, tags TEXT DEFAULT '', file_type TEXT DEFAULT 'photo', width INTEGER, height INTEGER, file_size INTEGER, source TEXT DEFAULT 'manual', tg_file_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT, level TEXT DEFAULT 'pt', is_private INTEGER DEFAULT 0);" +
     "CREATE INDEX IF NOT EXISTS idx_pool_url ON random_pool(url);" +
     "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL, window TEXT NOT NULL, count INTEGER DEFAULT 0, UNIQUE(key, window));" +
     "CREATE TABLE IF NOT EXISTS worker_stats (day TEXT PRIMARY KEY, requests INTEGER DEFAULT 0, errors INTEGER DEFAULT 0, updated_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS user_stats (user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT, messages INTEGER DEFAULT 0, commands INTEGER DEFAULT 0, files INTEGER DEFAULT 0, inline_queries INTEGER DEFAULT 0, callback_clicks INTEGER DEFAULT 0, last_active_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS known_chats (chat_id TEXT PRIMARY KEY, chat_type TEXT DEFAULT '', chat_title TEXT, chat_username TEXT, last_active_at TEXT);"
+    "CREATE TABLE IF NOT EXISTS known_chats (chat_id TEXT PRIMARY KEY, chat_type TEXT DEFAULT '', chat_title TEXT, chat_username TEXT, last_active_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS redeem_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE NOT NULL, level TEXT DEFAULT 'pt', quota INTEGER DEFAULT 1, used_count INTEGER DEFAULT 0, note TEXT DEFAULT '', enabled INTEGER DEFAULT 1, created_at TEXT, expires_at TEXT);" +
+    "CREATE INDEX IF NOT EXISTS idx_redeem_code ON redeem_codes(code);" +
+    "CREATE TABLE IF NOT EXISTS api_call_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER, api_key TEXT, path TEXT, method TEXT, ip TEXT, status INTEGER DEFAULT 200, created_at TEXT);" +
+    "CREATE INDEX IF NOT EXISTS idx_calls_key ON api_call_logs(key_id);" +
+    "CREATE INDEX IF NOT EXISTS idx_calls_created ON api_call_logs(created_at);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -133,6 +138,15 @@ export async function ensureTables(db) {
         console.log('migrated: api_keys.key_pass column');
       }
     } catch (e8) { console.error('api_keys key_pass migration:', e8.message); }
+    // api_keys.username：用户注册的用户名（兑换码兑换后生成，唯一，用于 user 门户用户名登录）
+    try {
+      const ak4 = await db.prepare("PRAGMA table_info(api_keys)").all();
+      const ak4n = (ak4.results || []).map(function(c) { return c.name; });
+      if (ak4n.indexOf('username') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN username TEXT");
+        console.log('migrated: api_keys.username column');
+      }
+    } catch (e9) { console.error('api_keys username migration:', e9.message); }
     // user_stats 交互统计列（旧库有表但缺列时补加，避免 INSERT 失败）
     try {
       const us = await db.prepare("PRAGMA table_info(user_stats)").all();
