@@ -46,6 +46,9 @@ export default {
     if (m === 'GET' && p === '/gallery') return handleGalleryPage();
     if (m === 'GET' && p === '/gallery/data') return handleGalleryData(request, env);
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
+    // 用户门户（普通用户用 key + key-pass 登录，查看密钥统计 + 生成公开接口 URL）
+    if (m === 'GET' && p === '/user') return handleUserFromR2(env);
+    if (m === 'POST' && p === '/api/user/login') return handleUserLogin(request, env);
     // 管理员使用手册（R2 静态页，与 admin.html 同源发布）
     if (m === 'GET' && p === '/admin/guide') return handleAdminGuideFromR2(env);
     if (m === 'GET' && p === '/favicon.ico') return new Response(null, { status: 204 });
@@ -214,6 +217,20 @@ export default {
       if (k.limited) return json({ ok: false, error: 'Rate limit exceeded' }, 429);
       const keyLevel = (k.rec && k.rec.level) || 'pt';
       return handlePublicUpload(request, env, keyLevel);
+    }
+    // 用户门户：当前密钥的统计信息 + 公开接口生成所需标签（key + key-pass 鉴权）
+    if (m === 'POST' && p === '/api/user/stats') {
+      const rec = await checkUserPortal(request, env);
+      if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      const today = cnTodayStr();
+      const exp = rec.expires_at || '';
+      rec.expired = exp ? (exp < today ? 1 : 0) : 0;
+      return json({ ok: true, data: { id: rec.id, key: rec.key, name: rec.name, scopes: rec.scopes, level: rec.level, enabled: rec.enabled, expires_at: rec.expires_at, expired: rec.expired, created_at: rec.created_at, last_used_at: rec.last_used_at, usage_count: rec.usage_count } });
+    }
+    if (m === 'POST' && p === '/api/user/tags') {
+      const rec = await checkUserPortal(request, env);
+      if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      return handleAdminTags(env);
     }
 
     // API routes (require auth)
@@ -3958,13 +3975,40 @@ function genApiKey() {
   return 'vk_' + Array.from(arr).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
 }
 
+// key-pass 登录密码哈希：sha256(pass + ':' + key)，加盐防彩虹表，不可逆
+async function hashKeyPass(pass, key) {
+  const data = new TextEncoder().encode(String(pass) + ':' + String(key));
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+}
+
+// 校验 key-pass 登录（user.html 用户门户）：key + key_pass 匹配且密钥有效
+// 返回 api_keys 记录（不含 key_pass 字段），失败返回 null
+async function checkUserPortal(request, env) {
+  if (!env.D1_DB) return null;
+  const b = await request.json().catch(function() { return {}; });
+  const key = String(b.key || b.api_key || '').trim();
+  const pass = String(b.key_pass || '').trim();
+  if (!key || !pass) return null;
+  try {
+    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(key).first();
+    if (!rec || !rec.key_pass) return null;
+    const hp = await hashKeyPass(pass, key);
+    if (hp !== rec.key_pass) return null;
+    delete rec.key_pass;
+    return rec;
+  } catch (e) { console.error('checkUserPortal:', e.message); return null; }
+}
+
 async function handleAdminKeys(env) {
   try {
-    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,level,enabled,expires_at,created_at,last_used_at,usage_count FROM api_keys ORDER BY id DESC').all();
+    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,level,enabled,expires_at,created_at,last_used_at,usage_count,key_pass FROM api_keys ORDER BY id DESC').all();
     const today = cnTodayStr();
     const out = (d.results || []).map(function(k) {
       const exp = k.expires_at || '';
       k.expired = exp ? (exp < today ? 1 : 0) : 0;
+      k.has_pass = !!(k.key_pass);
+      delete k.key_pass;
       return k;
     });
     return json({ ok: true, data: out });
@@ -3979,12 +4023,14 @@ async function handleAdminKeysCreate(request, env) {
     const expires_at = String(b.expires_at || '').trim().slice(0, 10); // YYYY-MM-DD，空=永久
     const level = sanitizeLevel(b.level);
     const key = genApiKey();
-    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at) VALUES (?,?,?,?,1,?,0,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at).run();
-    return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, name: name, scopes: scopes, level: level, expires_at: expires_at } });
+    const key_pass = String(b.key_pass || '').slice(0, 64);
+    const passHash = key_pass ? await hashKeyPass(key_pass, key) : '';
+    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass) VALUES (?,?,?,?,1,?,0,?,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at, passHash).run();
+    return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, name: name, scopes: scopes, level: level, expires_at: expires_at, has_pass: !!passHash } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
-// 编辑密钥：改名称 / 改到期时间（PATCH /admin/api/keys?id=xxx）
+// 编辑密钥：改名称 / 改到期时间 / 改级别 / 设置或清除登录密码 key-pass（PATCH /admin/api/keys?id=xxx）
 async function handleAdminKeysUpdate(request, env) {
   try {
     const u = new URL(request.url);
@@ -3995,6 +4041,15 @@ async function handleAdminKeysUpdate(request, env) {
     if (b.name !== undefined) { fields.push('name = ?'); vals.push(String(b.name).slice(0, 60)); }
     if (b.expires_at !== undefined) { fields.push('expires_at = ?'); vals.push(String(b.expires_at || '').trim().slice(0, 10)); }
     if (b.level !== undefined) { fields.push('level = ?'); vals.push(sanitizeLevel(b.level)); }
+    if (b.key_pass !== undefined) {
+      // 需要真实 key 做加盐哈希
+      const cur = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE id=?').bind(id).first();
+      if (cur && cur.key) {
+        const kp = String(b.key_pass || '').slice(0, 64);
+        fields.push('key_pass = ?');
+        vals.push(kp ? await hashKeyPass(kp, cur.key) : '');
+      }
+    }
     if (!fields.length) return json({ ok: false, error: 'nothing to update' });
     vals.push(id);
     await env.D1_DB.prepare('UPDATE api_keys SET ' + fields.join(', ') + ' WHERE id = ?').bind(...vals).run();
@@ -5605,6 +5660,36 @@ async function handleAdminGuideFromR2(env) {
   } catch (e) {
     return new Response('Error loading admin guide: ' + e.message, { status: 500 });
   }
+}
+
+// 用户门户页：从 R2 读取 user.html（普通用户 key-pass 登录 + key 统计 + 接口生成器）
+async function handleUserFromR2(env) {
+  try {
+    const obj = await env.R2_BUCKET.get('user.html');
+    if (!obj) return new Response('user.html not found in R2. Please upload user.html to R2 bucket.', { status: 404 });
+    const headers = new Headers();
+    headers.set('Content-Type', 'text/html; charset=utf-8');
+    headers.set('Cache-Control', 'no-cache');
+    return new Response(obj.body, { headers });
+  } catch (e) {
+    return new Response('Error loading user page: ' + e.message, { status: 500 });
+  }
+}
+
+// 用户门户登录：校验 key + key-pass，返回该密钥的统计信息（不含密码哈希）
+async function handleUserLogin(request, env) {
+  try {
+    const rec = await checkUserPortal(request, env);
+    if (!rec) return json({ ok: false, error: '密钥或登录密码不正确' }, 401);
+    const today = cnTodayStr();
+    const exp = rec.expires_at || '';
+    rec.expired = exp ? (exp < today ? 1 : 0) : 0;
+    return json({ ok: true, data: {
+      id: rec.id, key: rec.key, name: rec.name, scopes: rec.scopes, level: rec.level,
+      enabled: rec.enabled, expires_at: rec.expires_at, expired: rec.expired,
+      created_at: rec.created_at, last_used_at: rec.last_used_at, usage_count: rec.usage_count
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 

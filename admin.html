@@ -772,6 +772,7 @@ https://example.com/b.jpg"></textarea></div>
             <select class="inp" id="keyLevel" title="密钥级别：决定可访问内容级别（级别对等，默认 pt）">
               <option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option>
             </select>
+            <input class="inp" style="width:180px" id="keyPass" type="password" placeholder="登录密码 key-pass（可选）" title="用户门户 /user 登录密码，可选；设置后用户可用密钥+此密码登录查看统计与生成接口">
             <button class="btn btn-primary" id="createKeyBtn">+ 生成密钥</button>
           </div>
         </div>
@@ -780,7 +781,7 @@ https://example.com/b.jpg"></textarea></div>
           <code>GET /api/v1/random?api_key=密钥&tags=风景&count=1</code>（随机取图）·
           <code>GET /gallery?api_key=密钥</code>（画廊瀑布流页）·
           <code>POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</code>（multipart 上传文件字段名为 file，落库见下方说明，上限 19MB）
-        </div>
+          <br>给普通用户开通自助面板：勾选「登录密码 key-pass」填入密码，把 <code>/user</code> 地址 + 密钥 + 密码发给用户，对方即可登录查看该密钥的调用统计并自助生成接口链接。</div>
         <div id="keyList"></div>
       </div>
       <div class="card">
@@ -1781,7 +1782,7 @@ function init() {
     }
     // 密钥操作
     var keyEdit = t.closest("[data-action='edit-key']");    if (keyEdit) {
-      editKeyModal(keyEdit.getAttribute("data-id"), keyEdit.getAttribute("data-name") || "", keyEdit.getAttribute("data-expires") || "", keyEdit.getAttribute("data-level") || "pt");
+      editKeyModal(keyEdit.getAttribute("data-id"), keyEdit.getAttribute("data-name") || "", keyEdit.getAttribute("data-expires") || "", keyEdit.getAttribute("data-level") || "pt", keyEdit.getAttribute("data-has-pass") === "1");
       return;
     }
     var keyToggle = t.closest("[data-action='toggle-key']");
@@ -3777,7 +3778,7 @@ async function loadKeys() {
   if (!r.ok) { el.innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
   var d = r.data || [];
   if (!d.length) { el.innerHTML = '<div class="empty">暂无密钥，点击右上角生成</div>'; return; }
-  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>级别</th><th>权限</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>级别</th><th>权限</th><th>登录密码</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
   var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   for (var i = 0; i < d.length; i++) {
     var k = d[i];
@@ -3791,12 +3792,13 @@ async function loadKeys() {
     h += '<td><code style="font-size:11px">' + escStr(k.key) + '</code> <button class="btn btn-ghost btn-sm" data-action="copy-key" data-key="' + escStr(k.key) + '">复制</button></td>';
     h += '<td>' + levelBadge(k.level) + '</td>';
     h += '<td>' + escStr(k.scopes || "files:read") + '</td>';
+    h += '<td>' + (k.has_pass ? '<span class="badge badge-green" title="已设置登录密码，用户可在 /user 用密钥+密码登录">已设置</span>' : '<span style="font-size:11px;color:var(--text-secondary)">未设置</span>') + '</td>';
     h += '<td>' + (k.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>') + '</td>';
     h += '<td>' + expTxt + '</td>';
     h += '<td>' + (k.usage_count || 0) + '</td>';
     h += '<td class="file-date">' + (k.last_used_at ? String(k.last_used_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
     h += '<td class="file-date">' + (k.created_at ? String(k.created_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
-    h += '<td><button class="btn btn-ghost btn-sm" data-action="edit-key" data-id="' + k.id + '" data-name="' + escStr(k.name || "") + '" data-expires="' + (k.expires_at || "") + '" data-level="' + escStr(k.level || "pt") + '">编辑</button> ';
+    h += '<td><button class="btn btn-ghost btn-sm" data-action="edit-key" data-id="' + k.id + '" data-name="' + escStr(k.name || "") + '" data-expires="' + (k.expires_at || "") + '" data-level="' + escStr(k.level || "pt") + '" data-has-pass="' + (k.has_pass ? 1 : 0) + '">编辑</button> ';
     h += '<button class="btn btn-ghost btn-sm" data-action="toggle-key" data-id="' + k.id + '" data-enabled="' + k.enabled + '">' + (k.enabled ? "停用" : "启用") + '</button> ';
     h += '<button class="btn btn-danger btn-sm" data-action="delete-key" data-id="' + k.id + '">删除</button></td></tr>';
   }
@@ -3807,19 +3809,21 @@ function createKey() {
   var name = document.getElementById("keyName").value.trim();
   var expires_at = document.getElementById("keyExpires") ? document.getElementById("keyExpires").value : "";
   var level = document.getElementById("keyLevel") ? document.getElementById("keyLevel").value : "pt";
-  api("POST", "/admin/api/keys", { name: name, expires_at: expires_at, level: level }).then(function(r) {
+  var key_pass = document.getElementById("keyPass") ? document.getElementById("keyPass").value.trim() : "";
+  api("POST", "/admin/api/keys", { name: name, expires_at: expires_at, level: level, key_pass: key_pass }).then(function(r) {
     if (r.ok) {
-      toast("密钥已生成" + (expires_at ? "，到期 " + expires_at : "（永久有效）") + " · 级别 " + level.toUpperCase(), 1);
+      toast("密钥已生成" + (expires_at ? "，到期 " + expires_at : "（永久有效）") + " · 级别 " + level.toUpperCase() + (key_pass ? " · 已设登录密码" : ""), 1);
       document.getElementById("keyName").value = "";
       if (document.getElementById("keyExpires")) document.getElementById("keyExpires").value = "";
       if (document.getElementById("keyLevel")) document.getElementById("keyLevel").value = "pt";
+      if (document.getElementById("keyPass")) document.getElementById("keyPass").value = "";
       loadKeys();
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(r.data.key);
     } else toast(r.error || "生成失败", 0);
   });
 }
-// 编辑密钥（名称 / 到期时间 / 级别）
-function editKeyModal(id, name, expires, level) {
+// 编辑密钥（名称 / 到期时间 / 级别 / 登录密码 key-pass）
+function editKeyModal(id, name, expires, level, hasPass) {
   var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   var lvOpts = "";
   var lvs = ["pt", "vip", "svip", "vvip"];
@@ -3834,6 +3838,9 @@ function editKeyModal(id, name, expires, level) {
     '<select class="inp" id="ekLevel">' + lvOpts + '</select>' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">到期日期（留空 = 永久有效）</label>' +
     '<input class="inp" type="date" id="ekExpires" value="' + escStr(expires) + '" min="' + today + '">' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">登录密码 key-pass（用户 /user 登录用）</label>' +
+    '<input class="inp" type="password" id="ekPass" placeholder="' + (hasPass ? "已设置；输入新密码可修改" : "留空则不修改；若已设置需清空请勾选下方") + '" autocomplete="off">' +
+    '<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);margin-top:8px;cursor:pointer"><input type="checkbox" id="ekPassClear"> 清除登录密码（用户将无法再登录 /user）</label>' +
     '<div class="modal-actions"><button class="btn btn-ghost" id="ekCancel">取消</button><button class="btn btn-primary" id="ekSave">保存</button></div>' +
     '</div></div>';
   document.getElementById("ekCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
@@ -3841,7 +3848,14 @@ function editKeyModal(id, name, expires, level) {
     var nm = document.getElementById("ekName").value.trim();
     var ex = document.getElementById("ekExpires").value;
     var lv = document.getElementById("ekLevel").value;
-    api("PATCH", "/admin/api/keys?id=" + id, { name: nm, expires_at: ex, level: lv }).then(function(r) {
+    var body = { name: nm, expires_at: ex, level: lv };
+    if (document.getElementById("ekPassClear").checked) {
+      body.key_pass = "";
+    } else {
+      var kp = document.getElementById("ekPass").value;
+      if (kp) body.key_pass = kp;
+    }
+    api("PATCH", "/admin/api/keys?id=" + id, body).then(function(r) {
       document.getElementById("modalArea").innerHTML = "";
       if (r.ok) { toast("已保存", 1); loadKeys(); } else toast(r.error || "保存失败", 0);
     });

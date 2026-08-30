@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>用户门户 - API Key 统计与接口生成</title>
+<style>
+:root {
+  --bg: #f0f2f5;
+  --card: #ffffff;
+  --primary: #4f6ef7;
+  --primary-hover: #3b5de7;
+  --danger: #ef4444;
+  --text: #1e293b;
+  --text-secondary: #64748b;
+  --border: #e2e8f0;
+  --success: #22c55e;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,.06), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-lg: 0 10px 40px rgba(0,0,0,.12);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+.inp { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; outline: none; transition: border-color .2s; background: #fff; }
+.inp:focus { border-color: var(--primary); }
+.btn { padding: 6px 14px; border-radius: 8px; border: none; cursor: pointer; font-size: 12px; font-weight: 500; transition: all .15s; display: inline-flex; align-items: center; gap: 4px; }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-ghost { background: transparent; color: var(--text-secondary); }
+.btn-ghost:hover { background: #f1f5f9; color: var(--text); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.badge-green { background: #dcfce7; color: #16a34a; }
+.badge-red { background: #fee2e2; color: #dc2626; }
+.badge-blue { background: #dbeafe; color: #2563eb; }
+.badge-yellow { background: #fef9c3; color: #ca8a04; }
+.card { background: var(--card); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.card-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.card-title .dot { width: 4px; height: 16px; background: var(--primary); border-radius: 2px; }
+.fr { display: flex; flex-direction: column; gap: 4px; }
+.fr label { font-size: 12px; color: var(--text-secondary); }
+.fb { display: flex; gap: 10px; align-items: center; }
+.empty { text-align: center; padding: 30px 0; color: var(--text-secondary); font-size: 13px; }
+.api-result { background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 14px; font-size: 12px; font-family: monospace; white-space: pre-wrap; word-break: break-all; }
+code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12px; color: #475569; }
+.toast { position: fixed; right: 20px; top: 20px; padding: 10px 18px; border-radius: 10px; color: #fff; font-size: 13px; box-shadow: var(--shadow-lg); z-index: 999; max-width: 340px; }
+.toast.ok { background: #16a34a; }
+.toast.er { background: var(--danger); }
+
+/* Login */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; }
+.login-card { background: var(--card); border-radius: 20px; padding: 48px 40px; width: 100%; max-width: 420px; box-shadow: var(--shadow-lg); text-align: center; }
+.login-card .logo { width: 64px; height: 64px; background: linear-gradient(135deg, #4f6ef7, #7c3aed); border-radius: 16px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 28px; color: #fff; }
+.login-card h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+.login-card .sub { color: var(--text-secondary); font-size: 13px; margin-bottom: 24px; }
+.login-card .field { margin-bottom: 14px; text-align: left; }
+.login-card .field label { display: block; font-size: 12px; color: var(--text-secondary); margin-bottom: 5px; }
+.login-card input { width: 100%; padding: 11px 14px; border: 2px solid var(--border); border-radius: 10px; font-size: 14px; outline: none; transition: border-color .2s; }
+.login-card input:focus { border-color: var(--primary); }
+.login-card button { width: 100%; padding: 12px; background: var(--primary); color: #fff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: background .2s; }
+.login-card button:hover { background: var(--primary-hover); }
+.login-card .err { color: var(--danger); font-size: 12px; margin-top: 10px; min-height: 18px; }
+
+/* App */
+.topbar { background: #fff; border-bottom: 1px solid var(--border); padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+.topbar-left { display: flex; align-items: center; gap: 12px; }
+.topbar-left .icon { width: 36px; height: 36px; background: linear-gradient(135deg, #4f6ef7, #7c3aed); border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 16px; }
+.topbar-left h1 { font-size: 16px; font-weight: 600; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.btn-logout { padding: 7px 16px; background: transparent; color: var(--danger); border: 1px solid var(--danger); border-radius: 8px; font-size: 13px; cursor: pointer; transition: all .2s; }
+.btn-logout:hover { background: var(--danger); color: #fff; }
+.wrap { max-width: 1000px; margin: 0 auto; padding: 20px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 4px; }
+.stat-card { background: var(--card); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); text-align: center; border: 1px solid var(--border); }
+.stat-card .value { font-size: 26px; font-weight: 700; color: var(--primary); }
+.stat-card .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+.gen-tag { display: inline-flex; align-items: center; padding: 4px 12px; border: 1px solid var(--border); border-radius: 20px; cursor: pointer; font-size: 12px; background: var(--card); transition: all .15s; }
+.gen-tag:hover { border-color: var(--primary); color: var(--primary); }
+.gen-tag.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.keyinfo { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; margin-bottom: 4px; }
+@media (max-width: 640px) {
+  .topbar { padding: 0 12px; }
+  .wrap { padding: 12px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<div class="login-wrap" id="loginScreen" style="display:flex">
+  <div class="login-card">
+    <div class="logo">🔑</div>
+    <h1>用户门户</h1>
+    <div class="sub">使用管理员发放的 API 密钥 + 登录密码查看统计并生成接口链接</div>
+    <div class="field"><label>API 密钥</label><input id="loginKey" placeholder="vk_..." autocomplete="off" spellcheck="false"></div>
+    <div class="field"><label>登录密码（key-pass）</label><input id="loginPass" type="password" placeholder="管理员告知的登录密码" autocomplete="current-password"></div>
+    <button id="loginBtn">登 录</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<div id="appMain" style="display:none">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="icon">🔑</div>
+      <div>
+        <h1>用户门户</h1>
+        <div style="font-size:11px;color:var(--text-secondary)" id="keyNameTop">-</div>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span style="font-size:12px;color:var(--text-secondary)" id="levelTop"></span>
+      <button class="btn-logout" id="logoutBtn">退出</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- 密钥统计 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>密钥信息</div>
+      <div class="keyinfo">
+        <span id="kiLevel"></span>
+        <span id="kiStatus"></span>
+        <span id="kiExpire"></span>
+        <span id="kiScopes"></span>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="value" id="stUsage">-</div><div class="label">累计调用次数</div></div>
+        <div class="stat-card"><div class="value" id="stLastUsed" style="font-size:16px">-</div><div class="label">最近调用</div></div>
+        <div class="stat-card"><div class="value" id="stCreated" style="font-size:16px">-</div><div class="label">创建时间</div></div>
+        <div class="stat-card"><div class="value" id="stKey" style="font-size:13px;word-break:break-all">-</div><div class="label">API 密钥</div></div>
+      </div>
+    </div>
+
+    <!-- 接口生成器 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>公开接口生成器 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">点选条件，自动生成可复制的接口 URL</span></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+        <div class="fr"><label>文件类型</label><select class="inp" id="genType"><option value="">全部</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select></div>
+        <div class="fr"><label>数量 (1-100)</label><input class="inp" type="number" id="genLimit" value="10" min="1" max="100"></div>
+        <div class="fr"><label>模式</label><select class="inp" id="genMode"><option value="files">共享库列表</option><option value="random">随机取一张/多张</option><option value="upload">上传文件</option></select></div>
+        <div class="fr"><label>关键词 (可选)</label><input class="inp" id="genKw" placeholder="文件名/描述包含..."></div>
+      </div>
+      <div class="fr" style="margin-top:10px"><label>标签筛选 (点击切换，多选=命中任意一个即可)</label><div id="genTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div></div>
+      <div class="fr" style="margin-top:12px"><label>生成的接口 URL</label>
+        <div class="fb" style="flex-wrap:wrap">
+          <input class="inp" id="genUrl" readonly style="flex:1;min-width:260px">
+          <button class="btn btn-primary" id="genCopy">复制</button>
+          <button class="btn btn-ghost" id="genTest">打开测试</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>调用示例</div>
+      <div class="api-result" id="genExamples">选择条件后自动生成</div>
+    </div>
+
+    <div style="text-align:center;font-size:11px;color:var(--text-secondary);padding:10px 0 30px">密钥由管理员在后台发放；本页数据仅来自你登录的密钥，不涉及其他密钥。</div>
+  </div>
+</div>
+
+<script>
+var OR = location.origin;
+var AK = "";          // API key
+var KP = "";          // key-pass
+var savedKey = "";
+var genSelTags = [];
+
+// 尝试恢复会话
+try { savedKey = localStorage.getItem("up_key") || ""; } catch (e) {}
+try { if (savedKey) { document.getElementById("loginKey").value = savedKey; } } catch (e) {}
+
+function toast(msg, ok) {
+  var d = document.createElement("div");
+  d.className = "toast " + (ok ? "ok" : "er");
+  d.textContent = msg;
+  document.body.appendChild(d);
+  setTimeout(function() { d.remove(); }, 3000);
+}
+function escStr(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function levelBadge(level) {
+  var map = { pt: ["badge-ghost", "PT"], vip: ["badge-blue", "VIP"], svip: ["badge-yellow", "SVIP"], vvip: ["badge-red", "VVIP"] };
+  var m = map[level] || map.pt;
+  return '<span class="badge ' + m[0] + '">' + m[1] + '</span>';
+}
+function fmtDT(s) {
+  if (!s) return "-";
+  return String(s).replace("T", " ").slice(0, 16);
+}
+
+// 用户门户 API 调用（POST JSON，带 key + key_pass）
+function portal(method, path, body) {
+  body = body || {};
+  body.key = AK;
+  body.key_pass = KP;
+  var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  var opts = { method: method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  if (ctrl) {
+    opts.signal = ctrl.signal;
+    setTimeout(function() { ctrl.abort(); }, 20000);
+  }
+  return fetch(OR + path, opts).then(function(r) {
+    return r.json();
+  }).catch(function(e) { return { ok: false, error: e.name === "AbortError" ? "请求超时" : e.message }; });
+}
+
+function showApp(data) {
+  document.getElementById("loginScreen").style.display = "none";
+  document.getElementById("appMain").style.display = "block";
+  document.getElementById("keyNameTop").textContent = data.name || data.key;
+  document.getElementById("levelTop").innerHTML = levelBadge(data.level);
+  document.getElementById("kiLevel").innerHTML = "级别 " + levelBadge(data.level);
+  document.getElementById("kiStatus").innerHTML = data.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>';
+  document.getElementById("kiExpire").innerHTML = data.expires_at
+    ? (data.expired ? '<span class="badge badge-red">已过期 ' + escStr(data.expires_at) + '</span>' : '<span class="badge badge-yellow">到期 ' + escStr(data.expires_at) + '</span>')
+    : '<span style="font-size:11px;color:var(--text-secondary)">永久有效</span>';
+  document.getElementById("kiScopes").innerHTML = '权限 <code>' + escStr(data.scopes || "files:read") + '</code>';
+  document.getElementById("stUsage").textContent = data.usage_count || 0;
+  document.getElementById("stLastUsed").textContent = fmtDT(data.last_used_at);
+  document.getElementById("stCreated").textContent = fmtDT(data.created_at);
+  document.getElementById("stKey").textContent = data.key;
+  loadTags();
+  genUrl();
+}
+
+// 登录
+function doLogin() {
+  var k = document.getElementById("loginKey").value.trim();
+  var p = document.getElementById("loginPass").value.trim();
+  var errEl = document.getElementById("loginErr");
+  errEl.textContent = "";
+  if (!k || !p) { errEl.textContent = "请填写 API 密钥和登录密码"; return; }
+  document.getElementById("loginBtn").disabled = true;
+  fetch(OR + "/api/user/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: k, key_pass: p })
+  }).then(function(r) { return r.json(); }).then(function(j) {
+    document.getElementById("loginBtn").disabled = false;
+    if (!j.ok || !j.data) { errEl.textContent = j.error || "登录失败，请检查密钥与密码"; return; }
+    AK = k; KP = p;
+    try { localStorage.setItem("up_key", k); } catch (e) {}
+    showApp(j.data);
+  }).catch(function() {
+    document.getElementById("loginBtn").disabled = false;
+    errEl.textContent = "网络错误，请重试";
+  });
+}
+document.getElementById("loginBtn").addEventListener("click", doLogin);
+["loginKey", "loginPass"].forEach(function(id) {
+  document.getElementById(id).addEventListener("keydown", function(e) { if (e.key === "Enter") doLogin(); });
+});
+document.getElementById("logoutBtn").addEventListener("click", function() {
+  AK = ""; KP = "";
+  try { localStorage.removeItem("up_key"); } catch (e) {}
+  document.getElementById("loginScreen").style.display = "flex";
+  document.getElementById("appMain").style.display = "none";
+  document.getElementById("loginKey").value = "";
+  document.getElementById("loginPass").value = "";
+});
+
+// 接口生成器
+function loadTags() {
+  portal("POST", "/api/user/tags").then(function(r) {
+    var tEl = document.getElementById("genTags");
+    if (!r.ok || !r.data || !r.data.length) {
+      tEl.innerHTML = '<span style="color:var(--text-secondary);font-size:12px">暂无标签</span>';
+      return;
+    }
+    var h = "";
+    for (var i = 0; i < r.data.length; i++) {
+      h += '<span class="gen-tag" data-gen-tag="' + escStr(r.data[i].tag) + '">#' + escStr(r.data[i].tag) + ' <span style="opacity:.6">(' + r.data[i].count + ')</span></span>';
+    }
+    tEl.innerHTML = h;
+  });
+}
+document.getElementById("genTags").addEventListener("click", function(e) {
+  var t = e.target.closest("[data-gen-tag]");
+  if (!t) return;
+  var tag = t.getAttribute("data-gen-tag");
+  var idx = genSelTags.indexOf(tag);
+  if (idx >= 0) { genSelTags.splice(idx, 1); t.classList.remove("on"); }
+  else { genSelTags.push(tag); t.classList.add("on"); }
+  genUrl();
+});
+["genType", "genMode"].forEach(function(id) {
+  var el = document.getElementById(id);
+  if (el) el.addEventListener("change", genUrl);
+});
+var gl = document.getElementById("genLimit");
+if (gl) gl.addEventListener("input", genUrl);
+var gk = document.getElementById("genKw");
+if (gk) gk.addEventListener("input", genUrl);
+document.getElementById("genCopy").addEventListener("click", function() {
+  var v = document.getElementById("genUrl").value;
+  if (!v || v.indexOf("YOUR_KEY") >= 0) { toast("请先登录并选择条件", 0); return; }
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(v).then(function() { toast("已复制", 1); }, function() { fallbackCopy(v); });
+  else fallbackCopy(v);
+});
+document.getElementById("genTest").addEventListener("click", function() {
+  var v = document.getElementById("genUrl").value;
+  if (!v || v.indexOf("YOUR_KEY") >= 0) { toast("请先登录并选择条件", 0); return; }
+  window.open(v, "_blank");
+});
+function fallbackCopy(text) {
+  var ta = document.createElement("textarea");
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); toast("已复制", 1); } catch (e) { toast("复制失败", 0); }
+  ta.remove();
+}
+function genUrl() {
+  var key = AK || "YOUR_KEY";
+  var type = document.getElementById("genType").value;
+  var limit = document.getElementById("genLimit").value || "10";
+  var mode = document.getElementById("genMode").value;
+  if (mode === "random") limit = String(Math.min(parseInt(limit) || 1, 10));
+  var kw = document.getElementById("genKw").value.trim();
+  var tags = genSelTags.join(",");
+  if (mode === "upload") {
+    var u1 = "/api/v1/upload?api_key=" + encodeURIComponent(key);
+    if (tags) u1 += "&tags=" + encodeURIComponent(tags);
+    var url1 = OR + u1;
+    document.getElementById("genUrl").value = url1;
+    renderGenExamples(url1, mode);
+    return;
+  }
+  var u = mode === "random" ? "/api/v1/random" : "/api/v1/files?pool=1";
+  u += (mode === "random" ? "?" : "&") + "api_key=" + encodeURIComponent(key);
+  if (type) u += "&type=" + type;
+  if (tags) u += "&tags=" + encodeURIComponent(tags);
+  if (kw) u += "&keyword=" + encodeURIComponent(kw);
+  u += mode === "random" ? "&count=" + limit : "&limit=" + limit;
+  var url = OR + u;
+  document.getElementById("genUrl").value = url;
+  renderGenExamples(url, mode);
+}
+function renderGenExamples(url, mode) {
+  if (mode === "upload") {
+    var key = (url.match(/api_key=([^&]+)/) || [null, 'YOUR_KEY'])[1];
+    var curl = "curl -F \"file=@cat.jpg\" \"" + url + (url.indexOf("?") >= 0 ? "&pool=1&title=我的标题" : "?pool=1&title=我的标题") + "\"";
+    var fetchJs = "const fd = new FormData(); fd.append('file', new Blob([...]), 'cat.jpg');\n" +
+      "fetch('" + url + "?pool=1&title=我的标题', { method: 'POST', body: fd }).then(r=>r.json()).then(d=>console.log(d));";
+    var note = "• POST multipart/form-data，文件字段名必须是 file，上限 19MB\n" +
+      "• pool=1 → 进共享库；不带 pool → 进 Tele 库\n" +
+      "• level 参数可选，不得超过密钥级别（默认=密钥级别，级别对等）\n" +
+      "• is_private=1 仅 vvip 密钥可用\n" +
+      "• 返回 JSON：{ url, added, pool, level, file_type }，url 即直链";
+    document.getElementById("genExamples").innerHTML =
+      '<div style="color:#94a3b8;font-size:12px;margin-bottom:6px">① curl 上传</div>' +
+      '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#86efac">' + escStr(curl) + '</div>' +
+      '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">② JavaScript fetch</div>' +
+      '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#93c5fd">' + escStr(fetchJs) + '</div>' +
+      '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">③ 说明</div>' +
+      '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#fbbf24">' + escStr(note) + '</div>';
+    return;
+  }
+  var curl = "curl \"" + url + "\"";
+  var fetchJs = "fetch('" + url + "').then(r=>r.json()).then(d=>console.log(d));";
+  var imgUrl = url + (url.indexOf("mode=") >= 0 ? "" : (url.indexOf("?") >= 0 ? "&mode=img" : "?mode=img"));
+  var img = mode === "random"
+    ? '<img src="' + imgUrl + '">   <!-- mode=img: 302 跳转到随机一张图片 -->'
+    : '接口只从「共享库」取数据 (pool=1)，item 里的 url 即图片直链';
+  document.getElementById("genExamples").innerHTML =
+    '<div style="color:#94a3b8;font-size:12px;margin-bottom:6px">① curl 命令行</div>' +
+    '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#86efac">' + escStr(curl) + '</div>' +
+    '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">② JavaScript fetch</div>' +
+    '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#93c5fd">' + escStr(fetchJs) + '</div>' +
+    '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">③ 说明</div>' +
+    '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#fbbf24">' + escStr(img) + '</div>';
+}
+</script>
+</body>
+</html>

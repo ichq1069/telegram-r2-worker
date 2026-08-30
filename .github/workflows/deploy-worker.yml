@@ -78,3 +78,10 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: r2 object put bot-telegram/admin-guide.html --file=admin-guide.html --content-type text/html --cache-control "public, max-age=300"
+
+      - name: Upload user.html to R2 (bot-telegram bucket)
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: r2 object put bot-telegram/user.html --file=user.html --content-type text/html --cache-control "public, max-age=300"

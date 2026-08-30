@@ -27,7 +27,7 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);" +
     "CREATE TABLE IF NOT EXISTS bot_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT UNIQUE, response TEXT, description TEXT, enabled INTEGER, created_at TEXT, menu TEXT DEFAULT '');" +
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);" +
-    "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0, expires_at TEXT, level TEXT DEFAULT 'pt');" +
+    "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0, expires_at TEXT, level TEXT DEFAULT 'pt', key_pass TEXT);" +
     "CREATE TABLE IF NOT EXISTS random_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, thumb_url TEXT, title TEXT, tags TEXT DEFAULT '', file_type TEXT DEFAULT 'photo', width INTEGER, height INTEGER, file_size INTEGER, source TEXT DEFAULT 'manual', tg_file_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT, level TEXT DEFAULT 'pt', is_private INTEGER DEFAULT 0);" +
     "CREATE INDEX IF NOT EXISTS idx_pool_url ON random_pool(url);" +
     "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
@@ -123,6 +123,15 @@ export async function ensureTables(db) {
         console.log('migrated: api_keys.level column');
       }
     } catch (e7) { console.error('api_keys level migration:', e7.message); }
+    // api_keys.key_pass：用户门户登录密码（旧库无此列则补加；存 SHA-256 哈希，不回传明文）
+    try {
+      const ak3 = await db.prepare("PRAGMA table_info(api_keys)").all();
+      const ak3n = (ak3.results || []).map(function(c) { return c.name; });
+      if (ak3n.indexOf('key_pass') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN key_pass TEXT");
+        console.log('migrated: api_keys.key_pass column');
+      }
+    } catch (e8) { console.error('api_keys key_pass migration:', e8.message); }
     // user_stats 交互统计列（旧库有表但缺列时补加，避免 INSERT 失败）
     try {
       const us = await db.prepare("PRAGMA table_info(user_stats)").all();
