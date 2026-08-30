@@ -3372,7 +3372,7 @@ function ubotEdit(id) {
     document.getElementById("modalArea").innerHTML =
       '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:560px">' +
       '<h3>' + title + '</h3>' +
-      '<div class="fr"><label>群 chat_id（必填；Telegram 数字 ID 或 @用户名）</label><input class="inp" id="ubChatId" value="' + escStr(t ? t.chat_id : "") + '" placeholder="例如 -1001234567890"></div>' +
+      '<div class="fr"><label>群 chat_id（必填）</label><input class="inp" id="ubChatId" value="' + escStr(t ? t.chat_id : "") + '" placeholder="例如 -1001234567890"><div style="font-size:11px;color:var(--text-secondary);margin-top:4px">获取方式：将 @userinfobot 或 @getidsbot 添加到群里，它会显示群的 chat_id；或在群设置中查看</div></div>' +
       '<div class="fr"><label>标题（可选，仅备注）</label><input class="inp" id="ubTitle" value="' + escStr(t ? t.title : "") + '"></div>' +
       '<div class="fr"><label>标签（逗号分隔，抓取到的图片入库时带上）</label><input class="inp" id="ubTags" value="' + escStr(t ? t.tags : "") + '" placeholder="风景,美女"></div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
