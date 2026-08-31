@@ -224,7 +224,7 @@ export async function processUpdateCore(update, env, waitFn) {
   }
 
   // X (Twitter) status links: parse via public syndication API, download media from twimg CDN
-  if (msg.text && isXLink(msg.text)) {
+  if (msg && msg.text && isXLink(msg.text)) {
     const xlink = extractXStatus(msg.text);
     if (xlink) {
       const chatId = String(msg.chat.id);
@@ -237,7 +237,7 @@ export async function processUpdateCore(update, env, waitFn) {
   }
 
   // Short-video share links (douyin/kuaishou/redbook/bilibili...): parse via parse-video service, then download & store
-  if (msg.text && isShareLink(msg.text)) {
+  if (msg && msg.text && isShareLink(msg.text)) {
     const shareLink = extractShareLink(msg.text);
     if (shareLink) {
       const chatId = String(msg.chat.id);
