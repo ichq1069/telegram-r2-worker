@@ -2,8 +2,8 @@
 // 重试/未入库列表/去重/压缩/日报/定时维护/命令管理。
 import { json, fmtSize } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
-import { cnShift, cnTodayStr, cnDayIso, clampInt } from "./core.js";
-import { computeMd5 } from "./telegram.js";
+import { cnShift, cnTodayStr, cnDayIso, clampInt, fileExtOf } from "./core.js";
+import { computeMd5, fileTok } from "./telegram.js";
 import { processFileAsync } from "./webhook.js";
 // ==================== ADMIN API ====================
 
@@ -48,8 +48,18 @@ export async function handleUnsavedList(request, env) {
     // 卡住超 30 分钟的记录标记为 failed（crashed waitUntil/queue 任务）
     try { await env.D1_DB.prepare("UPDATE files SET processing_state='failed' WHERE processing_state IN ('downloading','hashing','uploading','saving') AND deleted_at IS NULL AND julianday(created_at) < julianday('now','-30 minutes')").run(); } catch (e) {}
     const t = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed'").first();
-    const d = await env.D1_DB.prepare("SELECT id, file_name, file_type, file_size, chat_title, chat_id, message_id, telegram_file_id, processing_state, error_msg, created_at FROM files WHERE deleted_at IS NULL AND processing_state != 'completed' ORDER BY id DESC LIMIT ? OFFSET ?").bind(ps, off).all();
-    return json({ ok: true, data: { total: t?.c || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.c || 0) / ps), items: d.results || [] } });
+    const d = await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state != 'completed' ORDER BY id DESC LIMIT ? OFFSET ?").bind(ps, off).all();
+    // 为每条记录生成代理 URL，即使没有 R2 直链也能通过 Telegram file_id 访问
+    const origin = u.origin;
+    const items = await Promise.all((d.results || []).map(async function(f) {
+      // 复用 decorateLinks 逻辑生成 proxy_url
+      const tok = await fileTok(f.id, env);
+      const ext = fileExtOf(f.file_name, f.file_type);
+      f.proxy_url = origin + '/file/tg/' + tok + '/' + f.id + '.' + ext;
+      f.display_url = f.r2_url && f.r2_url.length > 0 && f.r2_url.indexOf('/file/tg/') !== 0 ? f.r2_url : f.proxy_url;
+      return f;
+    }));
+    return json({ ok: true, data: { total: t?.c || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.c || 0) / ps), items: items } });
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
