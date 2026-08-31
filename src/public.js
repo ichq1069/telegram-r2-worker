@@ -742,6 +742,26 @@ export async function handleDiagnoseKey(request, env) {
     try {
       chkResult = await checkApiKey(request, env);
     } catch (ce) { chkError = ce.message; }
+    // 逐步重放 checkApiKey 内部流程，定位返回 null 的步骤
+    let step = {};
+    try {
+      const rk = new URL(request.url).searchParams.get('api_key') || request.headers.get('X-API-Key');
+      step.k_extracted = rk;
+      step.k_present = !!rk;
+      if (rk) {
+        const rec2 = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(rk).first();
+        step.rec2_found = !!rec2;
+        step.rec2_id = rec2 && rec2.id;
+        if (rec2) {
+          const usage = await env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec2.id).run();
+          step.usage_ok = !!usage;
+          const lim = await applyRateLimit(env, rk);
+          step.limited = lim;
+          const lg = await logApiCall(env, rec2, request);
+          step.logged = !!lg;
+        }
+      }
+    } catch (se2) { step.error = se2.message; }
     return json({
       ok: true,
       key_exists: true,
@@ -761,7 +781,8 @@ export async function handleDiagnoseKey(request, env) {
       select_star_found: !!starRec,
       select_star_error: starError,
       checkApiKey_result: chkResult ? { found: !!chkResult.rec, limited: chkResult.limited } : null,
-      checkApiKey_error: chkError
+      checkApiKey_error: chkError,
+      replay: step
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
