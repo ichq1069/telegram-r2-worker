@@ -70,3 +70,18 @@ export function genRedeemCode() {
   crypto.getRandomValues(arr);
   return 'RZ-' + Array.from(arr).map(function(b) { return '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ'[b % 32]; }).join('');
 }
+
+// 从 caption 中提取 #标签（<=4 字符的才算标签，如 #风景#美女）
+export function extractTags(caption) {
+  if (!caption) return [];
+  const tags = [];
+  const regex = /#([^\s#]{1,4})/g;
+  let match;
+  while ((match = regex.exec(caption)) !== null) {
+    const tag = match[1].trim();
+    if (tag && tag.length <= 4 && !tags.includes(tag)) {
+      tags.push(tag);
+    }
+  }
+  return tags;
+}

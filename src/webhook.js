@@ -3,7 +3,7 @@
 import { json, fmtSize, genHash, log, invalidateStatsCache } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
 import { notifyAdmin, genThumb } from "./notify.js";
-import { cnTodayStr, guessExt, fileExtOf } from "./core.js";
+import { cnTodayStr, guessExt, fileExtOf, extractTags } from "./core.js";
 import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
@@ -219,13 +219,15 @@ export async function processUpdateCore(update, env, waitFn) {
       // 编号延迟到"这一批"确定后统一分配（scheduleBatchRef，批次号 = 本次转发总数）
       const ref = '';
       let rid = null;
+      // 从 caption 中提取 #标签（<=4 字符的才算标签）
+      const tags = extractTags(msg.caption || '');
       if (env.D1_DB) {
         // INSERT 重试：D1 并发写入可能超时，短暂延迟后重试一次
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
             const r = await env.D1_DB.prepare(
-              'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-            ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), ref, msg.media_group_id || '').run();
+              'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,tags,message_id,created_at,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', tags.join(','), msgId, date.toISOString(), ref, msg.media_group_id || '').run();
             rid = r.meta?.last_row_id;
             break;
           } catch (e) {
@@ -309,11 +311,13 @@ export async function processUpdateCore(update, env, waitFn) {
       const chat = msg.chat || {};
       const date = msg.date ? new Date(msg.date * 1000) : new Date();
       let rid = null;
+      // 从 caption 中提取 #标签（<=4 字符的才算标签）
+      const tags = extractTags(msg.text || '');
       if (env.D1_DB) {
         try {
           const r = await env.D1_DB.prepare(
-            'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,group_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-          ).bind('', '', '', 'parsing', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', '', 'video_' + genHash() + '.mp4', 0, 'video', '', 0, 0, msg.text || '', msgId, date.toISOString(), await allocTgRef(env)).run();
+            'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,tags,message_id,created_at,group_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+          ).bind('', '', '', 'parsing', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', '', 'video_' + genHash() + '.mp4', 0, 'video', '', 0, 0, msg.text || '', tags.join(','), msgId, date.toISOString(), await allocTgRef(env)).run();
           rid = r.meta?.last_row_id;
         } catch (e) { log.error('D1 share pending:', e.message); }
       }
@@ -999,12 +1003,14 @@ export async function processUpdate(update, env, waitFn) {
   }
 
   let rid = null, ref2 = '';
+  // 从 caption 中提取 #标签（<=4 字符的才算标签）
+  const tags = extractTags(msg.caption || '');
   if (env.D1_DB) {
     try {
       ref2 = await allocTgRef(env);
       const r = await env.D1_DB.prepare(
-        'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,tg_file_url,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-      ).bind(key, url, md5, 'completed', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, fd.ct, fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), tgUrl, ref2, msg.media_group_id || '').run();
+        'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,tags,message_id,created_at,tg_file_url,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+      ).bind(key, url, md5, 'completed', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, fd.ct, fi.width, fi.height, msg.caption || '', tags.join(','), msgId, date.toISOString(), tgUrl, ref2, msg.media_group_id || '').run();
       rid = r.meta?.last_row_id;
     } catch (e) { log.error('D1:', e.message); }
   }
