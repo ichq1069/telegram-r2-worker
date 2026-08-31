@@ -8,7 +8,7 @@ import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarge
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
 import { getBotUsername, getProxyMode } from "./api.js";
-import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg } from "./batch.js";
+import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg, isBatchCommand, startManualBatch, isManualBatchActive, finalizeManualBatch, getManualBatchStatus } from "./batch.js";
 import { fireWebhook } from "./events.js";
 // ==================== WEBHOOK ====================
 
@@ -151,6 +151,40 @@ export async function processUpdateCore(update, env, waitFn) {
   if (msg && !msg.text && !msg.caption && !msg.photo && !msg.document && !msg.video && !msg.audio && !msg.voice && !msg.sticker && !msg.animation && !msg.video_note && !msg.contact && !msg.location && !msg.poll && !msg.dice && !msg.game && !msg.entities && !msg.new_chat_members && !msg.new_chat_member && !msg.left_chat_member && !msg.pinned_message && !msg.delete_chat_photo && !msg.group_chat_created && !msg.supergroup_chat_created && !msg.channel_chat_created && msg.message_id && env.D1_DB) {
     return await handleDeletedMsg(msg, env);
   }
+  // 手动批量标记：#开始 #结束
+  if (msg && msg.text && env.D1_DB) {
+    const batchCmd = isBatchCommand(msg.text);
+    if (batchCmd) {
+      const chatId = String(msg.chat.id);
+      const msgId = String(msg.message_id);
+      if (batchCmd === 'start') {
+        await startManualBatch(env, chatId, msgId);
+        await replyText(chatId, parseInt(msgId), '📦 批次已开启，后续文件将归入同一批次\n发 #结束 完成批次并统一编号', env);
+        return { ok: true, batch: true };
+      }
+      if (batchCmd === 'end') {
+        const result = await finalizeManualBatch(env, chatId, msgId);
+        if (result.ok && result.count > 0) {
+          return { ok: true, batch: true, count: result.count };
+        } else if (result.ok && result.count === 0) {
+          await replyText(chatId, parseInt(msgId), '📭 批次内没有文件', env);
+          return { ok: true, batch: true, count: 0 };
+        } else {
+          await replyText(chatId, parseInt(msgId), '⚠️ 当前没有进行中的批次', env);
+          return { ok: true, batch: true, error: 'no_batch' };
+        }
+      }
+      if (batchCmd === 'status') {
+        const status = await getManualBatchStatus(env, chatId);
+        if (status) {
+          await replyText(chatId, parseInt(msgId), '📦 当前批次进行中\n⏱ 已持续: ' + status.elapsed + '\n📁 已收录: ' + status.count + ' 个文件\n🕐 开始时间: ' + status.startTime + '\n\n发 #结束 完成批次', env);
+        } else {
+          await replyText(chatId, parseInt(msgId), '📭 当前没有进行中的批次\n\n发 #开始 开启新批次', env);
+        }
+        return { ok: true, batch: true };
+      }
+    }
+  }
   if (msg && !msg.text?.startsWith('/')) {
     const fi = extractFileInfo(msg);
     if (fi) {
@@ -223,11 +257,16 @@ export async function processUpdateCore(update, env, waitFn) {
           // 代理 URL 带后缀名（如 /file/tg/123.jpg），方便识别类型/下载文件名
           await env.D1_DB.prepare("UPDATE files SET r2_url=?, storage_key='', processing_state='completed', progress_bytes=0, total_bytes=? WHERE id=?").bind('/file/tg/' + rid + '.' + fileExtOf(fi.fileName, fi.type), fi.fileSize || 0, rid).run();
         } catch (e) { log.error('proxy mark:', e.message); }
-        scheduleBatchRef(env, chatId, rid, waitFn);
+        // 手动批次模式：跳过 3 秒自动编号，等 #结束 时统一编号
+        if (!(await isManualBatchActive(env, chatId))) {
+          scheduleBatchRef(env, chatId, rid, waitFn);
+        }
         return { ok: true, queued: true, fileId: rid, proxied: true };
       }
-      // 延迟批量编号：3 秒后按"本次总数 N"统一编号并确认回复（与转存并行）
-      if (rid) scheduleBatchRef(env, chatId, rid, waitFn);
+      // 手动批次模式：跳过 3 秒自动编号，等 #结束 时统一编号
+      if (rid && !(await isManualBatchActive(env, chatId))) {
+        scheduleBatchRef(env, chatId, rid, waitFn);
+      }
       // Process via Queue (reliable, 15min limit) or fallback to waitUntil
       const task = {
         dbId: rid, fi: fi, chatId: chatId, msgId: msgId, ref: ref || '',
@@ -835,6 +874,39 @@ export async function processUpdate(update, env, waitFn) {
   // Handle bot commands
   if (text.startsWith('/')) {
     return await handleBotCommand(parseInt(chatId), parseInt(msgId), text, env, waitFn);
+  }
+
+  // 手动批量标记：#开始 #结束 #批次
+  if (msg.text && env.D1_DB) {
+    const batchCmd = isBatchCommand(msg.text);
+    if (batchCmd) {
+      if (batchCmd === 'start') {
+        await startManualBatch(env, chatId, msgId);
+        await replyText(chatId, parseInt(msgId), '📦 批次已开启，后续文件将归入同一批次\n发 #结束 完成批次并统一编号', env);
+        return { ok: true, batch: true };
+      }
+      if (batchCmd === 'end') {
+        const result = await finalizeManualBatch(env, chatId, msgId);
+        if (result.ok && result.count > 0) {
+          return { ok: true, batch: true, count: result.count };
+        } else if (result.ok && result.count === 0) {
+          await replyText(chatId, parseInt(msgId), '📭 批次内没有文件', env);
+          return { ok: true, batch: true, count: 0 };
+        } else {
+          await replyText(chatId, parseInt(msgId), '⚠️ 当前没有进行中的批次', env);
+          return { ok: true, batch: true, error: 'no_batch' };
+        }
+      }
+      if (batchCmd === 'status') {
+        const status = await getManualBatchStatus(env, chatId);
+        if (status) {
+          await replyText(chatId, parseInt(msgId), '📦 当前批次进行中\n⏱ 已持续: ' + status.elapsed + '\n📁 已收录: ' + status.count + ' 个文件\n🕐 开始时间: ' + status.startTime + '\n\n发 #结束 完成批次', env);
+        } else {
+          await replyText(chatId, parseInt(msgId), '📭 当前没有进行中的批次\n\n发 #开始 开启新批次', env);
+        }
+        return { ok: true, batch: true };
+      }
+    }
   }
 
   // Handle file messages

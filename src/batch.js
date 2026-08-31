@@ -2,7 +2,9 @@
 // allocTgRef：每条入库消息分配唯一编号 group_ref（批内第 1 条以预计下一条 id 为批次基准）。
 // getFileRef/scheduleBatchRef/refreshGroupReceipt：同一 chat 3 秒内消息视为一批，统一编号后合并回执。
 // handleDeletedMsg：用户撤销已入库媒体时软删记录并清理批量回执。
+// startManualBatch/finalizeManualBatch：用户通过 #开始 #结束 手动控制批次边界。
 import { countCompleted } from "./telegram.js";
+import { log } from "./util.js";
 
 // ==================== 群资源编号（批次-序号，如 440-001） ====================
 // 每条入库消息分配唯一编号 group_ref：批内第 1 条以「下一条预计 id」为批次基准，
@@ -159,4 +161,128 @@ export async function handleDeletedMsg(msg, env) {
     }
     return { ok: true, deleted: true };
   } catch (e) { console.error('handleDeletedMsg:', e.message); return { ok: true, skip: true }; }
+}
+
+// ==================== 手动批量标记（#开始 #结束） ====================
+// 用户发 #开始 后，该 chat 的后续文件全部归入同一批次，直到发 #结束 统一编号回复。
+// 存储：settings 表 batch_pending_<chat_id> = start_timestamp，batch_start_msg_<chat_id> = 起始 message_id
+
+// 检测是否为批量标记指令（#开始 #结束 #批次 #batch start #batch end）
+export function isBatchCommand(text) {
+  if (!text) return null;
+  const t = text.trim();
+  if (/^#(开始|start)$/i.test(t)) return 'start';
+  if (/^#(结束|end|完成|done)$/i.test(t)) return 'end';
+  if (/^#(批次|batch)$/i.test(t)) return 'status';
+  return null;
+}
+
+// 开启手动批次：记录起始时间，返回当前待入库文件数
+export async function startManualBatch(env, chatId, msgId) {
+  if (!env.D1_DB || !chatId) return 0;
+  const now = Date.now();
+  try {
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind('batch_pending_' + chatId, String(now)).run();
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind('batch_start_msg_' + chatId, String(msgId || '')).run();
+  } catch (e) { log.error('startManualBatch:', e.message); }
+  return 0;
+}
+
+// 查询某 chat 是否有进行中的手动批次
+export async function isManualBatchActive(env, chatId) {
+  if (!env.D1_DB || !chatId) return false;
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind('batch_pending_' + chatId).first();
+    return !!(r && r.value && parseInt(r.value, 10) > 0);
+  } catch (e) { return false; }
+}
+
+// 获取手动批次状态信息（供 #批次 命令使用）
+export async function getManualBatchStatus(env, chatId) {
+  if (!env.D1_DB || !chatId) return null;
+  let startTs = 0;
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind('batch_pending_' + chatId).first();
+    startTs = parseInt(r && r.value, 10) || 0;
+  } catch (e) {}
+  if (!startTs) return null;
+
+  const startIso = new Date(startTs).toISOString();
+  let count = 0;
+  try {
+    const rows = await env.D1_DB.prepare(
+      'SELECT COUNT(*) as c FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=?'
+    ).bind(chatId, startIso).first();
+    count = (rows && rows.c) || 0;
+  } catch (e) {}
+
+  const elapsed = Math.floor((Date.now() - startTs) / 1000);
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  return {
+    active: true,
+    count: count,
+    startTime: new Date(startTs).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+    elapsed: mins > 0 ? mins + '分' + secs + '秒' : secs + '秒'
+  };
+}
+
+// 结束手动批次：查询批次内所有文件，统一编号，发送合并回执，清除批次状态
+export async function finalizeManualBatch(env, chatId, msgId) {
+  if (!env.D1_DB || !chatId) return { ok: false, count: 0 };
+  let startTs = 0;
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind('batch_pending_' + chatId).first();
+    startTs = parseInt(r && r.value, 10) || 0;
+  } catch (e) {}
+  if (!startTs) return { ok: false, count: 0, reason: 'no_active_batch' };
+
+  const startIso = new Date(startTs).toISOString();
+  // 查询批次开始后的所有文件（含已完成和处理中）
+  let list = [];
+  try {
+    const rows = await env.D1_DB.prepare(
+      'SELECT id, file_name, file_type, processing_state, r2_url, group_ref, media_group_id FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC'
+    ).bind(chatId, startIso).all();
+    list = (rows.results || []).filter(function(r) { return r.id; });
+  } catch (e) { log.error('finalizeManualBatch query:', e.message); }
+
+  // 清除批次状态
+  try {
+    await env.D1_DB.prepare("DELETE FROM settings WHERE key IN (?,?)").bind('batch_pending_' + chatId, 'batch_start_msg_' + chatId).run();
+  } catch (e) {}
+
+  if (!list.length) return { ok: true, count: 0 };
+
+  const N = list.length;
+  // 统一编号
+  for (var i = 0; i < list.length; i++) {
+    const ref = N + '-' + String(i + 1).padStart(3, '0');
+    try { await env.D1_DB.prepare('UPDATE files SET group_ref=? WHERE id=?').bind(ref, list[i].id).run(); } catch (e) {}
+  }
+
+  // 发送合并回执
+  const cnt = await countCompleted(env);
+  const cntStr = cnt ? '\n📊 已完成: ' + cnt.completed + ' / ' + cnt.total + ' 条' : '';
+  const lines = list.map(function(r, i) {
+    const ref = N + '-' + String(i + 1).padStart(3, '0');
+    const nm = String(r.file_name || '').slice(0, 40);
+    return '#' + ref + (nm ? ' · ' + nm : '');
+  });
+  const text = '📥 批次已入库（' + N + ' 个）\n' + lines.join('\n') + cntStr;
+
+  // 尝试 reply 到 #结束 消息
+  if (env.TG_BOT_TOKEN) {
+    try {
+      await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, reply_to_message_id: parseInt(msgId, 10) || undefined, text: text })
+      });
+    } catch (e) { log.error('finalizeManualBatch send:', e.message); }
+  }
+
+  return { ok: true, count: N };
 }
