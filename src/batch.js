@@ -91,7 +91,7 @@ export async function scheduleBatchRef(env, chatId, dbId, waitFn) {
           const nm = String(r.file_name || '').slice(0, 40);
           return '#' + ref + (nm ? ' · ' + nm : '');
         });
-        const text = (isAlbum ? '📥 相册已入库（' + members.length + ' 张）\n' : '📥 已入库 ') + lines.join('\n') + cntStr;
+        const text = (isAlbum ? '📥 相册已入库（' + (g + 1) + '/' + order.length + ' 批，' + members.length + ' 张）\n' : '📥 已入库 ') + lines.join('\n') + cntStr;
         try {
           const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
             method: 'POST',
@@ -123,13 +123,22 @@ export async function refreshGroupReceipt(env, chatId, mediaGroupId) {
     const mid = members[0].receipt_msg_id;
     const cnt = await countCompleted(env);
     const cntStr = cnt ? '\n📊 已完成: ' + cnt.completed + ' / ' + cnt.total + ' 条' : '';
+    // 提取批次号，查询同批次所有相册以确定当前位置
+    let batchPos = '';
+    const batchNum = members[0].group_ref ? parseInt(members[0].group_ref.split('-')[0], 10) : 0;
+    if (batchNum > 1) {
+      const batchRows = await env.D1_DB.prepare('SELECT DISTINCT media_group_id FROM files WHERE chat_id=? AND deleted_at IS NULL AND group_ref LIKE ?').bind(chatId, batchNum + '-%').all();
+      const batchAlbums = (batchRows.results || []).map(function(r) { return r.media_group_id || ''; }).filter(Boolean);
+      const pos = batchAlbums.indexOf(mediaGroupId);
+      if (pos !== -1 && batchAlbums.length > 1) batchPos = '（' + (pos + 1) + '/' + batchAlbums.length + ' 批）';
+    }
     const lines = members.map(function(r) {
       const ref = r.group_ref || String(r.id);
       const nm = String(r.file_name || '').slice(0, 40);
       if (r.processing_state === 'completed' && r.r2_url) return '✅ #' + ref + (nm ? ' · ' + nm : '') + '\n' + r.r2_url;
       return '⏳ #' + ref + (nm ? ' · ' + nm : '') + ' 转存中…';
     });
-    const text = '📥 相册回执（' + members.length + ' 张）\n' + lines.join('\n') + cntStr;
+    const text = '📥 相册回执' + batchPos + '（' + members.length + ' 张）\n' + lines.join('\n') + cntStr;
     await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/editMessageText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
