@@ -2,6 +2,11 @@
 import { genShortKey } from "./core.js";
 let _tablesEnsured = false;
 
+// 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
+// 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
+// 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
+const SCHEMA_VERSION = '3';
+
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
 export async function ensureTablesOnce(db) {
@@ -12,6 +17,11 @@ export async function ensureTablesOnce(db) {
 }
 
 export async function ensureTables(db) {
+  // 已迁移完成：1 次 SELECT 判定直接返回，跳过全部 CREATE/ALTER（冷启动大提速）
+  try {
+    const v = await db.prepare("SELECT value FROM settings WHERE key='schema_version'").first();
+    if (v && v.value === SCHEMA_VERSION) return true;
+  } catch (e) { /* settings 表可能尚不存在，继续完整初始化 */ }
   // Single exec: all CREATE TABLE/INDEX in one round-trip (was 10+ sequential D1 calls,
   // which added seconds to every cold-start request). Column migration below stays as fallback.
   await db.exec(
@@ -195,6 +205,10 @@ export async function ensureTables(db) {
     try {
       await db.exec("CREATE TABLE IF NOT EXISTS ub_task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, server_id INTEGER DEFAULT 0, server_name TEXT DEFAULT '', status TEXT DEFAULT 'running', done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, error TEXT DEFAULT '', started_at TEXT, finished_at TEXT)");
     } catch (e14) { console.error('ub_task_runs table:', e14.message); }
+    // 迁移完成：写入 schema 版本标记，后续冷启动跳过全部 CREATE/ALTER
+    try {
+      await db.prepare("INSERT INTO settings (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(SCHEMA_VERSION).run();
+    } catch (e16) { console.error('write schema_version:', e16.message); }
   } catch(e) { console.error('column migration:', e.message); throw e; }
   return true;
 }
