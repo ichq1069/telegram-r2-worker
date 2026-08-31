@@ -682,13 +682,17 @@ load();
 
 // ==================== Public JSON API (third-party programs) ====================
 export async function checkApiKey(request, env) {
-  if (!env.D1_DB) return null;
+  if (!env.D1_DB) { console.error('checkApiKey: D1_DB unavailable'); return null; }
   const u = new URL(request.url);
   const k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
   if (!k) return null;
   try {
+    // 先检查 key 是否存在（不过滤 enabled/过期），用于调试
+    const exists = await env.D1_DB.prepare('SELECT id, enabled, expires_at FROM api_keys WHERE key=? LIMIT 1').bind(k).first();
+    if (!exists) { console.error('checkApiKey: key not found:', k.slice(0,8) + '...'); return null; }
+    // 完整查询（含 enabled + 过期检查）
     const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
-    if (!rec) return null;
+    if (!rec) { console.error('checkApiKey: key disabled or expired:', k.slice(0,8) + '...', 'enabled=' + exists.enabled, 'expires=' + exists.expires_at); return null; }
     // usage bump (fire and forget)
     env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
     // 限流：settings.api_rate_limit = {enabled, limit_per_min}
@@ -711,6 +715,38 @@ export async function logApiCall(env, rec, request) {
 }
 
 // 公开 API 限流逻辑已移入 src/ratelimit.js（applyRateLimit），由顶部 import 引入
+
+// 诊断端点：帮助排查 API key 问题（仅返回 key 是否存在、是否启用、是否过期，不泄露完整 key）
+export async function handleDiagnoseKey(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable', hint: 'D1_DB binding missing' }, 500);
+  const u = new URL(request.url);
+  const k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
+  if (!k) return json({ ok: false, error: 'No API key provided', hint: 'Pass api_key as query param or X-API-Key header' }, 400);
+  try {
+    // 统计总密钥数（帮助判断是否是系统性问题）
+    const countResult = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM api_keys').first();
+    const totalKeys = countResult ? countResult.total : 0;
+    // 查找 key（不区分 enabled/过期，只看是否存在）
+    const rec = await env.D1_DB.prepare('SELECT id, name, username, enabled, expires_at, level, scopes, created_at FROM api_keys WHERE key=? LIMIT 1').bind(k).first();
+    if (!rec) {
+      return json({ ok: false, error: 'Key not found in database', key_prefix: k.slice(0, 6) + '...', total_keys_in_db: totalKeys }, 404);
+    }
+    const today = cnTodayStr();
+    const expired = rec.expires_at ? (rec.expires_at < today) : false;
+    return json({
+      ok: true,
+      key_exists: true,
+      enabled: rec.enabled === 1,
+      expired: expired,
+      expires_at: rec.expires_at || '(empty)',
+      level: rec.level,
+      username: rec.username || '(empty)',
+      name: rec.name || '(empty)',
+      scopes: rec.scopes,
+      total_keys_in_db: totalKeys
+    });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
 
 export function appendTagFilter(tagsParam, w, p, prefix) {
   const q = prefix || '';
