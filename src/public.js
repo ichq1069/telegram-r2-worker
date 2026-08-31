@@ -735,7 +735,7 @@ export async function handleDiagnoseKey(request, env) {
     const countResult = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM api_keys').first();
     const totalKeys = countResult ? countResult.total : 0;
     // 查找 key（不区分 enabled/过期，只看是否存在）
-    const rec = await env.D1_DB.prepare('SELECT id, name, username, enabled, expires_at, level, scopes, created_at FROM api_keys WHERE key=? LIMIT 1').bind(k).first();
+    const rec = await env.D1_DB.prepare('SELECT id, name, username, enabled, expires_at, level, scopes, created_at, short_key FROM api_keys WHERE key=? LIMIT 1').bind(k).first();
     if (!rec) {
       return json({ ok: false, error: 'Key not found in database', key_prefix: k.slice(0, 6) + '...', total_keys_in_db: totalKeys }, 404);
     }
@@ -787,6 +787,7 @@ export async function handleDiagnoseKey(request, env) {
       username: rec.username || '(empty)',
       name: rec.name || '(empty)',
       scopes: rec.scopes,
+      short_key: rec.short_key || '(empty)',
       total_keys_in_db: totalKeys,
       full_query_found: !!fullRec,
       select_star_found: !!starRec,
