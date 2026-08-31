@@ -75,7 +75,7 @@ export function genRedeemCode() {
 export function extractTags(caption) {
   if (!caption) return [];
   const tags = [];
-  const regex = /#([^\s#]{1,4})/g;
+  const regex = /#([^\s#,，]{1,4})/g;
   let match;
   while ((match = regex.exec(caption)) !== null) {
     const tag = match[1].trim();
@@ -84,4 +84,10 @@ export function extractTags(caption) {
     }
   }
   return tags;
+}
+
+// 分割标签字符串（支持中英文逗号）
+export function splitTags(tagsStr) {
+  if (!tagsStr) return [];
+  return tagsStr.split(/[,，]/).map(function(s) { return s.trim(); }).filter(Boolean);
 }

@@ -1,7 +1,7 @@
 // ==================== 事件 Webhook 通知 ====================
 // fireWebhook 事件派发、Webhook 配置管理、Random pool 管理、按条件查询/搜索/流/删除/回收站/R2 检查/机器人管理/配置管理。
 import { json, invalidateStatsCache } from "./util.js";
-import { sanitizeLevel, clampInt } from "./core.js";
+import { sanitizeLevel, clampInt, splitTags } from "./core.js";
 import { bumpR2Usage } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
 // ==================== 事件 Webhook 通知 ====================
@@ -67,11 +67,11 @@ export async function handleAdminPoolTags(request, env) {
       const cur = await env.D1_DB.prepare('SELECT tags FROM random_pool WHERE id = ?').bind(id).first();
       let next = '';
       if (mode === 'append') {
-        const set = new Set(((cur && cur.tags) || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean));
+        const set = new Set(splitTags(cur && cur.tags));
         tags.forEach(function(t){ set.add(t); });
         next = Array.from(set).join(',');
       } else if (mode === 'remove') {
-        const set = new Set(((cur && cur.tags) || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean));
+        const set = new Set(splitTags(cur && cur.tags));
         tags.forEach(function(t){ set.delete(t); });
         next = Array.from(set).join(',');
       } else {

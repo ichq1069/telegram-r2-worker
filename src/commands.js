@@ -3,7 +3,7 @@
 // 依赖 telegram.js（回复/键盘/文件签名）与 admin.js（handleUnsavedRetry，循环 import，运行时调用安全）。
 import { json, fmtSize } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
-import { cnShift, cnTodayStr, cnDayIso, fileExtOf, CN_OFFSET_MS } from "./core.js";
+import { cnShift, cnTodayStr, cnDayIso, fileExtOf, CN_OFFSET_MS, splitTags } from "./core.js";
 import { replyText, replyTextPlain, MAIN_BUTTONS, sendQuickReplyKeyboard, replyTextWithKeyboard, fileTok } from "./telegram.js";
 import { handleUnsavedRetry } from "./admin.js";
 
@@ -847,7 +847,7 @@ export async function handleImgCommand(chatId, msgId, args, env) {
       await replyText(chatId, msgId, tags.length ? ('😕 共享库中没有匹配「' + tags.join('、') + '」的图') : '😕 共享库还没有内容，先在后台「共享库」添加一些吧', env);
       return { ok: true };
     }
-    const cap = (it.title || '') + (it.tags ? '\n#' + it.tags.split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(' #') : '');
+    const cap = (it.title || '') + (it.tags ? '\n#' + splitTags(it.tags).join(' #') : '');
     // 优先发图片（sendPhoto 支持 URL）；非图片类型退化为发链接文本
     if (it.file_type === 'photo' && it.url) {
       try {
@@ -859,7 +859,7 @@ export async function handleImgCommand(chatId, msgId, args, env) {
         return { ok: true, img: true };
       } catch (e) {}
     }
-    await replyText(chatId, msgId, '📸 ' + (it.title || '（无标题）') + '\n' + it.url + (it.tags ? '\n#' + it.tags.split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(' #') : ''), env);
+    await replyText(chatId, msgId, '📸 ' + (it.title || '（无标题）') + '\n' + it.url + (it.tags ? '\n#' + splitTags(it.tags).join(' #') : ''), env);
     return { ok: true, img: true };
   } catch (e) {
     await replyText(chatId, msgId, '❌ ' + e.message, env);
@@ -900,7 +900,7 @@ export async function handleInlineQuery(iq, env) {
     const rows = (d.results || []).filter(function(r) { return r.url; });
     if (!rows.length) return await fail(parts.length ? ('共享库没有匹配「' + parts.join('、') + '」的图') : '共享库还没有内容，先在后台「共享库」添加');
     const results = rows.map(function(r, i) {
-      const cap = (r.title || '') + (r.tags ? '\n#' + String(r.tags).split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(' #') : '');
+      const cap = (r.title || '') + (r.tags ? '\n#' + splitTags(r.tags).join(' #') : '');
       const w = r.width || 0, h = r.height || 0;
       const photoW = w || 800, photoH = h || 600;
       const item = { type: 'photo', id: 'i' + r.id + '_' + i, title: r.title || (parts.join(' ') || '图片') };

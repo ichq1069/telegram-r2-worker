@@ -2,7 +2,7 @@
 // 幻灯片页（/show）、Show groups（节目单）、画廊瀑布流、公开 JSON API、公开上传、Random pool。
 // 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
 import { json, log, invalidateStatsCache } from "./util.js";
-import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode } from "./core.js";
+import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode, splitTags } from "./core.js";
 import { lastUploadError, putR2 } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
@@ -173,7 +173,7 @@ export async function groupItems(env, groupStr, limit) {
     ids.forEach(function(id) {
       const r = map[id];
       if (!r) return;
-      items.push({ url: r.url, thumb_url: r.thumb_url || r.url, title: r.title || '', tags: (r.tags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean) });
+      items.push({ url: r.url, thumb_url: r.thumb_url || r.url, title: r.title || '', tags: splitTags(r.tags) });
     });
   }
   urls.forEach(function(u) { items.push({ url: u, thumb_url: u, title: '', tags: [] }); });
@@ -259,7 +259,7 @@ export async function handleShowData(request, env) {
   try {
     const d = await env.D1_DB.prepare('SELECT url, thumb_url, title, tags FROM random_pool ' + w + (shuffle ? ' ORDER BY RANDOM()' : ' ORDER BY id DESC') + ' LIMIT ?').bind(...p, count).all();
     const items = (d.results || []).map(function(r) {
-      return { url: r.url, thumb_url: r.thumb_url || r.url, title: r.title || '', tags: (r.tags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean) };
+      return { url: r.url, thumb_url: r.thumb_url || r.url, title: r.title || '', tags: splitTags(r.tags) };
     });
     return json({ ok: true, data: { cfg: cfg, program: pgName ? { name: pgName } : null, items: items } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -801,7 +801,7 @@ export async function handleDiagnoseKey(request, env) {
 
 export function appendTagFilter(tagsParam, w, p, prefix) {
   const q = prefix || '';
-  const tags = (tagsParam || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  const tags = splitTags(tagsParam);
   if (tags.length) {
     const ts = [];
     tags.forEach(function(t) {
@@ -820,7 +820,7 @@ export function publicFileJson(f) {
     file_size: f.file_size, width: f.width, height: f.height,
     r2_url: f.r2_url, thumb_url: f.thumb_url,
     level: sanitizeLevel(f.level),
-    tags: (f.tags || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean),
+    tags: splitTags(f.tags),
     caption: f.caption, chat_title: f.chat_title, username: f.username,
     created_at: f.created_at
   };
@@ -895,7 +895,7 @@ export async function handlePublicRandom(request, env, keyLevel) {
 export function poolFileJson(r) {
   return {
     id: r.id, url: r.url, thumb_url: r.thumb_url || r.url,
-    title: r.title || '', tags: (r.tags || '').split(',').map(function(t){ return t.trim(); }).filter(Boolean),
+    title: r.title || '', tags: splitTags(r.tags),
     level: sanitizeLevel(r.level), is_private: r.is_private || 0,
     file_type: r.file_type || 'photo', width: r.width, height: r.height, file_size: r.file_size,
     source: r.source, created_at: r.created_at
@@ -920,7 +920,7 @@ export async function handlePublicUpload(request, env, keyLevel) {
     if (LEVEL_RANK[reqLevel] > LEVEL_RANK[keyLevel]) reqLevel = keyLevel;
     const isPrivate = (u.searchParams.get('is_private') === '1' || u.searchParams.get('is_private') === 'true') && keyLevel === 'vvip' ? 1 : 0;
     const useLevel = isPrivate ? 'vvip' : reqLevel;
-    const tags = tagsParam.split(',').map(function(t){ return t.trim(); }).filter(Boolean).join(',');
+    const tags = splitTags(tagsParam).join(',');
 
     const fd = await request.formData().catch(function(){ return null; });
     if (!fd) return json({ ok: false, error: 'multipart/form-data required (field "file")' }, 400);
@@ -977,7 +977,7 @@ export async function handleAdminTags(env) {
     [d1, d2].forEach(function(res) {
       (res.results || []).forEach(function(r) {
         const seen = {};
-        (r.tags || '').split(',').forEach(function(t) {
+        splitTags(r.tags).forEach(function(t) {
           t = t.trim();
           if (t && !seen[t]) { seen[t] = 1; cnt[t] = (cnt[t] || 0) + 1; }  // 行内去重，防止 a,a 计两次
         });
@@ -1007,7 +1007,7 @@ export async function handleSetFileTags(request, env) {
         }
       } else {
         const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
-        const oldArr = (f && f.tags) ? f.tags.split(',').map(function(s){ return s.trim(); }).filter(Boolean) : [];
+        const oldArr = (f && f.tags) ? splitTags(f.tags) : [];
         let cur = oldArr.slice();
         let hitAuto = false;
         if (mode === 'append') {
@@ -1874,7 +1874,7 @@ export async function handleAdminGetPoolTags(env) {
     const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'pool_tags_preset'").first();
     let tags = [];
     if (s && s.value) {
-      try { tags = JSON.parse(s.value); } catch (e) { tags = String(s.value).split(',').map(function(t){ return t.trim(); }).filter(Boolean); }
+      try { tags = JSON.parse(s.value); } catch (e) { tags = splitTags(String(s.value)); }
     }
     return json({ ok: true, data: { tags: Array.isArray(tags) ? tags : [] } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
