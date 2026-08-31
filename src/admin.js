@@ -53,7 +53,7 @@ export async function handleUnsavedList(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
-// 批量重试未转存：body { ids:[...] } 或 { all:true }（默认最多 5 条 pending/failed）
+// 批量重试未转存：body { ids:[...] } 或 { all:true }（默认最多 5 条 pending/failed/downloading）
 export async function handleUnsavedRetry(request, env, ctx) {
   if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' });
   try {
@@ -66,8 +66,9 @@ export async function handleUnsavedRetry(request, env, ctx) {
       rows = (await env.D1_DB.prepare('SELECT * FROM files WHERE id IN (' + marks + ') AND deleted_at IS NULL').bind(...arr).all()).results || [];
     } else {
       // 免费版单调用最多 50 个子请求（每条转存约占 5-8 个），默认批 8 条最安全；limit 可指定（最大 10）
+      // 包含 downloading 状态：卡住的任务需要重试
       const lim = (b && b.limit) ? Math.min(parseInt(b.limit) || 8, 10) : 8;
-      rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT ?").bind(lim).all()).results || [];
+      rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed','downloading') ORDER BY id ASC LIMIT ?").bind(lim).all()).results || [];
     }
     let started = 0;
     for (const f of rows) {
@@ -87,11 +88,12 @@ export async function handleUnsavedRetry(request, env, ctx) {
   } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
-// Cron 兜底转存：每次最多 2 条 pending/failed（scheduled 与 webhook 自愈、查重叠加，子请求预算 ~30）
+// Cron 兜底转存：每次最多 2 条 pending/failed/downloading（scheduled 与 webhook 自愈、查重叠加，子请求预算 ~30）
 export async function retryUnsavedCron(env, ctx) {
   if (!env.D1_DB) return;
   try {
-    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed') ORDER BY id ASC LIMIT 2").all();
+    // 包含 downloading 状态：卡住的任务需要重试
+    const d = await env.D1_DB.prepare("SELECT id FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed','downloading') ORDER BY id ASC LIMIT 2").all();
     for (const row of d.results || []) {
       const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id=?').bind(row.id).first();
       if (!f) continue;
