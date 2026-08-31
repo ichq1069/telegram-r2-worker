@@ -4254,7 +4254,7 @@ async function loadKeys() {
   if (!r.ok) { el.innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
   var d = r.data || [];
   if (!d.length) { el.innerHTML = '<div class="empty">暂无密钥，点击右上角生成</div>'; return; }
-  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>级别</th><th>权限</th><th>登录密码</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
+  var h = '<table><thead><tr><th>名称</th><th>密钥</th><th>短链接 key</th><th>级别</th><th>权限</th><th>登录密码</th><th>状态</th><th>到期时间</th><th>调用次数</th><th>最近调用</th><th>创建时间</th><th>操作</th></tr></thead><tbody>';
   var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   for (var i = 0; i < d.length; i++) {
     var k = d[i];
@@ -4266,6 +4266,7 @@ async function loadKeys() {
     }
     h += '<tr><td>' + escStr(k.name || "-") + '</td>';
     h += '<td><code style="font-size:11px">' + escStr(k.key) + '</code> <button class="btn btn-ghost btn-sm" data-action="copy-key" data-key="' + escStr(k.key) + '">复制</button></td>';
+    h += '<td>' + (k.short_key ? '<code style="font-size:11px">' + escStr(k.short_key) + '</code> <button class="btn btn-ghost btn-sm" data-action="copy-key" data-key="' + escStr(k.short_key) + '">复制</button>' : '<span style="font-size:11px;color:var(--text-secondary)">-</span>') + '</td>';
     h += '<td>' + levelBadge(k.level) + '</td>';
     h += '<td>' + escStr(k.scopes || "files:read") + '</td>';
     h += '<td>' + (k.has_pass ? '<span class="badge badge-green" title="已设置登录密码，用户可在 /user 用密钥+密码登录">已设置</span>' : '<span style="font-size:11px;color:var(--text-secondary)">未设置</span>') + '</td>';

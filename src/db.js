@@ -1,4 +1,5 @@
 // D1 数据库初始化与表结构（含列迁移）
+import { genShortKey } from "./core.js";
 let _tablesEnsured = false;
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
@@ -151,6 +152,21 @@ export async function ensureTables(db) {
         console.log('migrated: api_keys.username column');
       }
     } catch (e9) { console.error('api_keys username migration:', e9.message); }
+    // api_keys.short_key：短链接别名 key（旧库无此列则补加；并对缺失值补生成，用于 ?sk= 短链接鉴权）
+    try {
+      const ak5 = await db.prepare("PRAGMA table_info(api_keys)").all();
+      const ak5n = (ak5.results || []).map(function(c) { return c.name; });
+      if (ak5n.indexOf('short_key') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN short_key TEXT");
+        console.log('migrated: api_keys.short_key column');
+      }
+      const missing = await db.prepare("SELECT id FROM api_keys WHERE short_key IS NULL OR short_key=''").all();
+      for (const row of (missing.results || [])) {
+        const sk = genShortKey();
+        await db.prepare("UPDATE api_keys SET short_key=? WHERE id=?").bind(sk, row.id).run();
+      }
+      if ((missing.results || []).length) console.log('migrated: backfilled short_key for ' + missing.results.length + ' keys');
+    } catch (e15) { console.error('api_keys short_key migration:', e15.message); }
     // user_stats 交互统计列（旧库有表但缺列时补加，避免 INSERT 失败）
     try {
       const us = await db.prepare("PRAGMA table_info(user_stats)").all();

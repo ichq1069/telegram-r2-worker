@@ -54,6 +54,16 @@ export function genApiKey() {
   return 'vk_' + Array.from(arr).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
 }
 
+// 生成短链接别名 key（8 位 base62 随机，约 2.2e14 组合，用于 ?sk= 短链接鉴权，避免使用易猜的用户名）
+export function genShortKey() {
+  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+  const arr = new Uint8Array(8);
+  crypto.getRandomValues(arr);
+  let s = '';
+  for (let i = 0; i < arr.length; i++) s += chars[arr[i] % 62];
+  return 'sk_' + s;
+}
+
 // 生成兑换码（后台管理用），格式 RZ + 8 位随机大写
 export function genRedeemCode() {
   const arr = new Uint8Array(6);

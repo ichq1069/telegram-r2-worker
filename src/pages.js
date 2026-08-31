@@ -71,7 +71,7 @@ export async function handleUserLogin(request, env) {
     const exp = rec.expires_at || '';
     rec.expired = exp ? (exp < today ? 1 : 0) : 0;
     return json({ ok: true, data: {
-      id: rec.id, key: rec.key, name: rec.name, username: rec.username || '', scopes: rec.scopes, level: rec.level,
+      id: rec.id, key: rec.key, short_key: rec.short_key || '', name: rec.name, username: rec.username || '', scopes: rec.scopes, level: rec.level,
       enabled: rec.enabled, expires_at: rec.expires_at, expired: rec.expired,
       created_at: rec.created_at, last_used_at: rec.last_used_at, usage_count: rec.usage_count
     } });

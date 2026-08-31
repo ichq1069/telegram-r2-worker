@@ -2,7 +2,7 @@
 // 幻灯片页（/show）、Show groups（节目单）、画廊瀑布流、公开 JSON API、公开上传、Random pool。
 // 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
 import { json } from "./util.js";
-import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genRedeemCode } from "./core.js";
+import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode } from "./core.js";
 import { lastUploadError, putR2 } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
@@ -686,12 +686,12 @@ export async function checkApiKey(request, env) {
   if (!env.D1_DB) { console.error('checkApiKey: D1_DB unavailable'); return null; }
   const u = new URL(request.url);
   let k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
-  // 支持 ?user=用户名：按用户名匹配 key（便于生成短链接），api_key 优先
+  // 支持 ?sk=短链接别名：按 short_key 匹配真实 key（便于生成短链接），api_key 优先
   if (!k) {
-    const uname = u.searchParams.get('user');
-    if (uname) {
-      const byName = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE username=? LIMIT 1').bind(String(uname).trim()).first().catch(function() { return null; });
-      if (byName) k = byName.key;
+    const sk = u.searchParams.get('sk');
+    if (sk) {
+      const bySk = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE short_key=? LIMIT 1').bind(String(sk).trim()).first().catch(function() { return null; });
+      if (bySk) k = bySk.key;
     }
   }
   if (!k) return null;
@@ -1042,7 +1042,7 @@ export async function checkUserPortal(request, env) {
 
 export async function handleAdminKeys(env) {
   try {
-    const d = await env.D1_DB.prepare('SELECT id,key,name,scopes,level,enabled,expires_at,created_at,last_used_at,usage_count,key_pass,username FROM api_keys ORDER BY id DESC').all();
+    const d = await env.D1_DB.prepare('SELECT id,key,short_key,name,scopes,level,enabled,expires_at,created_at,last_used_at,usage_count,key_pass,username FROM api_keys ORDER BY id DESC').all();
     const today = cnTodayStr();
     const out = (d.results || []).map(function(k) {
       const exp = k.expires_at || '';
@@ -1063,10 +1063,11 @@ export async function handleAdminKeysCreate(request, env) {
     const expires_at = String(b.expires_at || '').trim().slice(0, 10); // YYYY-MM-DD，空=永久
     const level = sanitizeLevel(b.level);
     const key = genApiKey();
+    const short_key = genShortKey();
     const key_pass = String(b.key_pass || '').slice(0, 64);
     const passHash = key_pass ? await hashKeyPass(key_pass, key) : '';
-    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username) VALUES (?,?,?,?,1,?,0,?,?,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at, passHash, '').run();
-    return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, name: name, scopes: scopes, level: level, expires_at: expires_at, has_pass: !!passHash } });
+    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username,short_key) VALUES (?,?,?,?,1,?,0,?,?,?,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at, passHash, '', short_key).run();
+    return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, short_key: short_key, name: name, scopes: scopes, level: level, expires_at: expires_at, has_pass: !!passHash } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -1296,12 +1297,13 @@ export async function handleUserRegister(request, env) {
     if (rc.used_count >= rc.quota) return json({ ok: false, error: '兑换码已用完' }, 400);
     // 生成密钥并兑换
     const key = genApiKey();
+    const short_key = genShortKey();
     const passHash = await hashKeyPass(pass, key);
     const now = new Date().toISOString();
-    await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username) VALUES (?,?,?,?,1,?,0,\'\',?,?)')
-      .bind(key, username, 'files:read', rc.level, now, passHash, username).run();
+    await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username,short_key) VALUES (?,?,?,?,1,?,0,\'\',?,?,?)')
+      .bind(key, username, 'files:read', rc.level, now, passHash, username, short_key).run();
     await env.D1_DB.prepare('UPDATE redeem_codes SET used_count = used_count + 1 WHERE id = ?').bind(rc.id).run();
-    return json({ ok: true, data: { username: username, key: key, level: rc.level, name: username } });
+    return json({ ok: true, data: { username: username, key: key, short_key: short_key, level: rc.level, name: username } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
