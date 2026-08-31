@@ -966,7 +966,7 @@ export async function replyMsg(chatId, replyId, fi, url, env, ref, dbId) {
   if (dbId && env.D1_DB) {
     try {
       const f = await env.D1_DB.prepare('SELECT media_group_id, receipt_msg_id FROM files WHERE id=?').bind(dbId).first();
-      if (f && f.media_group_id) {
+      if (f && f.media_group_id && f.receipt_msg_id) {
         await refreshGroupReceipt(env, chatId, f.media_group_id);
         return;
       }
