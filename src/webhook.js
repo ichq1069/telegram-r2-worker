@@ -7,6 +7,7 @@ import { cnTodayStr, guessExt, fileExtOf } from "./core.js";
 import { putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, getMainMenuCfg, replyTextWithKeyboard } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
+import { getBotUsername } from "./api.js";
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg } from "./batch.js";
 import { fireWebhook } from "./events.js";
 // ==================== WEBHOOK ====================
