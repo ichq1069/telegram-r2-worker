@@ -3735,6 +3735,7 @@ async function saveTags() {
   if (r.ok) {
     toast("已更新 " + tagTargetIds.length + " 个标签", 1);
     document.getElementById("modalArea").innerHTML = "";
+    selSet.clear(); updateSelUI();
     if (tagTargetKind === "pool") loadPool(); else loadFiles(currentPage);
     loadTagCloud();
   } else toast(r.error || "保存失败", 0);
@@ -3760,7 +3761,7 @@ function showPoolImportModal(ids) {
     api("POST", "/admin/api/pool/from-tg", { ids: ids, tags: tags, level: level }).then(function(r) {
       if (r.ok) {
         toast("已设置标签并导入 " + (r.data && r.data.added || 0) + " 张" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
-        closeM(); loadFiles(currentPage); loadTagCloud(); loadPool();
+        closeM(); selSet.clear(); updateSelUI(); loadFiles(currentPage); loadTagCloud(); loadPool();
       } else toast(r.error || "失败", 0);
     });
   };
@@ -3769,7 +3770,7 @@ function showPoolImportModal(ids) {
     api("POST", "/admin/api/pool/from-tg", { ids: ids, level: level }).then(function(r) {
       if (r.ok) {
         toast("已导入 " + (r.data && r.data.added || 0) + " 张到共享库" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
-        closeM(); loadFiles(currentPage); loadTagCloud(); loadPool();
+        closeM(); selSet.clear(); updateSelUI(); loadFiles(currentPage); loadTagCloud(); loadPool();
       } else toast(r.error || "导入失败", 0);
     });
   };
@@ -3778,7 +3779,7 @@ function showPoolImportModal(ids) {
     api("POST", "/admin/api/files/tags", { ids: ids, tags: tags, mode: "set" }).then(function(r) {
       if (r.ok) {
         toast("已设置标签（未导入）", 1);
-        closeM(); loadFiles(currentPage); loadTagCloud();
+        closeM(); selSet.clear(); updateSelUI(); loadFiles(currentPage); loadTagCloud();
       } else toast(r.error || "失败", 0);
     });
   };
@@ -3787,7 +3788,7 @@ function showPoolImportModal(ids) {
     api("POST", "/admin/api/private-pool/from-tg", { ids: ids, tags: tags }).then(function(r) {
       if (r.ok) {
         toast("已加入私密库 " + (r.data && r.data.added || 0) + " 张" + (r.data && r.data.skipped ? "，跳过忽略 " + r.data.skipped + " 张" : ""), 1);
-        closeM(); loadFiles(currentPage); loadTagCloud(); loadPrivatePool();
+        closeM(); selSet.clear(); updateSelUI(); loadFiles(currentPage); loadTagCloud(); loadPrivatePool();
       } else toast(r.error || "加入失败", 0);
     });
   };
@@ -4693,8 +4694,8 @@ function copySelected(mode) {
   if (!links.length) { toast("没有可复制的链接", 0); return; }
   var txt = links.join("\n");
   if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(txt).then(function() { toast("已复制 " + links.length + " 条链接", 1); }, function() { fallbackCopy(txt); });
-  } else { fallbackCopy(txt); }
+    navigator.clipboard.writeText(txt).then(function() { toast("已复制 " + links.length + " 条链接", 1); selSet.clear(); updateSelUI(); }, function() { fallbackCopy(txt); });
+  } else { fallbackCopy(txt); selSet.clear(); updateSelUI(); }
 }
 // 代理链接后缀（与后端 fileExtOf 一致）：优先文件名扩展名，否则按类型推断
 function proxyExt(f) {
@@ -4749,7 +4750,7 @@ function proxyExt(f) {
     api("POST", "/admin/api/private-pool/from-tg", { ids: ids }).then(function(r) {
       if (r.ok) {
         toast("已转入私密库 " + (r.data && r.data.added || 0) + " 张" + (r.data && r.data.skipped ? "，跳过 " + r.data.skipped + " 张" : ""), 1);
-        loadPrivatePool();
+        selSet.clear(); updateSelUI(); loadPrivatePool();
       } else toast(r.error || "失败", 0);
     });
   });
