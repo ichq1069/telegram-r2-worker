@@ -59,9 +59,13 @@ export async function scheduleBatchRef(env, chatId, dbId, waitFn) {
       // 等 3 秒让"这一批"的其余消息到齐（TG 批量转发/相册消息间隔 <1s）
       await new Promise(function(res) { setTimeout(res, 3000); });
       const win = new Date(Date.now() - 6000).toISOString();
-      const rows = await env.D1_DB.prepare('SELECT id, message_id, file_name, media_group_id FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC').bind(chatId, win).all();
+      const rows = await env.D1_DB.prepare('SELECT id, message_id, file_name, media_group_id, tags FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC').bind(chatId, win).all();
       const list = (rows.results || []).filter(function(r) { return r.id; });
       if (!list.length) return;
+
+      // 传播标签：同 media_group_id 的文件共享第一张图的标签
+      await propagateAlbumTags(env, list);
+
       const N = list.length;
       // 统一编号：批次号 = 本次总数 N，序号 = 批内位置（可重复执行，值稳定）
       for (var i = 0; i < list.length; i++) {
@@ -229,6 +233,45 @@ export async function getManualBatchStatus(env, chatId) {
   };
 }
 
+// 传播相册标签：同 media_group_id 的文件共享第一张图的标签
+async function propagateAlbumTags(env, list) {
+  if (!env.D1_DB || !list || !list.length) return;
+
+  // 按 media_group_id 分组
+  const groups = {};
+  list.forEach(function(item) {
+    const key = item.media_group_id || ('single:' + item.id);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(item);
+  });
+
+  // 对每个相册组，用第一张图的标签更新其他图
+  for (const key in groups) {
+    const members = groups[key];
+    if (members.length <= 1) continue; // 单张图不需要传播
+
+    // 找到第一张有标签的图
+    let sourceTags = '';
+    for (let i = 0; i < members.length; i++) {
+      if (members[i].tags && members[i].tags.trim()) {
+        sourceTags = members[i].tags;
+        break;
+      }
+    }
+
+    if (!sourceTags) continue; // 没有标签可传播
+
+    // 更新其他没有标签的图
+    for (let i = 0; i < members.length; i++) {
+      if (!members[i].tags || !members[i].tags.trim()) {
+        try {
+          await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=?').bind(sourceTags, members[i].id).run();
+        } catch (e) { log.error('propagateAlbumTags:', e.message); }
+      }
+    }
+  }
+}
+
 // 结束手动批次：查询批次内所有文件，统一编号，发送合并回执，清除批次状态
 export async function finalizeManualBatch(env, chatId, msgId) {
   if (!env.D1_DB || !chatId) return { ok: false, count: 0 };
@@ -244,7 +287,7 @@ export async function finalizeManualBatch(env, chatId, msgId) {
   let list = [];
   try {
     const rows = await env.D1_DB.prepare(
-      'SELECT id, file_name, file_type, processing_state, r2_url, group_ref, media_group_id FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC'
+      'SELECT id, file_name, file_type, processing_state, r2_url, group_ref, media_group_id, tags FROM files WHERE chat_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id ASC'
     ).bind(chatId, startIso).all();
     list = (rows.results || []).filter(function(r) { return r.id; });
   } catch (e) { log.error('finalizeManualBatch query:', e.message); }
@@ -255,6 +298,9 @@ export async function finalizeManualBatch(env, chatId, msgId) {
   } catch (e) {}
 
   if (!list.length) return { ok: true, count: 0 };
+
+  // 传播标签：同 media_group_id 的文件共享第一张图的标签
+  await propagateAlbumTags(env, list);
 
   const N = list.length;
   // 统一编号
