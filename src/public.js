@@ -733,17 +733,24 @@ export async function handleDiagnoseKey(request, env) {
     }
     const today = cnTodayStr();
     const expired = rec.expires_at ? (rec.expires_at < today) : false;
+    // 测试 checkApiKey 使用的完整查询
+    const fullRec = await env.D1_DB.prepare('SELECT id, enabled, expires_at FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
     return json({
       ok: true,
       key_exists: true,
       enabled: rec.enabled === 1,
       expired: expired,
-      expires_at: rec.expires_at || '(empty)',
+      expires_at_raw: rec.expires_at,
+      expires_at_type: typeof rec.expires_at,
+      expires_at_is_null: rec.expires_at === null,
+      expires_at_is_empty: rec.expires_at === '',
+      today: today,
       level: rec.level,
       username: rec.username || '(empty)',
       name: rec.name || '(empty)',
       scopes: rec.scopes,
-      total_keys_in_db: totalKeys
+      total_keys_in_db: totalKeys,
+      full_query_found: !!fullRec
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
