@@ -4,7 +4,7 @@ import { json, fmtSize, genHash, log, invalidateStatsCache } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
 import { notifyAdmin, genThumb } from "./notify.js";
 import { cnTodayStr, guessExt, fileExtOf } from "./core.js";
-import { putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
+import { OFFICIAL_API, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
 import { getBotUsername, getProxyMode } from "./api.js";
