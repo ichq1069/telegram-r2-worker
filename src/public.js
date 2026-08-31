@@ -737,6 +737,11 @@ export async function handleDiagnoseKey(request, env) {
     try {
       starRec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
     } catch (se) { starError = se.message; }
+    // 直接调用 checkApiKey 复现完整流程
+    let chkResult = null, chkError = null;
+    try {
+      chkResult = await checkApiKey(request, env);
+    } catch (ce) { chkError = ce.message; }
     return json({
       ok: true,
       key_exists: true,
@@ -754,7 +759,9 @@ export async function handleDiagnoseKey(request, env) {
       total_keys_in_db: totalKeys,
       full_query_found: !!fullRec,
       select_star_found: !!starRec,
-      select_star_error: starError
+      select_star_error: starError,
+      checkApiKey_result: chkResult ? { found: !!chkResult.rec, limited: chkResult.limited } : null,
+      checkApiKey_error: chkError
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
