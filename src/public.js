@@ -687,12 +687,9 @@ export async function checkApiKey(request, env) {
   const k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
   if (!k) return null;
   try {
-    // 先检查 key 是否存在（不过滤 enabled/过期），用于调试
-    const exists = await env.D1_DB.prepare('SELECT id, enabled, expires_at FROM api_keys WHERE key=? LIMIT 1').bind(k).first();
-    if (!exists) { console.error('checkApiKey: key not found:', k.slice(0,8) + '...'); return null; }
-    // 完整查询（含 enabled + 过期检查）
     const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
-    if (!rec) { console.error('checkApiKey: key disabled or expired:', k.slice(0,8) + '...', 'enabled=' + exists.enabled, 'expires=' + exists.expires_at); return null; }
+    console.log('checkApiKey result:', rec ? 'FOUND id=' + rec.id : 'NULL', 'key_prefix=' + k.slice(0,8));
+    if (!rec) return null;
     // usage bump (fire and forget)
     env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
     // 限流：settings.api_rate_limit = {enabled, limit_per_min}
@@ -700,7 +697,7 @@ export async function checkApiKey(request, env) {
     // 记录调用日志（fire and forget；路径/方法/IP 供后台查看与统计）
     logApiCall(env, rec, request).catch(function(){});
     return { rec: rec, limited: limited };
-  } catch (e) { console.error('checkApiKey:', e.message); return null; }
+  } catch (e) { console.error('checkApiKey error:', e.message, e.stack); return null; }
 }
 
 // 记录一次密钥调用（api_call_logs）。路径保留 /api/v1/... 原始地址（含 query），IP 取 CF 头。
@@ -733,8 +730,13 @@ export async function handleDiagnoseKey(request, env) {
     }
     const today = cnTodayStr();
     const expired = rec.expires_at ? (rec.expires_at < today) : false;
-    // 测试 checkApiKey 使用的完整查询
+    // 测试 checkApiKey 使用的完整查询（明确列）
     const fullRec = await env.D1_DB.prepare('SELECT id, enabled, expires_at FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
+    // 测试 checkApiKey 实际使用的 SELECT *（复现可能的异常）
+    let starRec = null, starError = null;
+    try {
+      starRec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
+    } catch (se) { starError = se.message; }
     return json({
       ok: true,
       key_exists: true,
@@ -750,7 +752,9 @@ export async function handleDiagnoseKey(request, env) {
       name: rec.name || '(empty)',
       scopes: rec.scopes,
       total_keys_in_db: totalKeys,
-      full_query_found: !!fullRec
+      full_query_found: !!fullRec,
+      select_star_found: !!starRec,
+      select_star_error: starError
     });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
