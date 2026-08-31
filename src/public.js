@@ -702,13 +702,15 @@ export async function checkApiKey(request, env) {
 }
 
 // 记录一次密钥调用（api_call_logs）。路径保留 /api/v1/... 原始地址（含 query），IP 取 CF 头。
+// api_key 参数值脱敏为 ***，避免完整密钥落入日志明文（后台展示/定位仍可用，key 已有单独 api_key 列）
 export async function logApiCall(env, rec, request) {
   if (!env.D1_DB || !rec) return;
   try {
     const u = new URL(request.url);
     const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
+    const path = (u.pathname + u.search).replace(/([?&]api_key=)[^&]*/gi, '$1***');
     await env.D1_DB.prepare('INSERT INTO api_call_logs (key_id, api_key, path, method, ip, status, created_at) VALUES (?,?,?,?,?,?,?)')
-      .bind(rec.id, rec.key, u.pathname + u.search, request.method || 'GET', String(ip).slice(0, 45), 200, new Date().toISOString()).run();
+      .bind(rec.id, rec.key, path, request.method || 'GET', String(ip).slice(0, 45), 200, new Date().toISOString()).run();
   } catch (e) { console.error('logApiCall:', e.message); }
 }
 

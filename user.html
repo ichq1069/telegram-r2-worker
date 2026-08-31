@@ -291,9 +291,10 @@ function loadCallStatsAndLogs() {
     var n = Math.min(r.data.length, 50);
     for (var i = 0; i < n; i++) {
       var L = r.data[i];
+      var Lpath = String(L.path || "").replace(/([?&]api_key=)[^&]*/gi, "$1***");
       h += '<tr><td style="padding:7px 10px;border-top:1px solid var(--border);color:var(--text-secondary);white-space:nowrap">' + fmtDT(L.created_at) + '</td>' +
         '<td style="padding:7px 10px;border-top:1px solid var(--border)">' + escStr(L.method || "GET") + '</td>' +
-        '<td style="padding:7px 10px;border-top:1px solid var(--border);word-break:break-all"><code>' + escStr(L.path) + '</code></td>' +
+        '<td style="padding:7px 10px;border-top:1px solid var(--border)"><code style="white-space:nowrap;max-width:280px;display:inline-block;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom" title="' + escStr(Lpath) + '">' + escStr(Lpath) + '</code></td>' +
         '<td style="padding:7px 10px;border-top:1px solid var(--border);color:var(--text-secondary)">' + escStr(L.ip || "-") + '</td></tr>';
     }
     tb.innerHTML = h;
