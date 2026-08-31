@@ -43,6 +43,16 @@ Entries discovered by the Agent during task execution should follow this format:
   - 脚本侧鉴权用专用 `ub_token`(admin 可重置),不把 admin API_KEY 交给脚本;上传走 `/api/v1/upload` 用 `api_key` query 参数,脚本从后台拉 `ub_api_key`
 
 [Project Knowledge Summary]
+- Date: 2026-08-31
+- Context: Discovered by Agent while performing webhook 500 排查与接口冷启动性能优化
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - webhook 500 排查法:先发空 update / 纯文本 / 命令 / inline_query 构造样本请求,读返回 body 的 `error` 字段定位 ReferenceError(如 `getBotUsername is not defined`),比只看状态码高效
+  - 线上域名 `telegram-r2-bot.wo58.cn` 的 Worker 冷启动存在平台层间歇性慢:纯内存 `/health` 也可能 30-45s,跨 HKG/NRT 节点随机出现,与 D1/caches/代码无关(Cloudflare 免费版 Worker 冷启动/排队现象);R2 静态托管 `telegramup.wo58.cn` 无此问题
+  - 曾误判为 D1/caches 慢:实际 Worker 内 `caches.default` 的 match/put 冷启动本身慢(files 接口 45-60s),且 CDN 层 CF-Cache-Status HIT 已生效,应只用 Cache-Control s-maxage 交给边缘缓存,不要在 Worker 内二次缓存
+  - 验证用唯一 URL(`cb=时间戳`)绕过 CDN/边缘缓存测真实回源耗时,避免缓存命中掩盖慢请求
+
+[Project Knowledge Summary]
 - Date: 2026-08-29
 - Context: Discovered by Agent while performing 内容分级需求设计
 - Category: Troubleshooting & Debugging

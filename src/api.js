@@ -1,6 +1,6 @@
 // ==================== API HANDLERS ====================
 // /file/tg/<id> 302 重定向/代理、文件列表/详情/统计、代理模式与代理直链开关。
-import { json, fmtSize, genHash } from "./util.js";
+import { json, fmtSize, genHash, cacheGet, cacheSet } from "./util.js";
 import { clampInt, cnDayIso, cnTodayStr, guessExt, fileExtOf } from "./core.js";
 import { fileTok, putR2 } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
@@ -133,7 +133,10 @@ export async function handleFiles(request, env) {
     const po = await getProxyOnly(env);
     const items = await Promise.all((d.results || []).map(async function(f) { return decorateLinks(f, origin, po, env); }));
     return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, total_pages: Math.ceil((t?.total || 0) / ps), items: items } });
-  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+  } catch (e) {
+    log.error('handleFiles error:', e.message);
+    return json({ ok: false, error: '查询文件列表失败', details: e.message, hint: '请检查参数格式是否正确' }, 500);
+  }
 }
 
 // 给文件记录补三类直链字段：
@@ -238,6 +241,9 @@ export async function handleAdminSaveProxyOnly(request, env) {
 }
 
 export async function handleStats(env) {
+  const cacheKey = 'stats:main';
+  const cached = cacheGet(cacheKey);
+  if (cached) return json(cached);
   try {
     const cn0 = cnDayIso(cnTodayStr());
     const cnMonth0 = cnDayIso(cnTodayStr().slice(0, 8) + '01');
@@ -264,6 +270,8 @@ export async function handleStats(env) {
         tableRows[tbl] = rc?.c || 0;
       }
     } catch (e) {}
-    return json({ ok: true, data: { total_files: t?.c || 0, completed_files: comp?.c || 0, unsaved_files: (t?.c || 0) - (comp?.c || 0), total_size: ts?.s || 0, total_size_formatted: fmtSize(ts?.s || 0), today_uploads: td?.c || 0, month_uploads: mo?.c || 0, by_type: bt.results || [], by_chat: bc.results || [], pool_total: pt?.c || 0, pool_enabled: pe?.c || 0, pool_manual: pm?.c || 0, pool_tg: ptg?.c || 0, table_rows: tableRows } });
+    const data = { total_files: t?.c || 0, completed_files: comp?.c || 0, unsaved_files: (t?.c || 0) - (comp?.c || 0), total_size: ts?.s || 0, total_size_formatted: fmtSize(ts?.s || 0), today_uploads: td?.c || 0, month_uploads: mo?.c || 0, by_type: bt.results || [], by_chat: bc.results || [], pool_total: pt?.c || 0, pool_enabled: pe?.c || 0, pool_manual: pm?.c || 0, pool_tg: ptg?.c || 0, table_rows: tableRows };
+    cacheSet(cacheKey, data, 5000);
+    return json({ ok: true, data });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }

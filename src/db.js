@@ -5,7 +5,7 @@ let _tablesEnsured = false;
 // 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
 // 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
 // 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
-const SCHEMA_VERSION = '3';
+const SCHEMA_VERSION = '5';
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
@@ -35,10 +35,17 @@ export async function ensureTables(db) {
     "CREATE INDEX IF NOT EXISTS idx_files_quickhash ON files(quick_hash);" +
     "CREATE INDEX IF NOT EXISTS idx_files_deleted ON files(deleted_at);" +
     "CREATE INDEX IF NOT EXISTS idx_files_tgfileid ON files(telegram_file_id);" +
+    "CREATE INDEX IF NOT EXISTS idx_files_active ON files(deleted_at, id DESC);" +
+    "CREATE INDEX IF NOT EXISTS idx_files_type_created ON files(file_type, created_at);" +
+    "CREATE INDEX IF NOT EXISTS idx_files_chat_created ON files(chat_id, created_at);" +
+    "CREATE INDEX IF NOT EXISTS idx_files_user_created ON files(user_id, created_at);" +
     "CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT);" +
     "CREATE TABLE IF NOT EXISTS bot_commands (id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT UNIQUE, response TEXT, description TEXT, enabled INTEGER, created_at TEXT, menu TEXT DEFAULT '');" +
     "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);" +
     "CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, name TEXT, scopes TEXT DEFAULT 'files:read', enabled INTEGER DEFAULT 1, created_at TEXT, last_used_at TEXT, usage_count INTEGER DEFAULT 0, expires_at TEXT, level TEXT DEFAULT 'pt', key_pass TEXT, username TEXT);" +
+    "CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key);" +
+    "CREATE INDEX IF NOT EXISTS idx_api_keys_username ON api_keys(username);" +
+    "CREATE INDEX IF NOT EXISTS idx_api_keys_enabled ON api_keys(enabled);" +
     "CREATE TABLE IF NOT EXISTS random_pool (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, thumb_url TEXT, title TEXT, tags TEXT DEFAULT '', file_type TEXT DEFAULT 'photo', width INTEGER, height INTEGER, file_size INTEGER, source TEXT DEFAULT 'manual', tg_file_id INTEGER, enabled INTEGER DEFAULT 1, created_at TEXT, level TEXT DEFAULT 'pt', is_private INTEGER DEFAULT 0);" +
     "CREATE INDEX IF NOT EXISTS idx_pool_url ON random_pool(url);" +
     "CREATE TABLE IF NOT EXISTS show_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, images TEXT DEFAULT '', created_at TEXT);" +
@@ -205,6 +212,21 @@ export async function ensureTables(db) {
     try {
       await db.exec("CREATE TABLE IF NOT EXISTS ub_task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, server_id INTEGER DEFAULT 0, server_name TEXT DEFAULT '', status TEXT DEFAULT 'running', done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, error TEXT DEFAULT '', started_at TEXT, finished_at TEXT)");
     } catch (e14) { console.error('ub_task_runs table:', e14.message); }
+    // api_keys 表索引：加速 key/username 查询
+    try {
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_username ON api_keys(username)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_enabled ON api_keys(enabled)");
+      console.log('migrated: api_keys indexes');
+    } catch (e15) { console.error('api_keys indexes:', e15.message); }
+    // files 表复合索引：优化常见查询模式
+    try {
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_files_active ON files(deleted_at, id DESC)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_files_type_created ON files(file_type, created_at)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_files_chat_created ON files(chat_id, created_at)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_files_user_created ON files(user_id, created_at)");
+      console.log('migrated: files composite indexes');
+    } catch (e16) { console.error('files composite indexes:', e16.message); }
     // 迁移完成：写入 schema 版本标记，后续冷启动跳过全部 CREATE/ALTER
     try {
       await db.prepare("INSERT INTO settings (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(SCHEMA_VERSION).run();

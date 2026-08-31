@@ -1,13 +1,13 @@
 // ==================== WEBHOOK ====================
 // Telegram webhook 入口：消息路由、分享链接解析（抖音/小红书/B站/微博等）、大文件流式转存、进度更新、命令分发、回调查询。
-import { json, fmtSize, genHash } from "./util.js";
+import { json, fmtSize, genHash, log, invalidateStatsCache } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
 import { notifyAdmin, genThumb } from "./notify.js";
 import { cnTodayStr, guessExt, fileExtOf } from "./core.js";
-import { putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, getMainMenuCfg, replyTextWithKeyboard } from "./telegram.js";
-import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery } from "./commands.js";
+import { putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
+import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
-import { getBotUsername } from "./api.js";
+import { getBotUsername, getProxyMode } from "./api.js";
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg } from "./batch.js";
 import { fireWebhook } from "./events.js";
 // ==================== WEBHOOK ====================
@@ -18,7 +18,7 @@ export async function recordWebhookLog(env, ok, error, source) {
   try {
     await env.D1_DB.prepare('INSERT INTO webhook_logs (status,ok,source,error,created_at) VALUES (?,?,?,?,?)')
       .bind(ok ? 200 : 500, ok ? 1 : 0, source || 'webhook', String(error || '').slice(0, 300), new Date().toISOString()).run();
-  } catch (e) { console.error('recordWebhookLog:', e.message); }
+  } catch (e) { log.error('recordWebhookLog:', e.message); }
 }
 
 export async function handleWebhook(request, env, ctx) {
@@ -69,8 +69,8 @@ export async function ensureWebhook(env, ctx) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-    console.log('ensureWebhook: set webhook (secret_token=' + (env.TG_SECRET ? 'on' : 'off') + ')');
-  } catch (e) { console.error('ensureWebhook:', e.message); }
+    log.info('ensureWebhook: set webhook (secret_token=' + (env.TG_SECRET ? 'on' : 'off') + ')');
+  } catch (e) { log.error('ensureWebhook:', e.message); }
 }
 
 // Webhook 状态检查：返回 Telegram getWebhookInfo 关键字段 + 本机配置对比
@@ -186,19 +186,43 @@ export async function processUpdateCore(update, env, waitFn) {
       const ref = '';
       let rid = null;
       if (env.D1_DB) {
-        try {
-          const r = await env.D1_DB.prepare(
-            'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
-          ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), ref, msg.media_group_id || '').run();
-          rid = r.meta?.last_row_id;
-        } catch (e) { console.error('D1 pending:', e.message); }
+        // INSERT 重试：D1 并发写入可能超时，短暂延迟后重试一次
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const r = await env.D1_DB.prepare(
+              'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), ref, msg.media_group_id || '').run();
+            rid = r.meta?.last_row_id;
+            break;
+          } catch (e) {
+            log.error('D1 pending INSERT attempt ' + (attempt + 1) + ':', e.message);
+            if (attempt === 0) await new Promise(function(r) { setTimeout(r, 200); });
+          }
+        }
+      }
+      // INSERT 失败时通知用户并中断流程
+      if (!rid) {
+        log.error('D1 INSERT failed after retries, chat:', chatId, 'file:', fi.fileName);
+        if (env.TG_BOT_TOKEN && msg && msg.chat) {
+          try {
+            await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: String(msg.chat.id),
+                text: '❌ 文件入库失败（数据库写入异常），请稍后重试'
+              })
+            });
+          } catch (e2) { log.error('send error msg:', e2.message); }
+        }
+        return { ok: false, error: 'db_insert_failed' };
       }
       // 代理模式：≤20MB 不转存 R2，r2_url 存 /file/tg/<id>，访问时 worker 实时拉 TG 直链（省 R2 存储）
       if (rid && (await getProxyMode(env)) === 1 && (fi.fileSize || 0) <= 20 * 1024 * 1024) {
         try {
           // 代理 URL 带后缀名（如 /file/tg/123.jpg），方便识别类型/下载文件名
           await env.D1_DB.prepare("UPDATE files SET r2_url=?, storage_key='', processing_state='completed', progress_bytes=0, total_bytes=? WHERE id=?").bind('/file/tg/' + rid + '.' + fileExtOf(fi.fileName, fi.type), fi.fileSize || 0, rid).run();
-        } catch (e) { console.error('proxy mark:', e.message); }
+        } catch (e) { log.error('proxy mark:', e.message); }
         scheduleBatchRef(env, chatId, rid, waitFn);
         return { ok: true, queued: true, fileId: rid, proxied: true };
       }
@@ -215,9 +239,9 @@ export async function processUpdateCore(update, env, waitFn) {
         try {
           await env.FILE_QUEUE.send(task);
           return { ok: true, queued: true, fileId: rid };
-        } catch (e) { console.error('queue send:', e.message); }
+        } catch (e) { log.error('queue send:', e.message); }
       }
-      const p = processFileAsync(rid, fi, chatId, msgId, chat, from, date, env, ref || '').catch(e => console.error('async:', e.message));
+      const p = processFileAsync(rid, fi, chatId, msgId, chat, from, date, env, ref || '').catch(e => log.error('async:', e.message));
       if (waitFn) waitFn(p); else p;
       return { ok: true, queued: true, fileId: rid };
     }
@@ -230,7 +254,7 @@ export async function processUpdateCore(update, env, waitFn) {
       const chatId = String(msg.chat.id);
       const msgId = String(msg.message_id);
       const date = msg.date ? new Date(msg.date * 1000) : new Date();
-      const p = handleXStatusAsync(xlink, chatId, msgId, date, env).catch(e => console.error('x async:', e.message));
+      const p = handleXStatusAsync(xlink, chatId, msgId, date, env).catch(e => log.error('x async:', e.message));
       if (waitFn) waitFn(p); else p;
       return { ok: true, queued: true, xlink: true };
     }
@@ -252,7 +276,7 @@ export async function processUpdateCore(update, env, waitFn) {
             'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,group_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
           ).bind('', '', '', 'parsing', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', '', 'video_' + genHash() + '.mp4', 0, 'video', '', 0, 0, msg.text || '', msgId, date.toISOString(), await allocTgRef(env)).run();
           rid = r.meta?.last_row_id;
-        } catch (e) { console.error('D1 share pending:', e.message); }
+        } catch (e) { log.error('D1 share pending:', e.message); }
       }
       const task = {
         dbId: rid, link: shareLink, chatId: chatId, msgId: msgId,
@@ -264,9 +288,9 @@ export async function processUpdateCore(update, env, waitFn) {
         try {
           await env.FILE_QUEUE.send(task);
           return { ok: true, queued: true, fileId: rid };
-        } catch (e) { console.error('queue send (share):', e.message); }
+        } catch (e) { log.error('queue send (share):', e.message); }
       }
-      const p = processShareLinkAsync(rid, shareLink, chatId, msgId, chat, from, date, env).catch(e => console.error('share async:', e.message));
+      const p = processShareLinkAsync(rid, shareLink, chatId, msgId, chat, from, date, env).catch(e => log.error('share async:', e.message));
       if (waitFn) waitFn(p); else p;
       return { ok: true, queued: true, fileId: rid };
     }
@@ -286,24 +310,24 @@ export async function handlePollUpdates(env, ctx) {
     const base = bases[i];
     try {
       let offset = 0;
-      try { const s = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('tg_update_offset').first(); if (s) offset = parseInt(s.value) || 0; } catch (e) {}
+      try { const s = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('tg_update_offset').first(); if (s) offset = parseInt(s.value) || 0; } catch (e) { log.debug('poll offset read:', e.message); }
       const r = await fetch(base + '/bot' + env.TG_BOT_TOKEN + '/getUpdates?timeout=2&limit=10&offset=' + offset);
       const j = await r.json();
-      if (!j.ok) { lastErr = 'getUpdates: ' + (j.description || 'fail') + ' @' + base; console.log('poll getUpdates fail @' + base + ':', JSON.stringify(j).slice(0, 150)); continue; }
+          if (!j.ok) { lastErr = 'getUpdates: ' + (j.description || 'fail') + ' @' + base; log.warn('poll getUpdates fail @' + base + ':', JSON.stringify(j).slice(0, 150)); continue; }
       if (j.result && j.result.length) {
         let maxId = offset;
         let lastOk = offset;
         for (const u of j.result) {
           if (u.update_id > maxId) maxId = u.update_id;
           try { await processUpdateCore(u, env, ctx ? function(p) { return ctx.waitUntil(p); } : null); lastOk = u.update_id; }
-          catch (e) { console.error('poll update:', e.message); break; } // do not advance past a failed update; Telegram will re-deliver
+          catch (e) { log.error('poll update:', e.message); break; } // do not advance past a failed update; Telegram will re-deliver
         }
         try { await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('tg_update_offset',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(String(lastOk)).run(); } catch (e) {}
       }
       return;
-    } catch (e) { lastErr = e.message; console.error('poll error @' + base + ':', e.message); }
+    } catch (e) { lastErr = e.message; log.error('poll error @' + base + ':', e.message); }
   }
-  if (lastErr) console.log('handlePollUpdates all failed:', lastErr);
+  if (lastErr) log.warn('handlePollUpdates all failed:', lastErr);
 }
 
 // Manual /admin/api/poll endpoint
@@ -347,6 +371,7 @@ export function isShareLink(text) {
 
 export function extractShareLink(text) {
   var m = SHARE_DOMAIN_RE.exec(text || '');
+  if (m) log.debug('share link detected:', m[1]);
   return m ? m[1] : '';
 }
 
@@ -421,9 +446,9 @@ export async function handleXStatusAsync(link, chatId, msgId, date, env) {
             await env.D1_DB.prepare(
               'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
             ).bind(key, url, '', 'completed', chatId, 'X', 'private', '', 0, '', '', '', item.name, 0, item.type, ct, 0, 0, '', msgId, ts).run();
-          } catch (e) { console.log('x d1 insert fail:', e.message); }
+          } catch (e) { log.error('x d1 insert fail:', e.message); }
         }
-      } catch (e) { console.log('x media save fail:', e.message); }
+      } catch (e) { log.error('x media save fail:', e.message); }
     }
     if (saved.length) {
       await xreply('✅ X 内容已保存（' + saved.length + ' 个）\n' + saved.join('\n'));
@@ -431,7 +456,7 @@ export async function handleXStatusAsync(link, chatId, msgId, date, env) {
       await xreply('❌ X 内容下载失败');
     }
   } catch (e) {
-    console.error('handleXStatusAsync:', e.message);
+    log.error('handleXStatusAsync:', e.message);
     try { await xreply('❌ X 解析失败：' + String(e.message).slice(0, 100)); } catch (e2) {}
   }
 }
@@ -462,7 +487,7 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
     if (!videoUrl) {
       var em = (pj && pj.error && pj.error.message) || 'parse_failed';
       await updateState('failed', 'parse_failed: ' + em);
-      console.log('share parse fail:', link, em);
+      log.debug('share parse fail:', link, em);
       return;
     }
     // 2) Preferred: permanent proxy direct-link (real-time parse on every request => never expires)
@@ -477,7 +502,7 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
           await env.D1_DB.prepare(
             "UPDATE files SET storage_key='', r2_url=?, md5_hash='', mime_type='video/mp4', processing_state='completed', file_name=?, tg_file_url=?, thumb_url='', quick_hash='' WHERE id=?"
           ).bind(proxyUrl, titleP, videoUrl, dbId).run();
-        } catch (e) { console.error('D1 share update:', e.message); }
+        } catch (e) { log.error('D1 share update:', e.message); }
       }
       try {
         var replyTextP = '\uD83D\uDCF9 \u89C6\u9891\u76F4\u94FE\u5DF2\u751F\u6210\uff08\u6BCF\u6B21\u8BBF\u95EE\u5B9E\u65F6\u89E3\u6790\uff0C\u6C38\u4E0D\u8FC7\u671F\uff09\n' + titleP + '\n' + proxyUrl + '\n\u2192 \u70B9\u51FB\u64AD\u653E\uff1B\u76F4\u63A5\u4E0B\u8F7D\u53EF\u52A0\uff1a&mode=proxy';
@@ -486,7 +511,7 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chat_id: chatId, text: replyTextP, disable_web_page_preview: false })
         });
-      } catch (e) { console.error('share reply:', e.message); }
+      } catch (e) { log.error('share reply:', e.message); }
       return;
     }
     // 2b) Fallback (no proxy configured): download video stream and upload to R2
@@ -503,7 +528,7 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
       try {
         var fr2 = await fetch(videoUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (fr2.ok) url = await putR2Stream(key, fr2.body, ct, env, COLD_STORAGE_CLASS);
-      } catch (e) { console.log('share retry fail:', e.message); }
+      } catch (e) { log.warn('share retry fail:', e.message); }
     }
     if (!url) { await updateState('failed', 'r2_upload_failed' + (lastUploadError ? ' (' + lastUploadError + ')' : '')); return; }
     // 3) cover as thumbnail (best effort)
@@ -524,7 +549,7 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
         await env.D1_DB.prepare(
           'UPDATE files SET storage_key=?, r2_url=?, md5_hash=?, mime_type=?, processing_state=?, file_name=?, tg_file_url=?, thumb_url=?, quick_hash=? WHERE id=?'
         ).bind(key, url, '', ct, 'completed', title, videoUrl, thumbUrl, '', dbId).run();
-      } catch (e) { console.error('D1 share update:', e.message); }
+          } catch (e) { log.error('D1 share update:', e.message); }
     }
     try {
       var replyText = '\uD83D\uDCF9 视频已保存\n' + title + '\n' + url;
@@ -533,9 +558,9 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, text: replyText, disable_web_page_preview: false })
       });
-    } catch (e) { console.error('share reply:', e.message); }
+      } catch (e) { log.error('share reply:', e.message); }
   } catch (e) {
-    console.error('processShareLinkAsync:', e.message);
+    log.error('processShareLinkAsync:', e.message);
     await updateState('failed', e.message);
   } finally {
     releaseTransferSlot();
@@ -543,6 +568,11 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
 }
 
 export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date, env, ref) {
+  // 前置检查：dbId 为 null 时中断处理，避免幽灵转存
+  if (!dbId) {
+    log.error('processFileAsync called with null dbId, file:', fi.fileName);
+    return;
+  }
   async function updateState(state, err) {
     if (env.D1_DB && dbId) {
       try { await env.D1_DB.prepare('UPDATE files SET processing_state=?, error_msg=? WHERE id=?').bind(state, err || '', dbId).run(); } catch(e) {}
@@ -583,7 +613,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
           await replyMsg(chatId, parseInt(msgId), fi, dup.r2_url, env, rr1 || ref || String(dbIdNum), dbIdNum);
           return;
         }
-      } catch (e) { console.log('file_id dedup check fail:', e.message); }
+      } catch (e) { log.debug('file_id dedup check fail:', e.message); }
     }
 
     var isLarge = (fi.fileSize || 0) > LARGE_FILE_THRESHOLD;
@@ -593,9 +623,9 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
     if (isLarge) {
       // Large file: stream from Telegram directly to R2 (no memory buffering, no MD5 dedup)
       await updateProgress('downloading', 0, fi.fileSize || 0);
-      console.log('large file queue: id=' + dbId + ' fileId=' + fi.fileId + ' size=' + fi.fileSize);
+      log.info('large file queue: id=' + dbId + ' fileId=' + fi.fileId + ' size=' + fi.fileSize);
       const fd = await dlFileStream(fi.fileId, env.TG_BOT_TOKEN, tgApiBases(env));
-      if (!fd || fd.error) { console.log('large file download failed, dbId=' + dbId + (fd && fd.error ? ' err=' + fd.error : '')); await updateState('failed', (fd && fd.error) || 'download_failed'); return; }
+      if (!fd || fd.error) { log.warn('large file download failed, dbId=' + dbId + (fd && fd.error ? ' err=' + fd.error : '')); await updateState('failed', (fd && fd.error) || 'download_failed'); return; }
       tgUrl = fd.tgUrl || '';
       ct = fd.ct;
       await updateState('uploading');
@@ -618,7 +648,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
         try {
           const fd2 = await dlFileStream(fi.fileId, env.TG_BOT_TOKEN, tgApiBases(env));
           if (fd2 && !fd2.error) { url = await putR2Stream(key, fd2.stream, ct, env, COLD_STORAGE_CLASS); }
-        } catch (e2) { console.log('large retry fail:', e2.message); }
+        } catch (e2) { log.warn('large retry fail:', e2.message); }
       }
       if (!url) { await updateState('failed', 'r2_upload_failed' + (lastUploadError ? ' (' + lastUploadError + ')' : '')); return; }
       await updateProgress('uploading', fi.fileSize || 0, fi.fileSize || 0).catch(function(){});
@@ -638,7 +668,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
         // Dedup via Telegram file_id pre-check (above) + head/tail sample hash (below).
         await updateProgress('downloading', 0, fi.fileSize || 0);
         const fd = await dlFileStreamLarger(fi.fileId, env.TG_BOT_TOKEN, bases);
-        if (!fd || fd.error) { console.log('photo download failed, dbId=' + dbId + (fd && fd.error ? ' err=' + fd.error : '')); await updateState('failed', (fd && fd.error) || 'download_failed'); return; }
+        if (!fd || fd.error) { log.warn('photo download failed, dbId=' + dbId + (fd && fd.error ? ' err=' + fd.error : '')); await updateState('failed', (fd && fd.error) || 'download_failed'); return; }
         tgUrl = fd.tgUrl || '';
         ct = fd.ct;
         await updateState('uploading');
@@ -687,7 +717,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
           try {
             const fd2 = await dlFileStreamLarger(fi.fileId, env.TG_BOT_TOKEN, bases);
             if (fd2 && !fd2.error) { url = await putR2Stream(key, fd2.stream, ct, env, COLD_STORAGE_CLASS); }
-          } catch (e2) { console.log('photo retry fail:', e2.message); }
+          } catch (e2) { log.warn('photo retry fail:', e2.message); }
         }
         if (!url) { await updateState('failed', 'r2_upload_failed' + (lastUploadError ? ' (' + lastUploadError + ')' : '')); return; }
         await updateProgress('uploading', fi.fileSize || 0, fi.fileSize || 0).catch(function(){});
@@ -711,7 +741,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
               quickHash = ''; // keep the existing record's hash
               uploadedNew = false; // already exists: skip thumb generation
             }
-          } catch (e) { console.log('quickhash dedup fail:', e.message); }
+          } catch (e) { log.debug('quickhash dedup fail:', e.message); }
         }
       } else {
         // Other types (document/audio/video <=50MB): buffer + MD5 dedup
@@ -719,7 +749,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
         const fd = await dlFileLarger(fi.fileId, fi.fileSize, env.TG_BOT_TOKEN, bases, function(bytes) {
           updateProgress('downloading', bytes, fi.fileSize || 0).catch(function(){});
         });
-        if (!fd || fd.error) { console.log('medium file download failed, dbId=' + dbId + (fd && fd.error ? ' err=' + fd.error : '')); await updateState('failed', (fd && fd.error) || 'download_failed'); return; }
+        if (!fd || fd.error) { log.warn('medium file download failed, dbId=' + dbId + (fd && fd.error ? ' err=' + fd.error : '')); await updateState('failed', (fd && fd.error) || 'download_failed'); return; }
         tgUrl = fd.tgUrl || '';
         ct = fd.ct;
         await updateState('hashing');
@@ -762,7 +792,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
             const tu = await putR2(tkey, tfd.buf, 'image/jpeg', env);
             if (tu) thumbUrl = tu;
           }
-        } catch (e) { console.log('thumb gen fail dbId=' + dbId + ':', e.message); }
+        } catch (e) { log.warn('thumb gen fail dbId=' + dbId + ':', e.message); }
       }
       if (!thumbUrl && fi.type === 'photo' && url) {
         thumbUrl = await genThumb(env, url, key);
@@ -775,15 +805,16 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
         await env.D1_DB.prepare(
           'UPDATE files SET storage_key=?, r2_url=?, md5_hash=?, mime_type=?, processing_state=?, file_name=?, tg_file_url=?, thumb_url=?, progress_bytes=?, total_bytes=?, quick_hash=? WHERE id=?'
         ).bind(key, url, md5, ct, 'completed', fi.fileName, tgUrl, thumbUrl, fi.fileSize || 0, fi.fileSize || 0, quickHash, dbId).run();
-      } catch (e) { console.error('D1 update:', e.message); }
+      } catch (e) { log.error('D1 update:', e.message); }
     }
     await updateProgress('completed', fi.fileSize || 0, fi.fileSize || 0).catch(function(){});
     // 用最终编号（延迟批量编号已分配，如 3-001）；历史/重试文件兜底用原 ref 或文件 id
     const rr2 = await getFileRef(env, dbId);
     await replyMsg(chatId, parseInt(msgId), fi, url, env, rr2 || ref || String(dbId), dbId);
     fireWebhook(env, 'file_imported', { id: dbIdNum, url: url, file_name: fi.fileName, file_type: fi.type, file_size: fi.fileSize || 0, chat_id: chatId, source: 'tg' }).catch(function(){});
+    invalidateStatsCache();
   } catch (e) {
-    console.error('processFileAsync:', e.message);
+    log.error('processFileAsync:', e.message);
     await updateState('failed', e.message);
   } finally {
     releaseTransferSlot();
@@ -848,7 +879,7 @@ export async function processUpdate(update, env, waitFn) {
     if (env.D1_DB && !(msg.photo || msg.document || msg.video || msg.audio || msg.voice || msg.sticker || msg.animation || msg.video_note || msg.contact || msg.location || msg.poll)) {
       const cfg = await getAIConfig(env);
       if (cfg.enabled === 1 && cfg.key && isAIReplyText(text)) {
-        const p = callAIManage(chatId, parseInt(msgId), text, env).catch(function(e) { console.error('ai manage:', e.message); });
+        const p = callAIManage(chatId, parseInt(msgId), text, env).catch(function(e) { log.error('ai manage:', e.message); });
         if (waitFn) waitFn(p); else p;
         return { ok: true, ai: true };
       }
@@ -856,7 +887,7 @@ export async function processUpdate(update, env, waitFn) {
     return { ok: true, skip: true, reason: 'unsupported' };
   }
 
-  console.log('file:', fi.type, chat.title || chat.username);
+  log.debug('file:', fi.type, chat.title || chat.username);
 
   // Try to download file - <=20MB prefers official API, larger goes through Local Bot API
   let bases;
@@ -881,7 +912,7 @@ export async function processUpdate(update, env, waitFn) {
       if (dup) {
         key = dup.storage_key;
         url = dup.r2_url;
-        console.log('dedup hit:', md5, '->', key);
+        log.debug('dedup hit:', md5, '->', key);
       }
     } catch (e) {}
   }
@@ -903,10 +934,10 @@ export async function processUpdate(update, env, waitFn) {
         'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,tg_file_url,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
       ).bind(key, url, md5, 'completed', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, fd.ct, fi.width, fi.height, msg.caption || '', msgId, date.toISOString(), tgUrl, ref2, msg.media_group_id || '').run();
       rid = r.meta?.last_row_id;
-    } catch (e) { console.error('D1:', e.message); }
+    } catch (e) { log.error('D1:', e.message); }
   }
 
-  console.log('url:', url);
+  log.debug('url:', url);
   await replyMsg(chatId, parseInt(msgId), fi, url, env, ref2 || '', rid);
   fireWebhook(env, 'file_imported', { id: rid, url: url, file_name: fi.fileName, file_type: fi.type, file_size: fi.fileSize || 0, chat_id: chatId, source: 'tg' }).catch(function(){});
   return { ok: true, url, fileId: rid, type: fi.type };
@@ -940,10 +971,10 @@ export async function replyMsg(chatId, replyId, fi, url, env, ref, dbId) {
         return;
       }
       if (f && f.receipt_msg_id) {
-        await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/editMessageText', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: f.receipt_msg_id, text: String(t).slice(0, 1024) }) }).catch(function(e) { console.log('replyMsg edit fail:', e.message); });
+        await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/editMessageText', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: f.receipt_msg_id, text: String(t).slice(0, 1024) }) }).catch(function(e) { log.warn('replyMsg edit fail:', e.message); });
         return;
       }
-    } catch (e) { console.log('replyMsg receipt lookup:', e.message); }
+    } catch (e) { log.debug('replyMsg receipt lookup:', e.message); }
   }
   try { await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text: t }) }); } catch (e) { }
 }

@@ -1,7 +1,7 @@
 // ==================== PUBLIC 展示层 ====================
 // 幻灯片页（/show）、Show groups（节目单）、画廊瀑布流、公开 JSON API、公开上传、Random pool。
 // 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
-import { json } from "./util.js";
+import { json, log, invalidateStatsCache } from "./util.js";
 import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode } from "./core.js";
 import { lastUploadError, putR2 } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
@@ -143,10 +143,10 @@ export async function rotateProgramImages(env) {
       // 回写 config
       await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('show_config', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(raw)).run();
       _showCfg = null;
-      console.log('rotateProgramImages: rolled ' + rolled + ' program(s)');
+      log.info('rotateProgramImages: rolled ' + rolled + ' program(s)');
     }
     return rolled;
-  } catch (e) { console.error('rotateProgramImages:', e.message); return 0; }
+  } catch (e) { log.error('rotateProgramImages:', e.message); return 0; }
 }
 
 export async function getGroup(env, id) {
@@ -683,7 +683,7 @@ load();
 
 // ==================== Public JSON API (third-party programs) ====================
 export async function checkApiKey(request, env) {
-  if (!env.D1_DB) { console.error('checkApiKey: D1_DB unavailable'); return null; }
+  if (!env.D1_DB) { log.error('checkApiKey: D1_DB unavailable'); return null; }
   const u = new URL(request.url);
   let k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
   // 支持 ?sk=短链接别名：按 short_key 匹配真实 key（便于生成短链接），api_key 优先
@@ -697,7 +697,7 @@ export async function checkApiKey(request, env) {
   if (!k) return null;
   try {
     const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
-    console.log('checkApiKey result:', rec ? 'FOUND id=' + rec.id : 'NULL', 'key_prefix=' + k.slice(0,8));
+    log.debug('checkApiKey result:', rec ? 'FOUND id=' + rec.id : 'NULL', 'key_prefix=' + k.slice(0,8));
     if (!rec) return null;
     // usage bump (fire and forget)
     env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
@@ -706,7 +706,7 @@ export async function checkApiKey(request, env) {
     // 记录调用日志（fire and forget；路径/方法/IP 供后台查看与统计）
     logApiCall(env, rec, request).catch(function(){});
     return { rec: rec, limited: limited };
-  } catch (e) { console.error('checkApiKey error:', e.message, e.stack); return null; }
+  } catch (e) { log.error('checkApiKey error:', e.message, e.stack); return null; }
 }
 
 // 记录一次密钥调用（api_call_logs）。路径保留 /api/v1/... 原始地址（含 query），IP 取 CF 头。
@@ -719,7 +719,7 @@ export async function logApiCall(env, rec, request) {
     const path = (u.pathname + u.search).replace(/([?&]api_key=)[^&]*/gi, '$1***');
     await env.D1_DB.prepare('INSERT INTO api_call_logs (key_id, api_key, path, method, ip, status, created_at) VALUES (?,?,?,?,?,?,?)')
       .bind(rec.id, rec.key, path, request.method || 'GET', String(ip).slice(0, 45), 200, new Date().toISOString()).run();
-  } catch (e) { console.error('logApiCall:', e.message); }
+  } catch (e) { log.error('logApiCall:', e.message); }
 }
 
 // 公开 API 限流逻辑已移入 src/ratelimit.js（applyRateLimit），由顶部 import 引入
@@ -961,6 +961,7 @@ export async function handlePublicUpload(request, env, keyLevel) {
     const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
       .bind(key, url, name, bytes.length, fileType, ct, title, tags, useLevel, isPrivate, iso).run();
     fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: name, file_type: fileType, level: useLevel, is_private: isPrivate, file_size: bytes.length, title: title, tags: tags }).catch(function(){});
+    invalidateStatsCache();
     return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -1041,7 +1042,7 @@ export async function checkUserPortal(request, env) {
     if (hp !== rec.key_pass) return null;
     delete rec.key_pass;
     return rec;
-  } catch (e) { console.error('checkUserPortal:', e.message); return null; }
+  } catch (e) { log.error('checkUserPortal:', e.message); return null; }
 }
 
 export async function handleAdminKeys(env) {
@@ -1379,6 +1380,61 @@ export async function handleUserCallStats(rec, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// 用户门户：密码重置（通过用户名 + 旧密码验证，设置新密码）
+export async function handleUserResetPassword(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable' }, 500);
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const username = String(b.username || '').trim();
+    const oldPass = String(b.old_password || '').trim();
+    const newPass = String(b.new_password || '').trim();
+    if (!username) return json({ ok: false, error: '请填写用户名' }, 400);
+    if (!oldPass) return json({ ok: false, error: '请填写旧密码' }, 400);
+    if (!newPass) return json({ ok: false, error: '请填写新密码' }, 400);
+    if (newPass.length < 6) return json({ ok: false, error: '新密码至少 6 位' }, 400);
+    if (oldPass === newPass) return json({ ok: false, error: '新密码不能与旧密码相同' }, 400);
+    // 查找用户
+    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE username=? AND enabled=1 LIMIT 1').bind(username).first();
+    if (!rec) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+    // 验证旧密码
+    const hp = await hashKeyPass(oldPass, rec.key);
+    if (hp !== rec.key_pass) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+    // 设置新密码
+    const newPassHash = await hashKeyPass(newPass, rec.key);
+    await env.D1_DB.prepare('UPDATE api_keys SET key_pass=? WHERE id=?').bind(newPassHash, rec.id).run();
+    return json({ ok: true, message: '密码重置成功' });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户门户：密钥信息查询（通过用户名 + 密码获取密钥信息）
+export async function handleUserGetKeyInfo(request, env) {
+  if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable' }, 500);
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const username = String(b.username || '').trim();
+    const pass = String(b.password || '').trim();
+    if (!username || !pass) return json({ ok: false, error: '请填写用户名和密码' }, 400);
+    // 查找用户
+    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE username=? AND enabled=1 LIMIT 1').bind(username).first();
+    if (!rec) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+    // 验证密码
+    const hp = await hashKeyPass(pass, rec.key);
+    if (hp !== rec.key_pass) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+    // 返回密钥信息（不包含密码哈希）
+    return json({ ok: true, data: {
+      key: rec.key,
+      short_key: rec.short_key || '',
+      name: rec.name,
+      username: rec.username || '',
+      level: rec.level,
+      expires_at: rec.expires_at || '',
+      created_at: rec.created_at || '',
+      last_used_at: rec.last_used_at || '',
+      usage_count: rec.usage_count || 0
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 // 用户聊天交互统计：按 update 类型累加 user_stats 表（消息/命令/文件/Inline 查询/按钮回调）
 // 记录已知会话（known_chats）：从各类 update 中提取 chat 并 upsert。
 // 广播快捷回复键盘 / 告警通知依赖这张表（此前只从 files 表找 private，纯文本私聊没有文件记录导致广播 0 个）
@@ -1400,7 +1456,7 @@ export async function recordKnownChat(update, env) {
       "INSERT INTO known_chats (chat_id, chat_type, chat_title, chat_username, last_active_at) VALUES (?,?,?,?,?) " +
       "ON CONFLICT(chat_id) DO UPDATE SET chat_type=excluded.chat_type, chat_title=excluded.chat_title, chat_username=excluded.chat_username, last_active_at=excluded.last_active_at"
     ).bind(cid, String(chat.type || ''), String(chat.title || ''), String(chat.username || ''), now).run();
-  } catch (e) { console.error('recordKnownChat:', e.message); }
+  } catch (e) { log.error('recordKnownChat:', e.message); }
 }
 
 export async function recordUserInteraction(update, env) {
@@ -1432,7 +1488,7 @@ export async function recordUserInteraction(update, env) {
       "INSERT INTO user_stats (user_id, username, full_name, " + col + ", last_active_at) VALUES (?,?,?,1,?) " +
       "ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name, " + col + "=" + col + "+1, last_active_at=excluded.last_active_at"
     ).bind(uid, uname, fname, now).run();
-  } catch (e) { console.error('recordUserInteraction:', e.message); }
+  } catch (e) { log.error('recordUserInteraction:', e.message); }
 }
 
 export async function handleAdminUsers(env) {

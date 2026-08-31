@@ -68,7 +68,18 @@ export async function handleAdminNotifyTest(request, env) {
 export async function handleAdminGetRateLimit(env) {
   try {
     const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'api_rate_limit'").first();
-    let cfg = { enabled: false, limit_per_min: 60 };
+    let cfg = { 
+      enabled: false, 
+      limit_per_min: 60,
+      public_enabled: false,
+      public_limit_per_min: 30,
+      ip_enabled: false,
+      ip_limit_per_min: 100,
+      admin_enabled: true,
+      admin_limit_per_min: 200,
+      user_enabled: true,
+      user_limit_per_min: 120
+    };
     if (s && s.value) { try { cfg = Object.assign(cfg, JSON.parse(s.value)); } catch (e) {} }
     return json({ ok: true, data: cfg });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -77,9 +88,41 @@ export async function handleAdminGetRateLimit(env) {
 export async function handleAdminSaveRateLimit(request, env) {
   try {
     const b = await request.json().catch(() => null);
-    const enabled = !!(b && b.enabled);
-    const limit = Math.max(1, Math.min(100000, parseInt((b && b.limit_per_min) || 60, 10) || 60));
-    const cfg = { enabled: enabled, limit_per_min: limit };
+    if (!b) return json({ ok: false, error: '请求体为空' }, 400);
+    
+    // API Key 限流
+    const enabled = !!(b.enabled);
+    const limit_per_min = Math.max(1, Math.min(100000, parseInt(b.limit_per_min || 60, 10) || 60));
+    
+    // 公开端点限流
+    const public_enabled = !!(b.public_enabled);
+    const public_limit_per_min = Math.max(1, Math.min(100000, parseInt(b.public_limit_per_min || 30, 10) || 30));
+    
+    // IP 限流
+    const ip_enabled = !!(b.ip_enabled);
+    const ip_limit_per_min = Math.max(1, Math.min(100000, parseInt(b.ip_limit_per_min || 100, 10) || 100));
+    
+    // 管理员限流
+    const admin_enabled = b.admin_enabled !== false; // 默认启用
+    const admin_limit_per_min = Math.max(1, Math.min(100000, parseInt(b.admin_limit_per_min || 200, 10) || 200));
+    
+    // 用户门户限流
+    const user_enabled = b.user_enabled !== false; // 默认启用
+    const user_limit_per_min = Math.max(1, Math.min(100000, parseInt(b.user_limit_per_min || 120, 10) || 120));
+    
+    const cfg = { 
+      enabled, 
+      limit_per_min,
+      public_enabled,
+      public_limit_per_min,
+      ip_enabled,
+      ip_limit_per_min,
+      admin_enabled,
+      admin_limit_per_min,
+      user_enabled,
+      user_limit_per_min
+    };
+    
     await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('api_rate_limit', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
     return json({ ok: true, data: cfg });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }

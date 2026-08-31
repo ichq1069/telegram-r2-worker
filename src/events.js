@@ -1,6 +1,6 @@
 // ==================== 事件 Webhook 通知 ====================
 // fireWebhook 事件派发、Webhook 配置管理、Random pool 管理、按条件查询/搜索/流/删除/回收站/R2 检查/机器人管理/配置管理。
-import { json } from "./util.js";
+import { json, invalidateStatsCache } from "./util.js";
 import { sanitizeLevel, clampInt } from "./core.js";
 import { bumpR2Usage } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
@@ -342,6 +342,7 @@ export async function handleDeleteFile(request, env) {
       fireWebhook(env, 'file_deleted', { id: one, deleted: !purge, source: 'files' }).catch(function(){});
     } catch (e) {}
   }
+  invalidateStatsCache();
   return json({ ok: true, deleted: deleted, message: (purge ? 'Purged ' : 'Deleted ') + deleted + ' file(s)' });
 }
 

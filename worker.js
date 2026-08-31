@@ -7,11 +7,11 @@ import { json, cors, fmtSize, genHash } from './src/util.js';
 import { ensureTablesOnce } from './src/db.js';
 import { notifyAdmin, genThumb } from './src/notify.js';
 import { dumpAllTables, handleAdminBackup, handleAdminBackupSave, handleAdminBackupList, handleAdminBackupDelete } from './src/backup.js';
-import { applyRateLimit } from './src/ratelimit.js';
+import { applyRateLimit, applyIPRateLimit, applyAdminRateLimit, applyUserRateLimit, hasScope, hasLevel } from './src/ratelimit.js';
 import { cnShift, cnTodayStr, cnDayIso, LEVEL_RANK, LEVEL_ORDER, sanitizeLevel, levelFilter, clampInt, guessExt, fileExtOf, randHex, hashKeyPass, genApiKey, genRedeemCode } from './src/core.js';
 import { OFFICIAL_API, tgApiBases, fileDownloadUrl, dlFileStream, dlFileLarger, readBodyWithProgress, dlFileStreamLarger, dlFile, lastUploadError, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, bumpR2Usage, bumpWorkerStat, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, MAIN_BUTTONS, getMainMenuCfg, sendQuickReplyKeyboard, broadcastQuickReplyKeyboard, handleAdminGetMainMenu, handleAdminSaveMainMenu, handleAdminMainMenuBroadcast, replyTextWithKeyboard, proxyBotApi, handleBotSendMessage, handleBotSendPhoto, handleBotSendDocument, handleBotSendVideo, handleBotGetFile, handleBotGetMe, handleBotGetWebhookInfo, handleBotSetWebhook, handleBotGetUpdates, handleBotGetChat, handleBotGetChatMemberCount, handleBotBanChatMember, handleBotUnbanChatMember, handleBotDeleteMessage, handleBotForwardMessage, handleBotCopyMessage, handleBotAnswerInlineQuery, handleBotSendMediaGroup, handleBotEditMessageText, handleBotEditMessageCaption, handleBotPinChatMessage, handleBotUnpinChatMessage, handleBotSendChatAction, fileTok } from './src/telegram.js';
 import { DEFAULT_COMMANDS, parseMenu, menuButtons, menuText, setMenuCtx, getMenuCtx, execMenuAction, replyCommandMenu, getAIConfig, handleAdminGetAI, handleAdminSaveAI, cfR2Usage, handleUsageForecast, cfWorkerUsage, handleAdminWorkerUsage, handleAdminR2Usage, handleAdminGetR2Quota, handleAdminSaveR2Quota, aiComplete, aiThrottled, isAIReplyText, callAIManage, handleAdminTestAI, handleAdminAskAI, fetchAI, aiRunTool, aiCountFiles, aiGetStatsText, aiUnsavedText, aiSearchText, aiFileText, triggerRetryN, handleBotCommand, syncBuiltinCommands, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleStatsCommand, handleFileCommand, handleSearchCommand, handleImgCommand, handleInlineQuery } from './src/commands.js';
-import { handleShowConfigGet, handleShowGroupsList, handleShowGroupsSave, handleShowGroupsDelete, handleShowGroupRoll, rotateProgramImages, handleShowConfigSet, handleShowPage, handleShowData, handleGalleryPage, handleGalleryData, checkApiKey, appendTagFilter, handlePublicFiles, handlePublicRandom, handlePublicUpload, handleDiagnoseKey, handleAdminTags, handleSetFileTags, checkUserPortal, handleAdminKeys, handleAdminKeysCreate, handleAdminKeysUpdate, handleAdminKeysToggle, handleAdminKeysDelete, handleAdminKeyUsers, handleAdminUsernameCheck, handleAdminRedeemList, handleAdminRedeemCreate, handleAdminRedeemUpdate, handleAdminRedeemDelete, handleAdminCallLogs, handleAdminCallStats, handleUserRegister, handleUserRedeem, handleUserCallLogs, handleUserCallStats, recordKnownChat, recordUserInteraction, handleAdminUsers, handleAdminUsersInteractions, handleAdminPoolList, handleAdminPoolCreate, handleAdminPoolImportPage, handleAdminPoolUpload, handleAdminFilesUpload, handleAdminFilesImport, handleAdminPoolUploadPostimages, handleAdminGetPiKey, handleAdminSavePiKey, handleAdminGetPoolTags, handleAdminSavePoolTags, handleAdminPoolToggle } from './src/public.js';
+import { handleShowConfigGet, handleShowGroupsList, handleShowGroupsSave, handleShowGroupsDelete, handleShowGroupRoll, rotateProgramImages, handleShowConfigSet, handleShowPage, handleShowData, handleGalleryPage, handleGalleryData, checkApiKey, appendTagFilter, handlePublicFiles, handlePublicRandom, handlePublicUpload, handleDiagnoseKey, handleAdminTags, handleSetFileTags, checkUserPortal, handleAdminKeys, handleAdminKeysCreate, handleAdminKeysUpdate, handleAdminKeysToggle, handleAdminKeysDelete, handleAdminKeyUsers, handleAdminUsernameCheck, handleAdminRedeemList, handleAdminRedeemCreate, handleAdminRedeemUpdate, handleAdminRedeemDelete, handleAdminCallLogs, handleAdminCallStats, handleUserRegister, handleUserRedeem, handleUserCallLogs, handleUserCallStats, handleUserResetPassword, handleUserGetKeyInfo, recordKnownChat, recordUserInteraction, handleAdminUsers, handleAdminUsersInteractions, handleAdminPoolList, handleAdminPoolCreate, handleAdminPoolImportPage, handleAdminPoolUpload, handleAdminFilesUpload, handleAdminFilesImport, handleAdminPoolUploadPostimages, handleAdminGetPiKey, handleAdminSavePiKey, handleAdminGetPoolTags, handleAdminSavePoolTags, handleAdminPoolToggle } from './src/public.js';
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg } from './src/batch.js';
 
 import { handleTgFileRedirect, handleFiles, handleFile, getProxyMode, getBotUsername, handleAdminGetProxyMode, handleAdminSaveProxyMode, handleAdminGetProxyOnly, handleAdminSaveProxyOnly, handleStats } from './src/api.js';
@@ -49,24 +49,80 @@ export default {
     if (m === 'GET' && p === '/dashboard') return handleDashboard(env);
     if (m === 'GET' && p === '/docs') return handleDocs();
     if (m === 'GET' && p === '/show') return handleShowPage();
-    if (m === 'GET' && p === '/show/data') return handleShowData(request, env);
+    if (m === 'GET' && p === '/show/data') {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleShowData(request, env);
+    }
     // 画廊瀑布流页（带 key 鉴权，多级+标签+类型筛选）
     if (m === 'GET' && p === '/gallery') return handleGalleryPage();
-    if (m === 'GET' && p === '/gallery/data') return handleGalleryData(request, env);
+    if (m === 'GET' && p === '/gallery/data') {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleGalleryData(request, env);
+    }
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
     // 用户门户（普通用户用 key + key-pass 登录，查看密钥统计 + 生成公开接口 URL）
     if (m === 'GET' && p === '/user') return handleUserFromR2(env);
-    if (m === 'POST' && p === '/api/user/login') return handleUserLogin(request, env);
-    if (m === 'POST' && p === '/api/user/register') return handleUserRegister(request, env);
-    if (m === 'POST' && p === '/api/user/redeem') return handleUserRedeem(request, env);
+    if (m === 'POST' && p === '/api/user/login') {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleUserLogin(request, env);
+    }
+    if (m === 'POST' && p === '/api/user/register') {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleUserRegister(request, env);
+    }
+    if (m === 'POST' && p === '/api/user/redeem') {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleUserRedeem(request, env);
+    }
+    if (m === 'POST' && p === '/api/user/reset-password') {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleUserResetPassword(request, env);
+    }
+    if (m === 'POST' && p === '/api/user/key-info') {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleUserGetKeyInfo(request, env);
+    }
     // 管理员使用手册（R2 静态页，与 admin.html 同源发布）
     if (m === 'GET' && p === '/admin/guide') return handleAdminGuideFromR2(env);
     if (m === 'GET' && p === '/favicon.ico') return new Response(null, { status: 204 });
     // File proxy: /file/tg/<id> -> 302 to official Telegram direct link (clean URL, no token exposed)
-    if (m === 'GET' && p.indexOf('/file/tg/') === 0) return handleTgFileRedirect(request, env, ctx);
+    if (m === 'GET' && p.indexOf('/file/tg/') === 0) {
+      // 公开 API：添加 IP 速率限制
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleTgFileRedirect(request, env, ctx);
+    }
     // Admin API (auth via query param or header)
     const adminKey = url.searchParams.get('api_key') || request.headers.get('X-API-Key');
     const isAdmin = adminKey && adminKey === env.API_KEY;
+    // 管理员路由添加限流保护
+    if (isAdmin && p.startsWith('/admin/api/')) {
+      if (await applyAdminRateLimit(env, request)) {
+        return json({ ok: false, error: '管理员请求过于频繁，请稍后再试' }, 429);
+      }
+    }
     if (m === 'GET' && p === '/admin/api/commands') return isAdmin ? handleAdminCommands(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/commands') return isAdmin ? handleAdminAddCommand(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'PATCH' && p === '/admin/api/commands') return isAdmin ? handleAdminUpdateCommand(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -267,6 +323,10 @@ export default {
       const k = await checkApiKey(request, env);
       if (!k) return json({ ok: false, error: 'Unauthorized or invalid API key' }, 401);
       if (k.limited) return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      // 权限检查：上传需要 files:write 或 upload scope
+      if (!hasScope(k.rec, 'files:write') && !hasScope(k.rec, 'upload')) {
+        return json({ ok: false, error: '权限不足：上传文件需要 files:write 或 upload 权限', hint: '请联系管理员为您的密钥添加上传权限' }, 403);
+      }
       const keyLevel = (k.rec && k.rec.level) || 'pt';
       return handlePublicUpload(request, env, keyLevel);
     }
@@ -278,6 +338,10 @@ export default {
     if (m === 'POST' && p === '/api/user/stats') {
       const rec = await checkUserPortal(request, env);
       if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      // 用户门户限流
+      if (await applyUserRateLimit(env, rec.key)) {
+        return json({ ok: false, error: '请求过于频繁，请稍后再试' }, 429);
+      }
       const today = cnTodayStr();
       const exp = rec.expires_at || '';
       rec.expired = exp ? (exp < today ? 1 : 0) : 0;
@@ -286,17 +350,29 @@ export default {
     if (m === 'POST' && p === '/api/user/tags') {
       const rec = await checkUserPortal(request, env);
       if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      // 用户门户限流
+      if (await applyUserRateLimit(env, rec.key)) {
+        return json({ ok: false, error: '请求过于频繁，请稍后再试' }, 429);
+      }
       return handleAdminTags(env);
     }
     // 用户门户：当前密钥的调用日志（最近 200 条）+ 最近 1h/6h/24h 调用统计
     if (m === 'POST' && p === '/api/user/logs') {
       const rec = await checkUserPortal(request, env);
       if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      // 用户门户限流
+      if (await applyUserRateLimit(env, rec.key)) {
+        return json({ ok: false, error: '请求过于频繁，请稍后再试' }, 429);
+      }
       return handleUserCallLogs(rec, env);
     }
     if (m === 'POST' && p === '/api/user/log-stats') {
       const rec = await checkUserPortal(request, env);
       if (!rec) return json({ ok: false, error: 'Invalid key or key-pass' }, 401);
+      // 用户门户限流
+      if (await applyUserRateLimit(env, rec.key)) {
+        return json({ ok: false, error: '请求过于频繁，请稍后再试' }, 429);
+      }
       return handleUserCallStats(rec, env);
     }
 
@@ -403,6 +479,11 @@ async function handleQueueMessage(body, env) {
     return;
   }
   if (!d.fi) { console.log('queue msg missing fi:', JSON.stringify(d).slice(0, 200)); return; }
+  // 校验 dbId：INSERT 失败时 dbId 为 null，跳过处理避免幽灵转存
+  if (!d.dbId) {
+    console.log('queue msg missing dbId (INSERT likely failed), skipping file:', d.fi.fileName);
+    return;
+  }
   await processFileAsync(d.dbId, d.fi, d.chatId, d.msgId, d.chat || {}, d.from || {}, date, env, d.ref || '');
 }
 

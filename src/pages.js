@@ -51,7 +51,7 @@ export async function handleUserFromR2(env) {
 // 用户门户登录：支持「密钥 + key-pass」或「用户名 + 密码」两种方式，返回该密钥的统计信息（不含密码哈希）
 export async function handleUserLogin(request, env) {
   try {
-    if (!env.D1_DB) return json({ ok: false, error: 'DB unavailable' }, 500);
+    if (!env.D1_DB) return json({ ok: false, error: '数据库服务不可用', hint: '请稍后重试或联系管理员' }, 500);
     const b = await request.json().catch(function() { return {}; });
     const username = String(b.username || '').trim();
     let key = String(b.key || b.api_key || '').trim();
@@ -59,23 +59,26 @@ export async function handleUserLogin(request, env) {
     // 用户名登录：先用用户名定位密钥，再用 key-pass 校验
     if (!key && username) {
       const byName = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE username=? LIMIT 1').bind(username).first();
-      if (!byName) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+      if (!byName) return json({ ok: false, error: '用户名不存在', hint: '请检查用户名是否正确' }, 401);
       key = byName.key;
     }
-    if (!key || !pass) return json({ ok: false, error: '请填写用户名/密钥与密码' }, 400);
+    if (!key || !pass) return json({ ok: false, error: '请填写完整的登录信息', hint: '用户名和密码均为必填项' }, 400);
     const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(key).first();
-    if (!rec || !rec.key_pass) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+    if (!rec || !rec.key_pass) return json({ ok: false, error: '密钥已禁用或已过期', hint: '请联系管理员重新启用密钥' }, 401);
     const hp = await hashKeyPass(pass, key);
-    if (hp !== rec.key_pass) return json({ ok: false, error: '用户名或密码不正确' }, 401);
+    if (hp !== rec.key_pass) return json({ ok: false, error: '密码不正确', hint: '请检查密码是否正确，或使用"忘记密码"功能重置' }, 401);
     const today = cnTodayStr();
     const exp = rec.expires_at || '';
     rec.expired = exp ? (exp < today ? 1 : 0) : 0;
+    if (rec.expired) {
+      return json({ ok: false, error: '密钥已过期', hint: '请联系管理员续期或使用延时码' }, 401);
+    }
     return json({ ok: true, data: {
       id: rec.id, key: rec.key, short_key: rec.short_key || '', name: rec.name, username: rec.username || '', scopes: rec.scopes, level: rec.level,
       enabled: rec.enabled, expires_at: rec.expires_at, expired: rec.expired,
       created_at: rec.created_at, last_used_at: rec.last_used_at, usage_count: rec.usage_count
     } });
-  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+  } catch (e) { return json({ ok: false, error: '登录失败', details: e.message }, 500); }
 }
 
 
@@ -92,6 +95,8 @@ export function handleDocs() {
     ['GET', '/api/file?id=1', 'auth', 'Single file detail', [['id', 'int', 'File ID (or use url)'], ['url', 'string', 'R2 URL (or use id)']]],
     ['GET', '/api/stats', 'auth', 'Statistics (total, size, today, by type/chat)', null],
     ['GET', '/api/latest', 'auth', 'Latest files', [['limit', 'int', 'Count, default 10, max 50'], ['type', 'string', 'Filter by type']]],
+    ['POST', '/api/user/reset-password', 'public', 'Reset password (username + old password → new password)', [['username', 'string', 'Yes', 'Username'], ['old_password', 'string', 'Yes', 'Old password'], ['new_password', 'string', 'Yes', 'New password (min 6 chars)']]],
+    ['POST', '/api/user/key-info', 'public', 'Get key info (username + password)', [['username', 'string', 'Yes', 'Username'], ['password', 'string', 'Yes', 'Password']]],
     ['GET', '/api/search?q=xxx', 'auth', 'Search files', [['q', 'string', 'Yes', 'Keyword'], ['page', 'int', 'No', 'Page'], ['page_size', 'int', 'No', 'Per page']]],
     ['GET', '/api/by-chat', 'auth', 'Query by group', [['chat_id', 'string', 'Group ID'], ['chat_title', 'string', 'Name (fuzzy)'], ['page', 'int', 'Page'], ['page_size', 'int', 'Per page']]],
     ['GET', '/api/by-user', 'auth', 'Query by user', [['user_id', 'int', 'User ID'], ['username', 'string', 'Name (fuzzy)'], ['page', 'int', 'Page'], ['page_size', 'int', 'Per page']]],
