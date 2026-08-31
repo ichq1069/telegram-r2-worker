@@ -6,6 +6,7 @@ import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, 
 import { lastUploadError, putR2 } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
+import { applyRateLimit } from "./ratelimit.js";
 // ==================== Public slideshow page (random pool showcase) ====================
 // 30s in-memory cache so /show and /show/data skip D1 on hot requests (cold starts used to add seconds)
 let _showCfg = null, _showCfgAt = 0;
