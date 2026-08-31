@@ -187,7 +187,7 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
         <div class="fr"><label>关键词 (可选)</label><input class="inp" id="genKw" placeholder="文件名/描述包含..."></div>
       </div>
       <div class="fr" style="margin-top:10px"><label>标签筛选 (点击切换，多选=命中任意一个即可)</label><div id="genTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div></div>
-      <div class="fr" style="margin-top:12px"><label>生成的接口 URL</label>
+      <div class="fr" style="margin-top:12px"><label>生成的接口 URL <span id="genUrlHint" style="font-size:11px;color:var(--text-secondary);font-weight:400"></span></label>
         <div class="fb" style="flex-wrap:wrap">
           <input class="inp" id="genUrl" readonly style="flex:1;min-width:260px">
           <button class="btn btn-primary" id="genCopy">复制</button>
@@ -209,6 +209,7 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
 var OR = location.origin;
 var AK = "";          // API key
 var KP = "";          // key-pass
+var UN = "";          // 用户名（用于生成短链接）
 var savedKey = "";
 var genSelTags = [];
 
@@ -318,7 +319,7 @@ function doLogin() {
   }).then(function(r) { return r.json(); }).then(function(j) {
     document.getElementById("loginBtn").disabled = false;
     if (!j.ok || !j.data) { errEl.textContent = j.error || "登录失败，请检查用户名/密钥与密码"; return; }
-    AK = j.data.key; KP = p;
+    AK = j.data.key; KP = p; UN = j.data.username || "";
     try { localStorage.setItem("up_key", j.data.key); } catch (e) {}
     showApp(j.data);
   }).catch(function() {
@@ -346,7 +347,7 @@ function doRegister() {
     if (!j.ok || !j.data) { errEl.textContent = j.error || "注册失败，请检查兑换码"; return; }
     // 注册成功 → 自动登录
     toast("注册成功，已自动登录", 1);
-    AK = j.data.key; KP = pw;
+    AK = j.data.key; KP = pw; UN = j.data.username || "";
     try { localStorage.setItem("up_key", j.data.key); } catch (e) {}
     fetch(OR + "/api/user/login", {
       method: "POST",
@@ -413,7 +414,7 @@ document.getElementById("regBtn").addEventListener("click", doRegister);
   document.getElementById(id).addEventListener("keydown", function(e) { if (e.key === "Enter") doRegister(); });
 });
 document.getElementById("logoutBtn").addEventListener("click", function() {
-  AK = ""; KP = "";
+  AK = ""; KP = ""; UN = "";
   try { localStorage.removeItem("up_key"); } catch (e) {}
   document.getElementById("loginScreen").style.display = "flex";
   document.getElementById("appMain").style.display = "none";
@@ -473,7 +474,8 @@ function fallbackCopy(text) {
   ta.remove();
 }
 function genUrl() {
-  var key = AK || "YOUR_KEY";
+  var authP = UN ? "user=" + encodeURIComponent(UN) : "api_key=" + encodeURIComponent(AK);
+  var authName = UN ? "用户" : "密钥";
   var type = document.getElementById("genType").value;
   var limit = document.getElementById("genLimit").value || "10";
   var mode = document.getElementById("genMode").value;
@@ -481,7 +483,7 @@ function genUrl() {
   var kw = document.getElementById("genKw").value.trim();
   var tags = genSelTags.join(",");
   if (mode === "upload") {
-    var u1 = "/api/v1/upload?api_key=" + encodeURIComponent(key);
+    var u1 = "/api/v1/upload?" + authP;
     if (tags) u1 += "&tags=" + encodeURIComponent(tags);
     var url1 = OR + u1;
     document.getElementById("genUrl").value = url1;
@@ -489,13 +491,14 @@ function genUrl() {
     return;
   }
   var u = mode === "random" ? "/api/v1/random" : "/api/v1/files?pool=1";
-  u += (mode === "random" ? "?" : "&") + "api_key=" + encodeURIComponent(key);
+  u += (mode === "random" ? "?" : "&") + authP;
   if (type) u += "&type=" + type;
   if (tags) u += "&tags=" + encodeURIComponent(tags);
   if (kw) u += "&keyword=" + encodeURIComponent(kw);
   u += mode === "random" ? "&count=" + limit : "&limit=" + limit;
   var url = OR + u;
   document.getElementById("genUrl").value = url;
+  document.getElementById("genUrlHint").textContent = "鉴权：URL 已使用" + authName + "（" + (UN ? "后端按用户名匹配密钥" : "密钥直传") + "）";
   renderGenExamples(url, mode);
 }
 function renderGenExamples(url, mode) {

@@ -685,7 +685,15 @@ load();
 export async function checkApiKey(request, env) {
   if (!env.D1_DB) { console.error('checkApiKey: D1_DB unavailable'); return null; }
   const u = new URL(request.url);
-  const k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
+  let k = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
+  // 支持 ?user=用户名：按用户名匹配 key（便于生成短链接），api_key 优先
+  if (!k) {
+    const uname = u.searchParams.get('user');
+    if (uname) {
+      const byName = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE username=? LIMIT 1').bind(String(uname).trim()).first().catch(function() { return null; });
+      if (byName) k = byName.key;
+    }
+  }
   if (!k) return null;
   try {
     const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
