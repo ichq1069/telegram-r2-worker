@@ -99,7 +99,8 @@ export async function ensureTables(db) {
         console.log('migrated: bot_commands.builtin column');
       }
     } catch (e3) { console.error('bot_commands menu migration:', e3.message); }
-    // api_keys.expires_at：到期时间（旧库无此列则补加）
+    // api_keys 各列迁移（expires_at / level / key_pass / username / short_key）合并为一次 PRAGMA，
+    // 避免冷启动时 5 次串行 D1 往返；short_key 缺失值一次性补生成
     try {
       const ak = await db.prepare("PRAGMA table_info(api_keys)").all();
       const akn = (ak.results || []).map(function(c) { return c.name; });
@@ -107,7 +108,29 @@ export async function ensureTables(db) {
         await db.exec("ALTER TABLE api_keys ADD COLUMN expires_at TEXT");
         console.log('migrated: api_keys.expires_at column');
       }
-    } catch (e4) { console.error('api_keys expires migration:', e4.message); }
+      if (akn.indexOf('level') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN level TEXT DEFAULT 'pt'");
+        console.log('migrated: api_keys.level column');
+      }
+      if (akn.indexOf('key_pass') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN key_pass TEXT");
+        console.log('migrated: api_keys.key_pass column');
+      }
+      if (akn.indexOf('username') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN username TEXT");
+        console.log('migrated: api_keys.username column');
+      }
+      if (akn.indexOf('short_key') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN short_key TEXT");
+        console.log('migrated: api_keys.short_key column');
+      }
+      const missing = await db.prepare("SELECT id FROM api_keys WHERE short_key IS NULL OR short_key=''").all();
+      for (const row of (missing.results || [])) {
+        const sk = genShortKey();
+        await db.prepare("UPDATE api_keys SET short_key=? WHERE id=?").bind(sk, row.id).run();
+      }
+      if ((missing.results || []).length) console.log('migrated: backfilled short_key for ' + missing.results.length + ' keys');
+    } catch (e4) { console.error('api_keys migrations:', e4.message); }
     // show_groups.mode / daily_count / updated_at：节目组定时换图（旧库无此列则补加）
     try {
       const sg = await db.prepare("PRAGMA table_info(show_groups)").all();
@@ -125,48 +148,6 @@ export async function ensureTables(db) {
       if (rpn.indexOf('is_private') === -1) await db.exec("ALTER TABLE random_pool ADD COLUMN is_private INTEGER DEFAULT 0");
       console.log('migrated: random_pool level/is_private columns');
     } catch (e6) { console.error('random_pool migration:', e6.message); }
-    // api_keys.level：密钥分级（旧库无此列则补加）
-    try {
-      const ak2 = await db.prepare("PRAGMA table_info(api_keys)").all();
-      const ak2n = (ak2.results || []).map(function(c) { return c.name; });
-      if (ak2n.indexOf('level') === -1) {
-        await db.exec("ALTER TABLE api_keys ADD COLUMN level TEXT DEFAULT 'pt'");
-        console.log('migrated: api_keys.level column');
-      }
-    } catch (e7) { console.error('api_keys level migration:', e7.message); }
-    // api_keys.key_pass：用户门户登录密码（旧库无此列则补加；存 SHA-256 哈希，不回传明文）
-    try {
-      const ak3 = await db.prepare("PRAGMA table_info(api_keys)").all();
-      const ak3n = (ak3.results || []).map(function(c) { return c.name; });
-      if (ak3n.indexOf('key_pass') === -1) {
-        await db.exec("ALTER TABLE api_keys ADD COLUMN key_pass TEXT");
-        console.log('migrated: api_keys.key_pass column');
-      }
-    } catch (e8) { console.error('api_keys key_pass migration:', e8.message); }
-    // api_keys.username：用户注册的用户名（兑换码兑换后生成，唯一，用于 user 门户用户名登录）
-    try {
-      const ak4 = await db.prepare("PRAGMA table_info(api_keys)").all();
-      const ak4n = (ak4.results || []).map(function(c) { return c.name; });
-      if (ak4n.indexOf('username') === -1) {
-        await db.exec("ALTER TABLE api_keys ADD COLUMN username TEXT");
-        console.log('migrated: api_keys.username column');
-      }
-    } catch (e9) { console.error('api_keys username migration:', e9.message); }
-    // api_keys.short_key：短链接别名 key（旧库无此列则补加；并对缺失值补生成，用于 ?sk= 短链接鉴权）
-    try {
-      const ak5 = await db.prepare("PRAGMA table_info(api_keys)").all();
-      const ak5n = (ak5.results || []).map(function(c) { return c.name; });
-      if (ak5n.indexOf('short_key') === -1) {
-        await db.exec("ALTER TABLE api_keys ADD COLUMN short_key TEXT");
-        console.log('migrated: api_keys.short_key column');
-      }
-      const missing = await db.prepare("SELECT id FROM api_keys WHERE short_key IS NULL OR short_key=''").all();
-      for (const row of (missing.results || [])) {
-        const sk = genShortKey();
-        await db.prepare("UPDATE api_keys SET short_key=? WHERE id=?").bind(sk, row.id).run();
-      }
-      if ((missing.results || []).length) console.log('migrated: backfilled short_key for ' + missing.results.length + ' keys');
-    } catch (e15) { console.error('api_keys short_key migration:', e15.message); }
     // user_stats 交互统计列（旧库有表但缺列时补加，避免 INSERT 失败）
     try {
       const us = await db.prepare("PRAGMA table_info(user_stats)").all();

@@ -252,7 +252,21 @@ export default {
       if (k.limited) return json({ ok: false, error: 'Rate limit exceeded' }, 429);
       const keyLevel = (k.rec && k.rec.level) || 'pt';
       if (p === '/api/v1/random') return handlePublicRandom(request, env, keyLevel);
-      return handlePublicFiles(request, env, keyLevel);
+      // files 列表：Worker 内缓存 30s（含 pool 随机列表，同一 URL 30s 内秒回），
+      // 鉴权/用量统计仍在每次请求执行，仅缓存数据响应加速重复筛选请求
+      const cache = caches.default;
+      const ck = new Request(url.href, { method: 'GET' });
+      const hit = await cache.match(ck).catch(function() { return undefined; });
+      if (hit) return hit;
+      const resp = await handlePublicFiles(request, env, keyLevel);
+      if (resp.status === 200) {
+        const hd = new Headers(resp.headers);
+        if (!hd.has('Cache-Control')) hd.set('Cache-Control', 'public, s-maxage=30, max-age=0');
+        const cached = new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: hd });
+        ctx.waitUntil(cache.put(ck, cached.clone()).catch(function() {}));
+        return cached;
+      }
+      return resp;
     }
     // Public upload API for third-party programs (auth via api_keys table)
     // POST /api/v1/upload?api_key=xxx&pool=1&tags=风景&title=xxx&level=pt&is_private=1

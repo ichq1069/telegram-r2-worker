@@ -849,14 +849,17 @@ export async function handlePublicFiles(request, env, keyLevel) {
     else { w += ' AND (file_name LIKE ? OR caption LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
   }
   try {
-    const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM ' + table + ' ' + w).bind(...p).first();
-    let d;
-    if (random || fromPool) {
-      // pool 模式默认随机排序（每次刷新内容不同）；非 pool 加 random=1 才随机
-      d = await env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, limit).all();
-    } else {
-      d = await env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
-    }
+    // COUNT 与 SELECT 并行执行，减少一次串行 D1 往返
+    const [t, d] = await Promise.all([
+      env.D1_DB.prepare('SELECT COUNT(*) as total FROM ' + table + ' ' + w).bind(...p).first(),
+      (function() {
+        if (random || fromPool) {
+          // pool 模式默认随机排序（每次刷新内容不同）；非 pool 加 random=1 才随机
+          return env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, limit).all();
+        }
+        return env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+      })()
+    ]);
     const mapper = fromPool ? poolFileJson : publicFileJson;
     return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, items: (d.results || []).map(mapper) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
