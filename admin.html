@@ -3265,6 +3265,7 @@ function ubotTaskRowClick(e) {
 // ---------------- 群抓取：相册管理（浏览/勾选/保存/抓取已选） ----------------
 var UBotAlbumsTaskId = 0;
 var UBotAlbumsData = [];
+var UBotAlbumsTaskMode = ''; // 'idle' | 'list'
 var UBotAlbumsSel = {}; // msg_id -> 1，逐张图勾选集合
 
 function syncAlbumsSel() {
@@ -3274,6 +3275,7 @@ function syncAlbumsSel() {
 function ubotAlbums(id) {
   UBotAlbumsTaskId = id;
   UBotAlbumsData = [];
+  UBotAlbumsTaskMode = '';
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:880px">' +
     '<h3>相册管理 #' + id + '</h3>' +
@@ -3314,6 +3316,7 @@ function ubotAlbums(id) {
     if (r && r.ok) {
       if (r.data.task.scan_limit) document.getElementById("ubAlbumScan").value = r.data.task.scan_limit;
       UBotAlbumsData = r.data.albums || [];
+      UBotAlbumsTaskMode = r.data.task.mode || '';
       syncAlbumsSel();
       renderUbotAlbums();
       if (r.data.task.mode === 'list') ubotAlbumsPoll(0);
@@ -3361,6 +3364,7 @@ function ubotAlbumsPoll(n) {
       var progDetail = document.getElementById("ubAlbumProgressDetail");
 
       if (r.data.task.mode === 'list') {
+        UBotAlbumsTaskMode = 'list';
         st.textContent = "枚举中…（第 " + (n + 1) + " 次轮询）";
         // 解析 scan_progress 显示实时进度
         var sp = r.data.task.scan_progress;
@@ -3386,6 +3390,7 @@ function ubotAlbumsPoll(n) {
       }
 
       // 扫描结束，隐藏进度条
+      UBotAlbumsTaskMode = 'idle';
       if (prog) prog.style.display = 'none';
 
       if (n === 0 && (r.data.albums || []).length === 0) {
@@ -3442,7 +3447,10 @@ function renderUbotAlbums() {
     }
     html += '</div>';
   }
-  grid.innerHTML = html || '<div style="grid-column:1/-1;color:var(--text-secondary);font-size:13px;padding:24px;text-align:center">没有媒体数据。点击「浏览相册」让 userbot 枚举该群历史消息。</div>';
+  grid.innerHTML = html || (UBotAlbumsTaskMode === 'list'
+    ? '<div style="grid-column:1/-1;color:var(--text-secondary);font-size:13px;padding:24px;text-align:center">正在扫描群历史消息，请稍候…</div>'
+    : '<div style="grid-column:1/-1;color:var(--text-secondary);font-size:13px;padding:24px;text-align:center">没有媒体数据。点击「浏览相册」让 userbot 枚举该群历史消息。</div>'
+  );
   if (selInfo) selInfo.textContent = "已选 " + selCount + " / " + totalCount + " 张";
   Array.prototype.forEach.call(grid.querySelectorAll(".ub-photo"), function(el) {
     el.onclick = function(e) { e.stopPropagation(); toggleUbotPhoto(el); };
