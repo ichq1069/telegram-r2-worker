@@ -210,7 +210,7 @@ export async function handleAdminUbotAlbumsGet(env, id) {
     const albums = (d.results || []).map(function(a) {
       let sizes = [];
       try { sizes = JSON.parse(a.sizes || '[]'); } catch (e) { sizes = []; }
-      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || '', sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0, file_id: s.file_id || '' }; }), cover_url: a.cover_url, first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
+      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || (s.file_id ? '/api/tg-proxy?file_id=' + s.file_id : ''), sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0, file_id: s.file_id || '' }; }), cover_url: a.cover_url || (sizes[0] && sizes[0].file_id ? '/api/tg-proxy?file_id=' + sizes[0].file_id : ''), first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
     });
     return json({ ok: true, data: { task: taskToOut(t), albums: albums } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -274,7 +274,7 @@ export async function handleUbotAlbumsReport(request, env, id) {
         const gid = String(a.grouped_id || '').slice(0, 64);
         if (!gid) continue;
         const msgIds = Array.isArray(a.msg_ids) ? a.msg_ids.filter(function(x) { return /^\d+$/.test(String(x)); }).slice(0, 500) : [];
-        const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500), type: String(s.type || 'photo'), duration: Number(s.duration) || 0, file_id: String(s.file_id || '').slice(0, 200) }; }).slice(0, 500) : [];
+        const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { const fid = String(s.file_id || '').slice(0, 200); return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500) || (fid ? '/api/tg-proxy?file_id=' + fid : ''), type: String(s.type || 'photo'), duration: Number(s.duration) || 0, file_id: fid }; }).slice(0, 500) : [];
         if (!msgIds.length) continue;
         batch.push(env.D1_DB.prepare(stmtText).bind(id, gid, msgIds.join(','), msgIds.length, JSON.stringify(sizes), String(a.cover_url || '').slice(0, 500), Number(a.first_ts) || 0, a.has_oversize ? 1 : 0, now));
       }
