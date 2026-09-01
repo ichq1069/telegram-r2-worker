@@ -4,7 +4,7 @@ import { json, fmtSize, genHash, log, invalidateStatsCache } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
 import { notifyAdmin, genThumb } from "./notify.js";
 import { cnTodayStr, guessExt, fileExtOf, extractTags } from "./core.js";
-import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
+import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
 import { getBotUsername, getProxyMode } from "./api.js";
@@ -186,6 +186,16 @@ export async function processUpdateCore(update, env, waitFn) {
         return { ok: true, batch: true };
       }
     }
+  }
+  // 转发群/频道消息到私聊：反馈来源 chat_id（便于后台配置抓取任务的 chat_id）
+  if (msg && msg.chat && msg.chat.type === 'private' && msg.forward_from_chat && env.TG_BOT_TOKEN) {
+    try {
+      const src = msg.forward_from_chat;
+      const srcType = src.type === 'channel' ? '频道' : (src.type === 'supergroup' ? '超级群' : (src.type === 'group' ? '群' : '会话'));
+      const title = src.title || src.username || '';
+      const kind = src.type === 'channel' ? '抓取该频道，任务 chat_id 填：' : '抓取该群，任务 chat_id 填：';
+      await replyTextPlain(String(msg.chat.id), parseInt(msg.message_id), '该消息来自' + srcType + (title ? '「' + title + '」' : '') + '\n' + kind + String(src.id), env);
+    } catch (e) { console.log('forward chatid reply fail:', e.message); }
   }
   if (msg && !msg.text?.startsWith('/')) {
     const fi = extractFileInfo(msg);
