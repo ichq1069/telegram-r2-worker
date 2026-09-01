@@ -3281,6 +3281,7 @@ function ubotAlbums(id) {
     '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
       '<label style="margin:0">扫描上限（条）</label><input class="inp" id="ubAlbumScan" type="number" value="2000" min="100" style="width:110px"> ' +
       '<button class="btn btn-sm" id="ubAlbumScanBtn">浏览相册</button> ' +
+      '<button class="btn btn-sm" id="ubAlbumMoreBtn" title="从当前最早一条继续向更早枚举历史相册/图片">加载更早</button> ' +
       '<span id="ubAlbumStatus" style="font-size:12px;color:var(--text-secondary)"></span>' +
     '</div>' +
     '<div id="ubAlbumGrid" style="max-height:58vh;overflow:auto;margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>' +
@@ -3292,6 +3293,7 @@ function ubotAlbums(id) {
     '</div></div></div>';
   document.getElementById("modalCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
   document.getElementById("ubAlbumScanBtn").onclick = function() { ubotAlbumsScan(); };
+  document.getElementById("ubAlbumMoreBtn").onclick = function() { ubotAlbumsMore(); };
   document.getElementById("ubAlbumSelBtn").onclick = function() { ubotAlbumsSave(); };
   document.getElementById("ubAlbumTrigBtn").onclick = function() { ubotAlbumsTrigger(); };
   api("GET", "/admin/api/userbot-tasks/" + id + "/albums").then(function(r) {
@@ -3307,11 +3309,30 @@ function ubotAlbums(id) {
 
 function ubotAlbumsScan() {
   var scan = parseInt(document.getElementById("ubAlbumScan").value) || 2000;
+  var moreBtn = document.getElementById("ubAlbumMoreBtn");
+  if (moreBtn) moreBtn.disabled = true;
   api("POST", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums/list", { scan_limit: scan }).then(function(r) {
     if (r && r.ok) {
       document.getElementById("ubAlbumStatus").textContent = "已触发浏览，userbot 下一轮开始枚举…";
       ubotAlbumsPoll(0);
-    } else toast((r && r.error) || "触发失败", 0);
+    } else { if (moreBtn) moreBtn.disabled = false; toast((r && r.error) || "触发失败", 0); }
+  });
+}
+
+function ubotAlbumsMore() {
+  var beforeId = 0;
+  UBotAlbumsData.forEach(function(a) {
+    (a.sizes || []).forEach(function(s) { if (beforeId === 0 || Number(s.id) < beforeId) beforeId = Number(s.id); });
+  });
+  if (!beforeId) { toast("当前没有已浏览条目，先点「浏览相册」", 0); return; }
+  var scan = parseInt(document.getElementById("ubAlbumScan").value) || 2000;
+  var moreBtn = document.getElementById("ubAlbumMoreBtn");
+  if (moreBtn) moreBtn.disabled = true;
+  api("POST", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums/list", { scan_limit: scan, before_id: beforeId }).then(function(r) {
+    if (r && r.ok) {
+      document.getElementById("ubAlbumStatus").textContent = "已触发向更早翻页（早于 msg " + beforeId + "）…";
+      ubotAlbumsPoll(0);
+    } else { if (moreBtn) moreBtn.disabled = false; toast((r && r.error) || "触发失败", 0); }
   });
 }
 
@@ -3332,7 +3353,10 @@ function ubotAlbumsPoll(n) {
       UBotAlbumsData = r.data.albums || [];
       syncAlbumsSel();
       renderUbotAlbums();
-      st.textContent = "已更新 " + UBotAlbumsData.length + " 个相册";
+      var moreBtn = document.getElementById("ubAlbumMoreBtn");
+      if (moreBtn) moreBtn.disabled = false;
+      var cur = r.data.task && r.data.task.album_cursor ? r.data.task.album_cursor : 0;
+      st.textContent = "已更新 " + UBotAlbumsData.length + " 个条目" + (cur ? " · 已翻到最早 msg " + cur + "，可继续加载更早" : "");
     });
   }, 2000);
 }
@@ -3349,6 +3373,8 @@ function renderUbotAlbums() {
   for (var i = 0; i < UBotAlbumsData.length; i++) {
     var a = UBotAlbumsData[i];
     var gid = String(a.grouped_id);
+    var isSolo = gid.indexOf('solo_') === 0;
+    var gidShow = isSolo ? gid.slice(5) : gid;
     var sizes = a.sizes || [];
     var allSel = sizes.length > 0 && sizes.every(function(s) { return UBotAlbumsSel[String(s.id)]; });
     var partial = !allSel && sizes.some(function(s) { return UBotAlbumsSel[String(s.id)]; });
@@ -3361,7 +3387,7 @@ function renderUbotAlbums() {
     var stClr = allSel ? "#46a758" : (partial ? "#e5a000" : "var(--text-secondary)");
     html += '<div class="ub-album" data-gid="' + escStr(gid) + '" style="border:1px solid ' + (allSel ? "#46a758" : (partial ? "#e5a000" : "var(--border,#333)")) + ';border-radius:8px;margin-bottom:10px;overflow:hidden;background:var(--card,#1d1f24)">' +
       '<div class="ub-album-head" style="padding:8px 10px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;flex-wrap:wrap">' +
-        '<span style="font-weight:600;color:var(--text,#eee)">相册 ' + escStr(gid) + '</span>' +
+        '<span style="font-weight:600;color:var(--text,#eee)">' + (isSolo ? '单图' : '相册') + ' ' + escStr(gidShow) + '</span>' +
         '<span style="font-size:11px;color:var(--text-secondary)">' + (a.count || 0) + ' 张 · ' + sizeTxt + (timeTxt ? ' · ' + timeTxt : '') + '</span>' +
         ov +
         '<span style="font-size:11px;color:' + stClr + '">' + stTxt + '</span>' +

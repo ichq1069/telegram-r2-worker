@@ -349,10 +349,11 @@ async def run_task_once(hc, args, task_id):
     mode = task.get("mode") or "normal"
     selected_ids = [x for x in str(task.get("selected_msg_ids") or "").replace(" ", "").split(",") if x.isdigit()]
     scan_limit = int(task.get("scan_limit") or 0) or ALBUM_MAX_PER_POST * 4
+    album_cursor = int(task.get("album_cursor") or 0)  # 翻页游标：>0 表示从此 msg id 之前继续向更早枚举
 
     print(f"任务 #{task_id}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool} level={level} max_size={max_size} limit={limit} mode={mode}")
     if mode == "list":
-        print(f"列表模式：枚举最近 {scan_limit} 条消息聚合相册（不下载相册媒体）")
+        print(f"列表模式：枚举最近 {scan_limit} 条消息聚合相册（不下载相册媒体）" + (f"，游标 {album_cursor} 向更早翻页" if album_cursor else ""))
     elif mode == "selected":
         print(f"选择抓取模式：仅处理 {len(selected_ids)} 条已选消息")
     elif last_id:
@@ -368,7 +369,7 @@ async def run_task_once(hc, args, task_id):
         print(f"群: {getattr(chat, 'title', chat_id)}")
 
         if mode == "list":
-            await run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args)
+            await run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args, album_cursor)
         elif mode == "selected":
             await run_selected_pull(hc, client, chat, task, tags, pool, level, max_size, title_prefix, upload_api_key, server, args)
         else:
@@ -396,6 +397,7 @@ async def upload_cover(hc, server, upload_api_key, task_id, grouped_id, data):
         if r.status_code == 200:
             j = r.json()
             return (j.get("data") or {}).get("url", "")
+        print(f"  封面上传失败 {grouped_id}: HTTP {r.status_code} {r.text[:200]}", file=sys.stderr)
     except Exception as e:
         print(f"  封面上传异常 {grouped_id}: {e}", file=sys.stderr)
     return ""
@@ -497,12 +499,19 @@ async def run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, l
     print(f"完成：本次 {done} 张（跳过超限 {skipped} 张），断点 last_id={min_id or 0}")
 
 
-async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args):
-    """列表模式：枚举最近 scan_limit 条消息聚合相册，传封面缩略图，整批上报元数据（不下载相册媒体）。"""
+async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args, cursor=0):
+    """列表模式：枚举最近 scan_limit 条消息聚合相册，传封面缩略图，整批上报元数据（不下载相册媒体）。
+    cursor>0 时从该 msg id 之前继续向更早枚举（翻页）；单张图片（无 grouped_id）也纳入（gid=solo_<msgid>）。"""
     albums = {}  # grouped_id -> {msg_ids, sizes, first_ts, cover_msg_id}
     scanned = 0
+    solo_count = 0
+    group_count = 0
+    photo_total = 0
     t0 = time.time()
-    it = client.iter_messages(chat, reverse=False, wait_time=ITER_WAIT)
+    kw = dict(reverse=False, wait_time=ITER_WAIT)
+    if cursor and cursor > 0:
+        kw["offset_id"] = cursor
+    it = client.iter_messages(chat, **kw)
     while True:
         try:
             msg = await it.__anext__()
@@ -515,11 +524,18 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
         scanned += 1
         if scanned % 500 == 0:
             print(f"  [进度] 已扫描 {scanned}/{scan_limit} 条，聚合相册 {len(albums)} 个（耗时 {int(time.time()-t0)}s）", file=sys.stderr, flush=True)
-        if not msg.media or msg.grouped_id is None:
+        if not msg.media:
             continue
         if not isinstance(msg.media, MessageMediaPhoto):
             continue
-        gid = str(msg.grouped_id)
+        photo_total += 1
+        if msg.grouped_id is None:
+            # 单张图片：独立成条目，gid=solo_<msgid>
+            solo_count += 1
+            gid = f"solo_{msg.id}"
+        else:
+            group_count += 1
+            gid = str(msg.grouped_id)
         a = albums.setdefault(gid, {"msg_ids": [], "sizes": [], "first_ts": 0})
         a["msg_ids"].append(msg.id)
         photo = getattr(msg.media, "photo", None)
@@ -566,27 +582,35 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
         await asyncio.sleep(WORK_DELAY)
 
     payload = []
+    min_msg_id = 0
     for gid, a in albums.items():
+        mids = a["msg_ids"]
+        if mids and (min_msg_id == 0 or min(mids) < min_msg_id):
+            min_msg_id = min(mids)
         payload.append({
             "grouped_id": gid,
-            "msg_ids": a["msg_ids"],
-            "count": len(a["msg_ids"]),
+            "msg_ids": mids,
+            "count": len(mids),
             "sizes": a["sizes"],
             "cover_url": a["cover_url"],
             "first_ts": a["first_ts"],
             "has_oversize": 1 if any(s["size"] > max_size for s in a["sizes"]) else 0,
         })
-    # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；worker 收到后把任务 mode 收敛回 normal
+    if cursor and cursor > 0:
+        print(f"  翻页统计：本次扫描 {scanned} 条（含 {photo_total} 张图 / 相册 {group_count} 张 / 单图 {solo_count} 张），新增条目 {len(payload)} 个，游标推进到 msg {min_msg_id}", file=sys.stderr, flush=True)
+    else:
+        print(f"  浏览统计：扫描 {scanned} 条消息，共 {photo_total} 张图片（相册聚合 {group_count} 张，单图 {solo_count} 张），聚合条目 {len(payload)} 个", file=sys.stderr, flush=True)
+    # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；append=1 追加合并（翻页），否则整体替换；cursor 回传供下次续扫
     for i in range(0, len(payload), ALBUM_MAX_PER_POST):
         chunk = payload[i:i + ALBUM_MAX_PER_POST]
         try:
             r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
-                              json={"albums": chunk}, timeout=60)
+                              json={"albums": chunk, "append": 1 if (cursor and cursor > 0) else 0, "cursor": min_msg_id}, timeout=60)
             if r.status_code != 200:
                 print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
         except Exception as e:
             print(f"  相册上报异常: {e}", file=sys.stderr)
-    print(f"列表模式完成：扫描 {scanned} 条，聚合 {len(payload)} 个相册")
+    print(f"列表模式完成：扫描 {scanned} 条，聚合 {len(payload)} 个条目（相册 {group_count} 张图 / 单图 {solo_count} 张）")
 
 
 async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size, title_prefix, upload_api_key, server, args):

@@ -15,7 +15,7 @@ function taskToOut(t) {
     id: t.id, chat_id: t.chat_id, title: t.title, tags: t.tags, pool: t.pool, level: t.level,
     max_size: t.max_size, limit: t.limit, enabled: t.enabled, last_id: t.last_id,
     done: t.done, skipped: t.skipped, note: t.note,
-    mode: t.mode || 'normal', selected_msg_ids: t.selected_msg_ids || '', scan_limit: t.scan_limit || ALBUM_SCAN_LIMIT
+    mode: t.mode || 'normal', selected_msg_ids: t.selected_msg_ids || '', scan_limit: t.scan_limit || ALBUM_SCAN_LIMIT, album_cursor: Number(t.album_cursor) || 0
   };
 }
 
@@ -180,9 +180,16 @@ export async function handleAdminUbotAlbumListAction(request, env, id) {
     const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
     if (!t) return json({ ok: false, error: 'task not found' }, 404);
     const scan = b.scan_limit ? clampInt(b.scan_limit, 100, 100000) : (t.scan_limit || ALBUM_SCAN_LIMIT);
-    await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, updated_at=? WHERE id=?")
-      .bind(scan, new Date().toISOString(), id).run();
-    return json({ ok: true, data: { triggered: true, scan_limit: scan } });
+    // before_id = 翻页游标：从此 msg id 之前继续向更早枚举；缺省 0 = 从头扫描
+    const before_id = parseInt(b.before_id || '0', 10);
+    if (!isNaN(before_id) && before_id > 0) {
+      await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=?, updated_at=? WHERE id=?")
+        .bind(scan, before_id, new Date().toISOString(), id).run();
+    } else {
+      await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=0, updated_at=? WHERE id=?")
+        .bind(scan, new Date().toISOString(), id).run();
+    }
+    return json({ ok: true, data: { triggered: true, scan_limit: scan, before_id: before_id || 0 } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -243,22 +250,29 @@ export async function handleUbotAlbumsReport(request, env, id) {
     const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
     if (!t) return json({ ok: false, error: 'task not found' }, 404);
     const albums = Array.isArray(b.albums) ? b.albums : [];
-    // 先删旧缓存再插新结果（列表模式结果整体替换）
-    await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
+    const append = b.append === 1 || b.append === '1';
+    const cursor = parseInt(b.cursor || '0', 10);
+    // append=1：翻页合并（不清旧缓存，同 grouped_id 覆盖）；否则整体替换
+    if (!append) {
+      await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
+    }
     if (albums.length) {
       const now = new Date().toISOString();
-      const stmt = env.D1_DB.prepare('INSERT INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)');
       for (const a of albums) {
         const gid = String(a.grouped_id || '').slice(0, 64);
         if (!gid) continue;
         const msgIds = Array.isArray(a.msg_ids) ? a.msg_ids.filter(function(x) { return /^\d+$/.test(String(x)); }).slice(0, 500) : [];
         const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500) }; }).slice(0, 500) : [];
         if (!msgIds.length) continue;
+        const stmt = append
+          ? env.D1_DB.prepare('INSERT OR REPLACE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
+          : env.D1_DB.prepare('INSERT INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)');
         await stmt.bind(id, gid, msgIds.join(','), msgIds.length, JSON.stringify(sizes), String(a.cover_url || '').slice(0, 500), Number(a.first_ts) || 0, a.has_oversize ? 1 : 0, now).run();
       }
     }
-    await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='normal', updated_at=? WHERE id=? AND mode='list'")
-      .bind(new Date().toISOString(), id).run();
-    return json({ ok: true, data: { stored: albums.length, mode: 'normal' } });
+    // 回写翻页游标：本次已扫到的最早 msg id（供下次「加载更早」续扫）
+    await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='normal', album_cursor=?, updated_at=? WHERE id=? AND mode='list'")
+      .bind(cursor, new Date().toISOString(), id).run();
+    return json({ ok: true, data: { stored: albums.length, mode: 'normal', cursor: cursor } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
