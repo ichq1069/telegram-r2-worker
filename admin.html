@@ -3280,7 +3280,7 @@ function srvCopyDeploy(id) {
     if (r && r.ok) { var arr = r.data || []; for (var i = 0; i < arr.length; i++) if (arr[i].id === id) { s = arr[i]; break; } }
     if (!s || !s.token) { toast("找不到服务器或 token 缺失", 0); return; }
     if (!UBOT_TOKEN) { toast("请先生成脚本 token（全局配置）", 0); return; }
-    var deployUrl = location.origin + '/deploy/ubot.sh?server=' + encodeURIComponent(location.origin) + '&token=' + encodeURIComponent(UBOT_TOKEN) + '&srv=' + encodeURIComponent(s.token) + '&tasks=' + encodeURIComponent(s.task_ids || "");
+    var deployUrl = location.origin + '/deploy/ubot.sh?server=' + encodeURIComponent(location.origin) + '&token=' + encodeURIComponent(UBOT_TOKEN) + '&srv=' + encodeURIComponent(s.token) + '&tasks=' + encodeURIComponent(s.task_ids || "") + '&v=' + Date.now();
     var cmd = 'bash -c "$(curl -fsSL \'' + deployUrl + '\')"';
     if (navigator.clipboard) {
       navigator.clipboard.writeText(cmd).then(function() { toast("一键部署命令已复制，在 VPS 上粘贴回车即可", 1); });

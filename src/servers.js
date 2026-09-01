@@ -151,7 +151,7 @@ echo "[1/4] 安装依赖（python3 + pip + telethon + httpx）..."
 if ! command -v python3 >/dev/null 2>&1; then
   (apt-get update -y && apt-get install -y python3 python3-pip) || (yum install -y python3 python3-pip) || true
 fi
-python3 -m pip install --upgrade pip -q || true
+python3 -m pip install --break-system-packages --upgrade pip -q || true
 python3 -m pip install --break-system-packages -q telethon httpx || true
 
 echo "[2/4] 下载抓取脚本..."
