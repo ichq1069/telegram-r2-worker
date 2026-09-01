@@ -212,6 +212,25 @@ async def main():
                 await asyncio.sleep(HEARTBEAT_EVERY)
 
         asyncio.create_task(heartbeat_loop())
+        # 任务并发调度：每个任务独立 asyncio task，互不阻塞，长任务不再卡住其他任务
+        MAX_CONCURRENT = 3
+        sem = asyncio.Semaphore(MAX_CONCURRENT)
+        running = {}
+
+        async def run_one(tid):
+            async with sem:
+                try:
+                    await report_run(hc, server, args, tid, "running")
+                    await run_task_once(hc, args, tid)
+                    await report_run(hc, server, args, tid, "finished")
+                except Exception as e:
+                    print(f"任务 #{tid} 执行异常: {e}", file=sys.stderr)
+                    try:
+                        await report_run(hc, server, args, tid, "error", str(e))
+                    except Exception:
+                        pass
+            running.pop(tid, None)
+
         while True:
             # 长轮询拉取本服务器分配的任务（task_ids 空=全部 enabled，无任务时 hold 30秒等待）
             assigned = tasks
@@ -228,18 +247,18 @@ async def main():
                             print(f"[daemon] 无任务，等待下一轮...")
                 except Exception as e:
                     print(f"[daemon] 拉取任务异常: {e}", file=sys.stderr)
-            # 逐个执行（异常不中断循环）
+            # 启动未在运行的任务；取消已不在列表中的任务
+            active = set()
             for tid in assigned:
-                try:
-                    await report_run(hc, server, args, tid, "running")
-                    await run_task_once(hc, args, tid)
-                    await report_run(hc, server, args, tid, "finished")
-                except Exception as e:
-                    print(f"任务 #{tid} 执行异常: {e}", file=sys.stderr)
-                    try:
-                        await report_run(hc, server, args, tid, "error", str(e))
-                    except Exception:
-                        pass
+                active.add(tid)
+                if tid not in running:
+                    running[tid] = asyncio.create_task(run_one(tid))
+                    print(f"[daemon] 启动任务 #{tid}")
+            for tid in list(running.keys()):
+                if tid not in active and running[tid] and not running[tid].done():
+                    running[tid].cancel()
+                    print(f"[daemon] 停止任务 #{tid}（已不在分配列表）")
+                    running.pop(tid, None)
             await asyncio.sleep(DAEMON_LOOP_SLEEP)
         return
 
