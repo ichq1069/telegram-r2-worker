@@ -531,125 +531,127 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
     if cursor and cursor > 0:
         kw["offset_id"] = cursor
     it = client.iter_messages(chat, **kw)
-    while True:
-        try:
-            msg = await it.__anext__()
-        except StopAsyncIteration:
-            break
-        except Exception:
-            break
-        msg_count += 1
-        if scanned >= scan_limit:
-            break
-        if not msg.media:
-            continue
-        # 只统计图片和视频
-        is_photo = isinstance(msg.media, MessageMediaPhoto)
-        is_video = isinstance(msg.media, MessageMediaDocument) and any(
-            isinstance(a, DocumentAttributeVideo)
-            for a in (getattr(msg.media.document, "attributes", None) or [])
-        )
-        if not is_photo and not is_video:
-            continue
-        scanned += 1
-        if scanned % 100 == 0:
-            print(f"  [进度] 已扫描 {msg_count} 条消息 / 媒体 {scanned}/{scan_limit}，聚合 {len(albums)} 个条目（耗时 {int(time.time()-t0)}s）", file=sys.stderr, flush=True)
-            await report_scan_progress("scanning")
-        media_type = "video" if is_video else "photo"
-        if media_type == "video":
-            video_count += 1
-        # 聚合：有 grouped_id 归入相册，无则单媒体
-        if msg.grouped_id is None:
-            solo_count += 1
-            gid = f"solo_{msg.id}"
+    try:
+        while True:
+            try:
+                msg = await it.__anext__()
+            except StopAsyncIteration:
+                break
+            except Exception:
+                break
+            msg_count += 1
+            if scanned >= scan_limit:
+                break
+            if not msg.media:
+                continue
+            # 只统计图片和视频
+            is_photo = isinstance(msg.media, MessageMediaPhoto)
+            is_video = isinstance(msg.media, MessageMediaDocument) and any(
+                isinstance(a, DocumentAttributeVideo)
+                for a in (getattr(msg.media.document, "attributes", None) or [])
+            )
+            if not is_photo and not is_video:
+                continue
+            scanned += 1
+            if scanned % 100 == 0:
+                print(f"  [进度] 已扫描 {msg_count} 条消息 / 媒体 {scanned}/{scan_limit}，聚合 {len(albums)} 个条目（耗时 {int(time.time()-t0)}s）", file=sys.stderr, flush=True)
+                await report_scan_progress("scanning")
+            media_type = "video" if is_video else "photo"
+            if media_type == "video":
+                video_count += 1
+            # 聚合：有 grouped_id 归入相册，无则单媒体
+            if msg.grouped_id is None:
+                solo_count += 1
+                gid = f"solo_{msg.id}"
+            else:
+                group_count += 1
+                gid = str(msg.grouped_id)
+            a = albums.setdefault(gid, {"msg_ids": [], "sizes": [], "first_ts": 0})
+            a["msg_ids"].append(msg.id)
+            sz, w, h, dur = 0, 0, 0, 0
+            if is_photo:
+                photo = getattr(msg.media, "photo", None)
+                if photo and getattr(photo, "sizes", None):
+                    for s in photo.sizes:
+                        ss = getattr(s, "size", 0) or 0
+                        if ss and ss > sz:
+                            sz = ss
+                            w = getattr(s, "w", 0) or 0
+                            h = getattr(s, "h", 0) or 0
+            elif is_video:
+                doc = getattr(msg.media, "document", None)
+                if doc:
+                    sz = getattr(doc, "size", 0) or 0
+                    for attr in (getattr(doc, "attributes", None) or []):
+                        if isinstance(attr, DocumentAttributeVideo):
+                            w = getattr(attr, "w", 0) or 0
+                            h = getattr(attr, "h", 0) or 0
+                            dur = getattr(attr, "duration", 0) or 0
+            a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h, "type": media_type, "duration": dur})
+            if msg.date:
+                ts0 = int(msg.date.timestamp())
+                if not a["first_ts"] or ts0 < a["first_ts"]:
+                    a["first_ts"] = ts0
+    finally:
+        # 每相册上传封面 + 每张图/视频缩略图（thumb_url 供后台逐张预览/勾选）
+        # 即使扫描因异常中断，只要聚合了条目就继续上传缩略图并上报
+        await report_scan_progress("thumbnails")
+        for gid, a in albums.items():
+            a["msg_ids"].sort()
+            a["sizes"].sort(key=lambda s: s["id"])
+            thumbs = {}
+            cover_url = ""
+            try:
+                for idx, mid in enumerate(a["msg_ids"]):
+                    m = await client.get_messages(chat, ids=mid)
+                    if not m or not m.media:
+                        continue
+                    data = await m.download_media(file=bytes, thumb=1)
+                    if data:
+                        tu = await upload_cover(hc, server, upload_api_key, task_id, f"{gid}_{mid}", data)
+                        if tu:
+                            thumbs[str(mid)] = tu
+                    if idx == 0 and thumbs.get(str(mid)):
+                        cover_url = thumbs[str(mid)]
+                    await asyncio.sleep(WORK_DELAY)
+            except Exception as e:
+                print(f"  相册缩略图失败 {gid}: {e}", file=sys.stderr)
+            for s in a["sizes"]:
+                s["thumb_url"] = thumbs.get(str(s["id"]), "")
+            a["cover_url"] = cover_url
+            await asyncio.sleep(WORK_DELAY)
+
+        payload = []
+        min_msg_id = 0
+        for gid, a in albums.items():
+            mids = a["msg_ids"]
+            if mids and (min_msg_id == 0 or min(mids) < min_msg_id):
+                min_msg_id = min(mids)
+            payload.append({
+                "grouped_id": gid,
+                "msg_ids": mids,
+                "count": len(mids),
+                "sizes": a["sizes"],
+                "cover_url": a["cover_url"],
+                "first_ts": a["first_ts"],
+                "has_oversize": 1 if any(s["size"] > max_size for s in a["sizes"]) else 0,
+            })
+        if cursor and cursor > 0:
+            print(f"  翻页统计：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），新增条目 {len(payload)} 个，游标推进到 msg {min_msg_id}", file=sys.stderr, flush=True)
         else:
-            group_count += 1
-            gid = str(msg.grouped_id)
-        a = albums.setdefault(gid, {"msg_ids": [], "sizes": [], "first_ts": 0})
-        a["msg_ids"].append(msg.id)
-        sz, w, h, dur = 0, 0, 0, 0
-        if is_photo:
-            photo = getattr(msg.media, "photo", None)
-            if photo and getattr(photo, "sizes", None):
-                for s in photo.sizes:
-                    ss = getattr(s, "size", 0) or 0
-                    if ss and ss > sz:
-                        sz = ss
-                        w = getattr(s, "w", 0) or 0
-                        h = getattr(s, "h", 0) or 0
-        elif is_video:
-            doc = getattr(msg.media, "document", None)
-            if doc:
-                sz = getattr(doc, "size", 0) or 0
-                for attr in (getattr(doc, "attributes", None) or []):
-                    if isinstance(attr, DocumentAttributeVideo):
-                        w = getattr(attr, "w", 0) or 0
-                        h = getattr(attr, "h", 0) or 0
-                        dur = getattr(attr, "duration", 0) or 0
-        a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h, "type": media_type, "duration": dur})
-        if msg.date:
-            ts0 = int(msg.date.timestamp())
-            if not a["first_ts"] or ts0 < a["first_ts"]:
-                a["first_ts"] = ts0
-
-    # 每相册上传封面 + 每张图/视频缩略图（thumb_url 供后台逐张预览/勾选）
-    await report_scan_progress("thumbnails")
-    for gid, a in albums.items():
-        a["msg_ids"].sort()
-        a["sizes"].sort(key=lambda s: s["id"])
-        thumbs = {}
-        cover_url = ""
-        try:
-            for idx, mid in enumerate(a["msg_ids"]):
-                m = await client.get_messages(chat, ids=mid)
-                if not m or not m.media:
-                    continue
-                data = await m.download_media(file=bytes, thumb=1)
-                if data:
-                    tu = await upload_cover(hc, server, upload_api_key, task_id, f"{gid}_{mid}", data)
-                    if tu:
-                        thumbs[str(mid)] = tu
-                if idx == 0 and thumbs.get(str(mid)):
-                    cover_url = thumbs[str(mid)]
-                await asyncio.sleep(WORK_DELAY)
-        except Exception as e:
-            print(f"  相册缩略图失败 {gid}: {e}", file=sys.stderr)
-        for s in a["sizes"]:
-            s["thumb_url"] = thumbs.get(str(s["id"]), "")
-        a["cover_url"] = cover_url
-        await asyncio.sleep(WORK_DELAY)
-
-    payload = []
-    min_msg_id = 0
-    for gid, a in albums.items():
-        mids = a["msg_ids"]
-        if mids and (min_msg_id == 0 or min(mids) < min_msg_id):
-            min_msg_id = min(mids)
-        payload.append({
-            "grouped_id": gid,
-            "msg_ids": mids,
-            "count": len(mids),
-            "sizes": a["sizes"],
-            "cover_url": a["cover_url"],
-            "first_ts": a["first_ts"],
-            "has_oversize": 1 if any(s["size"] > max_size for s in a["sizes"]) else 0,
-        })
-    if cursor and cursor > 0:
-        print(f"  翻页统计：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），新增条目 {len(payload)} 个，游标推进到 msg {min_msg_id}", file=sys.stderr, flush=True)
-    else:
-        print(f"  浏览统计：遍历 {msg_count} 条消息，共 {scanned} 张媒体（图片 {scanned - video_count} + 视频 {video_count}），聚合条目 {len(payload)} 个（相册 {group_count} 个 / 单媒体 {solo_count} 个）", file=sys.stderr, flush=True)
-    # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；append=1 追加合并（翻页），否则整体替换；cursor 回传供下次续扫
-    for i in range(0, len(payload), ALBUM_MAX_PER_POST):
-        chunk = payload[i:i + ALBUM_MAX_PER_POST]
-        try:
-            r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
-                              json={"albums": chunk, "append": 1 if (cursor and cursor > 0) else 0, "cursor": min_msg_id}, timeout=60)
-            if r.status_code != 200:
-                print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
-        except Exception as e:
-            print(f"  相册上报异常: {e}", file=sys.stderr)
-    print(f"列表模式完成：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），聚合 {len(payload)} 个条目")
-    await report_scan_progress("done")
+            print(f"  浏览统计：遍历 {msg_count} 条消息，共 {scanned} 张媒体（图片 {scanned - video_count} + 视频 {video_count}），聚合条目 {len(payload)} 个（相册 {group_count} 个 / 单媒体 {solo_count} 个）", file=sys.stderr, flush=True)
+        # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；append=1 追加合并（翻页），否则整体替换；cursor 回传供下次续扫
+        for i in range(0, len(payload), ALBUM_MAX_PER_POST):
+            chunk = payload[i:i + ALBUM_MAX_PER_POST]
+            try:
+                r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
+                                  json={"albums": chunk, "append": 1 if (cursor and cursor > 0) else 0, "cursor": min_msg_id}, timeout=60)
+                if r.status_code != 200:
+                    print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+            except Exception as e:
+                print(f"  相册上报异常: {e}", file=sys.stderr)
+        print(f"列表模式完成：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），聚合 {len(payload)} 个条目")
+        await report_scan_progress("done")
 
 
 async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size, title_prefix, upload_api_key, server, args):
