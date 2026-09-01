@@ -1033,6 +1033,114 @@ export async function handleAdminTags(env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ==================== 标签 CRUD ====================
+export async function handleAdminTagList(env) {
+  try {
+    const d = await env.D1_DB.prepare("SELECT * FROM tags ORDER BY sort_order ASC, name ASC").all();
+    const tags = d.results || [];
+    // 统计每个标签的使用次数（从 files 和 random_pool）
+    const d1 = await env.D1_DB.prepare("SELECT tags FROM files WHERE processing_state='completed' AND deleted_at IS NULL AND tags IS NOT NULL AND tags != ''").all();
+    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND source != 'tg' AND tags IS NOT NULL AND tags != ''").all();
+    const d3 = await env.D1_DB.prepare("SELECT tags FROM userbot_tasks WHERE tags IS NOT NULL AND tags != ''").all();
+    const cnt = {};
+    [d1, d2, d3].forEach(function(res) {
+      (res.results || []).forEach(function(r) {
+        const seen = {};
+        splitTags(r.tags).forEach(function(t) {
+          t = t.trim();
+          if (t && !seen[t]) { seen[t] = 1; cnt[t] = (cnt[t] || 0) + 1; }
+        });
+      });
+    });
+    const result = tags.map(function(t) { return { id: t.id, name: t.name, color: t.color || '', category: t.category || '', sort_order: t.sort_order || 0, created_at: t.created_at || '', count: cnt[t.name] || 0 }; });
+    return json({ ok: true, data: result });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminTagCreate(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const name = String(b.name || '').trim();
+    if (!name) return json({ ok: false, error: '标签名不能为空' });
+    const color = String(b.color || '').trim();
+    const category = String(b.category || '').trim();
+    const sort_order = parseInt(b.sort_order) || 0;
+    const now = new Date().toISOString();
+    // 支持批量创建（逗号分隔）
+    const names = name.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    const created = [];
+    for (const n of names) {
+      try {
+        await env.D1_DB.prepare("INSERT INTO tags (name, color, category, sort_order, created_at) VALUES (?, ?, ?, ?, ?)").bind(n, color, category, sort_order, now).run();
+        created.push(n);
+      } catch (e) {
+        // UNIQUE 冲突跳过
+        if (e.message && e.message.indexOf('UNIQUE') !== -1) continue;
+        throw e;
+      }
+    }
+    return json({ ok: true, data: { created: created } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminTagUpdate(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const id = parseInt(b.id);
+    if (!id) return json({ ok: false, error: 'id required' });
+    const set = [];
+    const vals = [];
+    if (b.name !== undefined) { const n = String(b.name).trim(); if (!n) return json({ ok: false, error: '标签名不能为空' }); set.push('name=?'); vals.push(n); }
+    if (b.color !== undefined) { set.push('color=?'); vals.push(String(b.color).trim()); }
+    if (b.category !== undefined) { set.push('category=?'); vals.push(String(b.category).trim()); }
+    if (b.sort_order !== undefined) { set.push('sort_order=?'); vals.push(parseInt(b.sort_order) || 0); }
+    if (!set.length) return json({ ok: true, data: { updated: false } });
+    vals.push(id);
+    await env.D1_DB.prepare('UPDATE tags SET ' + set.join(',') + ' WHERE id=?').bind(...vals).run();
+    // 如果改了 name，同步更新 files/random_pool/userbot_tasks 里的旧标签名
+    if (b.name !== undefined && b.old_name) {
+      const oldName = String(b.old_name).trim();
+      const newName = String(b.name).trim();
+      if (oldName && newName && oldName !== newName) {
+        const tables = ['files', 'random_pool', 'userbot_tasks'];
+        for (const tbl of tables) {
+          const col = tbl === 'userbot_tasks' ? 'tags' : 'tags';
+          const rows = await env.D1_DB.prepare("SELECT id," + col + " FROM " + tbl + " WHERE " + col + " LIKE ? OR " + col + " LIKE ? OR " + col + " = ?").bind('%' + oldName + '%', '%' + oldName + '%', oldName).all();
+          for (const r of (rows.results || [])) {
+            const tags = splitTags(r[col]).map(function(t) { return t.trim() === oldName ? newName : t; });
+            await env.D1_DB.prepare("UPDATE " + tbl + " SET " + col + "=? WHERE id=?").bind(tags.join(','), r.id).run();
+          }
+        }
+      }
+    }
+    return json({ ok: true, data: { updated: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminTagDelete(request, env) {
+  try {
+    const b = await request.json().catch(function() { return {}; });
+    const id = parseInt(b.id);
+    if (!id) return json({ ok: false, error: 'id required' });
+    // 先获取标签名，用于可选的级联清理
+    const tag = await env.D1_DB.prepare("SELECT name FROM tags WHERE id=?").bind(id).first();
+    await env.D1_DB.prepare("DELETE FROM tags WHERE id=?").bind(id).run();
+    // 如果 b.cleanup=true，同时从 files/random_pool/userbot_tasks 中移除该标签
+    if (b.cleanup && tag && tag.name) {
+      const name = tag.name;
+      const tables = ['files', 'random_pool', 'userbot_tasks'];
+      for (const tbl of tables) {
+        const rows = await env.D1_DB.prepare("SELECT id," + tbl + ".tags FROM " + tbl + " WHERE " + tbl + ".tags LIKE ? OR " + tbl + ".tags = ?").bind('%' + name + '%', name).all();
+        for (const r of (rows.results || [])) {
+          const tags = splitTags(r.tags).filter(function(t) { return t.trim() !== name; });
+          await env.D1_DB.prepare("UPDATE " + tbl + " SET tags=? WHERE id=?").bind(tags.join(','), r.id).run();
+        }
+      }
+    }
+    return json({ ok: true, data: { deleted: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 export async function handleSetFileTags(request, env) {
   try {
     const b = await request.json().catch(function() { return {}; });

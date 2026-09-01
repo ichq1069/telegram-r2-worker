@@ -726,15 +726,30 @@ https://example.com/b.jpg"></textarea></div>
     <div class="panel" id="panel-tags">
       <div class="card">
         <div class="fbs">
-          <div class="card-title"><span class="dot"></span>标签库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">预设标签用于上传时一键点选；可把常用标签加入预设，保证命名统一</span></div>
-          <div style="display:flex;gap:8px">
-            <input class="inp" style="width:220px" id="tagsNew" placeholder="新标签名（可逗号分隔多个）">
-            <button class="btn btn-primary" id="tagsAddBtn">添加预设</button>
+          <div class="card-title"><span class="dot"></span>标签库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">管理所有标签，支持增删改查；标签用于文件分类和筛选</span></div>
+        </div>
+        <!-- 新建标签表单 -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:12px">
+          <div class="fr" style="margin:0"><label>标签名</label><input class="inp" style="width:160px" id="tagCrudName" placeholder="新标签名（逗号分隔多个）"></div>
+          <div class="fr" style="margin:0"><label>颜色</label><input class="inp" type="color" id="tagCrudColor" value="#3b82f6" style="width:60px;padding:2px;height:32px"></div>
+          <div class="fr" style="margin:0"><label>分类</label><input class="inp" style="width:120px" id="tagCrudCategory" placeholder="可选分类"></div>
+          <div class="fr" style="margin:0"><label>排序</label><input class="inp" type="number" id="tagCrudSort" value="0" style="width:70px" min="0"></div>
+          <button class="btn btn-primary" id="tagCrudAddBtn">添加标签</button>
+        </div>
+        <!-- 标签列表 -->
+        <div style="margin-top:16px">
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">所有标签（点击编辑/删除；数字为关联文件数）</div>
+          <div id="tagCrudList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+        </div>
+        <!-- 预设标签（旧系统兼容） -->
+        <div style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
+          <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">预设标签（上传时点选；点 ✕ 移除预设）</div>
+          <div id="tagsPresetList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <input class="inp" style="width:220px" id="tagsNew" placeholder="新预设标签名（可逗号分隔多个）">
+            <button class="btn btn-sm" id="tagsAddBtn">添加预设</button>
           </div>
         </div>
-        <div class="fr" style="margin-top:12px"><label>当前预设标签（点 ✕ 移除）</label><div id="tagsPresetList" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div></div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-top:16px">全部已用标签（点「+」加入预设；点「⚡自动入共享库」开启后，文件被打上该标签即自动进入共享库；数字为该标签关联的图片数）</div>
-        <div id="tagsAllList" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
       </div>
     </div>
 
@@ -3039,52 +3054,82 @@ async function loadTagsPage() {
     if (s && s.ok && s.data) autoPoolTags = s.data.tags || [];
   } catch (e) {}
   try {
-    const r = await api("GET", "/admin/api/tags");
-    const el = document.getElementById("tagsAllList");
+    const r = await api("GET", "/admin/api/tags/list");
+    const el = document.getElementById("tagCrudList");
     if (!el) return;
-    if (!r.ok || !r.data || !r.data.length) { el.innerHTML = '<span style="color:var(--text-secondary)">暂无标签，先给图片打标签</span>'; return; }
+    if (!r.ok || !r.data || !r.data.length) { el.innerHTML = '<span style="color:var(--text-secondary)">暂无标签，使用上方表单添加</span>'; return; }
     var h = "";
     for (var i = 0; i < r.data.length; i++) {
       var t = r.data[i];
-      var isPre = presetTags.indexOf(t.tag) !== -1;
-      var auto = autoPoolTags.indexOf(t.tag) !== -1;
-      h += '<span style="padding:3px 10px;border:1px solid ' + (isPre ? 'var(--primary)' : 'var(--border)') + ';border-radius:20px;font-size:12px;background:' + (isPre ? 'rgba(37,99,235,.08)' : 'var(--card)') + ';color:var(--text-secondary)">#' + escStr(t.tag) + ' (' + t.count + ')';
-      h += ' <a href="javascript:void(0)" class="tags-auto" data-tag="' + escStr(t.tag) + '" data-on="' + (auto ? 1 : 0) + '" title="开启后，打上该标签的文件自动进入共享库" style="font-weight:700;margin-left:2px;cursor:pointer;color:' + (auto ? 'var(--primary)' : 'var(--text-secondary)') + '">' + (auto ? '⚡自动入共享库(开)' : '⚡自动入共享库') + '</a>';
-      if (!isPre) h += ' <a href="javascript:void(0)" class="tags-add" data-tag="' + escStr(t.tag) + '" style="color:var(--primary);font-weight:700;margin-left:2px">＋</a>';
+      var clr = t.color || '#3b82f6';
+      var cat = t.category ? ' <span style="font-size:10px;opacity:.6">' + escStr(t.category) + '</span>' : '';
+      h += '<span class="tag-crud-item" data-id="' + t.id + '" data-name="' + escStr(t.name) + '" data-color="' + escStr(t.color) + '" data-category="' + escStr(t.category) + '" data-sort="' + t.sort_order + '" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid ' + clr + '44;border-radius:20px;font-size:12px;background:' + clr + '1a;color:' + clr + ';cursor:default">';
+      h += '<span style="width:8px;height:8px;border-radius:50%;background:' + clr + ';display:inline-block"></span>';
+      h += '#' + escStr(t.name) + ' (' + t.count + ')' + cat;
+      h += ' <a href="javascript:void(0)" class="tag-crud-edit" data-idx="' + i + '" title="编辑" style="margin-left:2px;cursor:pointer;color:' + clr + ';font-weight:700">✎</a>';
+      h += ' <a href="javascript:void(0)" class="tag-crud-del" data-id="' + t.id + '" data-name="' + escStr(t.name) + '" title="删除" style="cursor:pointer;color:#e5484d;font-weight:700">✕</a>';
       h += '</span>';
     }
     el.innerHTML = h;
-    var adds = el.querySelectorAll(".tags-add");
-    for (var j = 0; j < adds.length; j++) {
-      adds[j].onclick = (function(a) {
+    // 绑定编辑事件
+    var edits = el.querySelectorAll(".tag-crud-edit");
+    for (var j = 0; j < edits.length; j++) {
+      edits[j].onclick = (function(idx) {
         return function(ev) {
           ev.preventDefault();
-          var t = a.getAttribute("data-tag");
-          if (presetTags.indexOf(t) === -1) presetTags.push(t);
-          savePresetTagsFromPage();
-          renderTagsPreset();
-          loadTagsPage();
+          var item = r.data[idx];
+          showTagEditModal(item);
         };
-      })(adds[j]);
+      })(j);
     }
-    var autos = el.querySelectorAll(".tags-auto");
-    for (var k = 0; k < autos.length; k++) {
-      autos[k].onclick = (function(a) {
+    // 绑定删除事件
+    var dels = el.querySelectorAll(".tag-crud-del");
+    for (var k = 0; k < dels.length; k++) {
+      dels[k].onclick = (function(el) {
         return function(ev) {
           ev.preventDefault();
-          var t = a.getAttribute("data-tag");
-          var on = a.getAttribute("data-on") === "1";
-          var idx = autoPoolTags.indexOf(t);
-          if (on) { if (idx !== -1) autoPoolTags.splice(idx, 1); }
-          else if (idx === -1) autoPoolTags.push(t);
-          api("POST", "/admin/api/settings/auto-pool-tags", { tags: autoPoolTags }).then(function(r) {
-            if (r && r.ok) { autoPoolTags = (r.data && r.data.tags) || []; toast("自动入共享库标签已更新", 1); loadTagsPage(); }
-            else toast((r && r.error) || "保存失败", 0);
+          var id = el.getAttribute("data-id");
+          var name = el.getAttribute("data-name");
+          if (!confirm('确定删除标签 #' + name + '？\n\n点击「确定」仅删除标签定义\n点击「取消」放弃')) return;
+          api("DELETE", "/admin/api/tags", { id: parseInt(id) }).then(function(r) {
+            if (r && r.ok) { toast("标签已删除", 1); loadTagsPage(); }
+            else toast((r && r.error) || "删除失败", 0);
           });
         };
-      })(autos[k]);
+      })(dels[k]);
     }
   } catch (e) {}
+}
+
+function showTagEditModal(tag) {
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:420px">' +
+    '<h3>编辑标签 #' + escStr(tag.name) + '</h3>' +
+    '<div class="fr"><label>标签名</label><input class="inp" id="tagEditName" value="' + escStr(tag.name) + '"></div>' +
+    '<div class="fr"><label>颜色</label><input class="inp" type="color" id="tagEditColor" value="' + escStr(tag.color || '#3b82f6') + '" style="width:80px;padding:2px;height:32px"></div>' +
+    '<div class="fr"><label>分类</label><input class="inp" id="tagEditCategory" value="' + escStr(tag.category || '') + '" placeholder="可选分类"></div>' +
+    '<div class="fr"><label>排序（数字越小越靠前）</label><input class="inp" type="number" id="tagEditSort" value="' + (tag.sort_order || 0) + '" min="0"></div>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin-top:8px">修改标签名会同步更新所有关联文件的标签</div>' +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-ghost" id="tagEditCancel">取消</button>' +
+    '<button class="btn btn-primary" id="tagEditSave">保存</button>' +
+    '</div></div></div>';
+  document.getElementById("tagEditCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("tagEditSave").onclick = function() {
+    var newName = document.getElementById("tagEditName").value.trim();
+    if (!newName) { toast("标签名不能为空", 0); return; }
+    api("PATCH", "/admin/api/tags", {
+      id: tag.id,
+      old_name: tag.name,
+      name: newName,
+      color: document.getElementById("tagEditColor").value,
+      category: document.getElementById("tagEditCategory").value.trim(),
+      sort_order: parseInt(document.getElementById("tagEditSort").value) || 0
+    }).then(function(r) {
+      if (r && r.ok) { toast("标签已更新", 1); document.getElementById("modalArea").innerHTML = ""; loadTagsPage(); }
+      else toast((r && r.error) || "更新失败", 0);
+    });
+  };
 }
 
 function renderTagsPreset() {
@@ -3127,6 +3172,24 @@ document.getElementById("tagsAddBtn").addEventListener("click", function() {
   renderTagsPreset();
   savePresetTagsFromPage();
   loadTagsPage();
+});
+
+// 标签 CRUD：添加新标签
+document.getElementById("tagCrudAddBtn").addEventListener("click", function() {
+  var v = document.getElementById("tagCrudName").value.trim();
+  if (!v) { toast("请输入标签名", 0); return; }
+  api("POST", "/admin/api/tags", {
+    name: v,
+    color: document.getElementById("tagCrudColor").value,
+    category: document.getElementById("tagCrudCategory").value.trim(),
+    sort_order: parseInt(document.getElementById("tagCrudSort").value) || 0
+  }).then(function(r) {
+    if (r && r.ok) {
+      toast("标签已添加", 1);
+      document.getElementById("tagCrudName").value = "";
+      loadTagsPage();
+    } else toast((r && r.error) || "添加失败", 0);
+  });
 });
 
 // ==================== 运维页面（备份 + 告警） ====================

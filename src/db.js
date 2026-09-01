@@ -64,7 +64,9 @@ export async function ensureTables(db) {
     "CREATE INDEX IF NOT EXISTS idx_ubot_albums_task ON ubot_albums(task_id);" +
     "CREATE TABLE IF NOT EXISTS ub_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT '', token TEXT DEFAULT '', note TEXT DEFAULT '', status TEXT DEFAULT 'offline', last_seen_at TEXT, last_ip TEXT, last_info TEXT DEFAULT '', task_ids TEXT DEFAULT '', created_at TEXT, updated_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS ub_task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, server_id INTEGER DEFAULT 0, server_name TEXT DEFAULT '', status TEXT DEFAULT 'running', done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, error TEXT DEFAULT '', started_at TEXT, finished_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS ubot_chats (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL UNIQUE, title TEXT DEFAULT '', chat_type TEXT DEFAULT 'group', username TEXT DEFAULT '', participants INTEGER DEFAULT 0, updated_at TEXT);"
+    "CREATE TABLE IF NOT EXISTS ubot_chats (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL UNIQUE, title TEXT DEFAULT '', chat_type TEXT DEFAULT 'group', username TEXT DEFAULT '', participants INTEGER DEFAULT 0, updated_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, color TEXT DEFAULT '', category TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at TEXT);" +
+    "CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
