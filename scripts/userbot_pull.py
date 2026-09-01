@@ -128,17 +128,24 @@ async def refresh_dialogs(hc, server, ub_token):
         dialogs = []
         async for d in client.iter_dialogs(limit=200):
             if d.is_group or d.is_channel:
-                chat_type = "channel" if d.is_channel and not d.is_group else ("supergroup" if d.is_supergroup else "group")
+                ent = d.entity
+                from telethon.tl.types import Channel, Chat
+                if isinstance(ent, Chat):
+                    chat_type = "group"
+                elif isinstance(ent, Channel):
+                    chat_type = "channel" if not getattr(ent, "megagroup", False) else "supergroup"
+                else:
+                    chat_type = "group"
                 participants = 0
                 try:
-                    participants = int(d.entity.participants_count or 0)
+                    participants = int(getattr(ent, "participants_count", 0) or 0)
                 except Exception:
                     participants = 0
                 dialogs.append({
                     "chat_id": str(d.id),
                     "title": (d.title or "")[:200],
                     "chat_type": chat_type,
-                    "username": getattr(d.entity, "username", None) or "",
+                    "username": getattr(ent, "username", None) or "",
                     "participants": participants,
                 })
         await client.disconnect()
@@ -325,10 +332,10 @@ async def run_task_once(hc, args, task_id):
 
     # 打开会话一次，按 mode 分发到对应流程
     async with TelegramClient(StringSession(session_str), api_id, api_hash) as client:
-        await client.start()
+        await client.connect()
         if not await client.is_user_authorized():
-            print("会话未授权（StringSession 失效），请在本地重新登录并更新后台配置", file=sys.stderr)
-            sys.exit(1)
+            print("会话未授权（StringSession 无效或已失效），请重新生成并更新后台「群抓取 → 全局配置 → StringSession」", file=sys.stderr)
+            return
         chat = await resolve_peer(client, chat_id)
         print(f"群: {getattr(chat, 'title', chat_id)}")
 
