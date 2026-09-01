@@ -5,7 +5,7 @@ let _tablesEnsured = false;
 // 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
 // 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
 // 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
-const SCHEMA_VERSION = '6';
+const SCHEMA_VERSION = '7';
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
@@ -63,7 +63,8 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS ubot_albums (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, grouped_id TEXT NOT NULL, msg_ids TEXT NOT NULL, count INTEGER DEFAULT 0, sizes TEXT DEFAULT '[]', cover_url TEXT DEFAULT '', first_ts INTEGER DEFAULT 0, has_oversize INTEGER DEFAULT 0, created_at TEXT, UNIQUE(task_id, grouped_id));" +
     "CREATE INDEX IF NOT EXISTS idx_ubot_albums_task ON ubot_albums(task_id);" +
     "CREATE TABLE IF NOT EXISTS ub_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT '', token TEXT DEFAULT '', note TEXT DEFAULT '', status TEXT DEFAULT 'offline', last_seen_at TEXT, last_ip TEXT, last_info TEXT DEFAULT '', task_ids TEXT DEFAULT '', created_at TEXT, updated_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS ub_task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, server_id INTEGER DEFAULT 0, server_name TEXT DEFAULT '', status TEXT DEFAULT 'running', done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, error TEXT DEFAULT '', started_at TEXT, finished_at TEXT);"
+    "CREATE TABLE IF NOT EXISTS ub_task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, server_id INTEGER DEFAULT 0, server_name TEXT DEFAULT '', status TEXT DEFAULT 'running', done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, error TEXT DEFAULT '', started_at TEXT, finished_at TEXT);" +
+    "CREATE TABLE IF NOT EXISTS ubot_chats (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL UNIQUE, title TEXT DEFAULT '', chat_type TEXT DEFAULT 'group', username TEXT DEFAULT '', participants INTEGER DEFAULT 0, updated_at TEXT);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -230,6 +231,10 @@ export async function ensureTables(db) {
       await db.exec("CREATE TABLE IF NOT EXISTS ubot_albums (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, grouped_id TEXT NOT NULL, msg_ids TEXT NOT NULL, count INTEGER DEFAULT 0, sizes TEXT DEFAULT '[]', cover_url TEXT DEFAULT '', first_ts INTEGER DEFAULT 0, has_oversize INTEGER DEFAULT 0, created_at TEXT, UNIQUE(task_id, grouped_id))");
       await db.exec("CREATE INDEX IF NOT EXISTS idx_ubot_albums_task ON ubot_albums(task_id)");
     } catch (e12c) { console.error('ubot_albums table:', e12c.message); }
+    // ubot_chats：userbot 账号所在群/频道列表（get_dialogs 结果，供后台选群建任务）
+    try {
+      await db.exec("CREATE TABLE IF NOT EXISTS ubot_chats (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL UNIQUE, title TEXT DEFAULT '', chat_type TEXT DEFAULT 'group', username TEXT DEFAULT '', participants INTEGER DEFAULT 0, updated_at TEXT)");
+    } catch (e12d) { console.error('ubot_chats table:', e12d.message); }
     // api_keys 表索引：加速 key/username 查询
     try {
       await db.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)");

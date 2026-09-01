@@ -63,9 +63,9 @@ DAEMON_LOOP_SLEEP = 120
 
 
 async def send_heartbeat(hc, server, srv_token, tasks):
-    """向 worker 上报本节点在线状态（server_token 鉴权），失败静默。"""
+    """向 worker 上报本节点在线状态（server_token 鉴权），失败静默。返回 dialogs_pending 标记。"""
     if not srv_token:
-        return
+        return False
     try:
         ip = ""
         try:
@@ -83,10 +83,61 @@ async def send_heartbeat(hc, server, srv_token, tasks):
             "uptime": int(time.time()),
         }
         r = await hc.post(f"{server}/api/ubot/heartbeat?token={srv_token}", json={"info": info}, timeout=15)
-        if r.status_code != 200:
+        if r.status_code == 200:
+            try:
+                return bool((r.json().get("data") or {}).get("dialogs_pending"))
+            except Exception:
+                pass
+        else:
             print(f"心跳失败: HTTP {r.status_code}", file=sys.stderr)
     except Exception as e:
         print(f"心跳异常: {e}", file=sys.stderr)
+    return False
+
+
+async def refresh_dialogs(hc, server, ub_token):
+    """拉取账号所在群/频道并上报（供后台选群建任务）；session 无效时静默失败。"""
+    if not ub_token:
+        return
+    try:
+        r = await hc.get(f"{server}/api/ubot/global?token={ub_token}", timeout=30)
+        if r.status_code != 200:
+            print(f"[dialogs] 拉取配置失败 HTTP {r.status_code}", file=sys.stderr)
+            return
+        g = (r.json().get("data") or {}).get("global") or {}
+        api_id, api_hash, session = g.get("api_id"), g.get("api_hash"), g.get("session")
+        if not api_id or not api_hash or not session:
+            print("[dialogs] 后台未配置 api_id/api_hash/session", file=sys.stderr)
+            return
+        from telethon import TelegramClient
+        from telethon.sessions import StringSession
+        client = TelegramClient(StringSession(session), int(api_id), api_hash, connection_retries=2)
+        await client.connect()
+        if not await client.is_user_authorized():
+            print("[dialogs] StringSession 未授权，无法获取群列表", file=sys.stderr)
+            await client.disconnect()
+            return
+        dialogs = []
+        async for d in client.iter_dialogs(limit=200):
+            if d.is_group or d.is_channel:
+                chat_type = "channel" if d.is_channel and not d.is_group else ("supergroup" if d.is_supergroup else "group")
+                participants = 0
+                try:
+                    participants = int(d.entity.participants_count or 0)
+                except Exception:
+                    participants = 0
+                dialogs.append({
+                    "chat_id": str(d.id),
+                    "title": (d.title or "")[:200],
+                    "chat_type": chat_type,
+                    "username": getattr(d.entity, "username", None) or "",
+                    "participants": participants,
+                })
+        await client.disconnect()
+        r2 = await hc.post(f"{server}/api/ubot/dialogs?token={ub_token}", json={"dialogs": dialogs}, timeout=30)
+        print(f"[dialogs] 上报 {len(dialogs)} 个群/频道, HTTP {r2.status_code}", file=sys.stderr)
+    except Exception as e:
+        print(f"[dialogs] 异常: {e}", file=sys.stderr)
 
 
 async def report_run(hc, server, args, task_id, status, error=""):
@@ -128,7 +179,12 @@ async def main():
         print(f"[daemon] server={server} 心跳间隔 {HEARTBEAT_EVERY}s，任务列表={tasks or '全部分配'}，循环间隔 {DAEMON_LOOP_SLEEP}s")
         while True:
             async with httpx.AsyncClient(timeout=args.timeout) as hc:
-                await send_heartbeat(hc, server, args.srv_token, [str(t) for t in tasks])
+                need_dialogs = await send_heartbeat(hc, server, args.srv_token, [str(t) for t in tasks])
+                if need_dialogs:
+                    try:
+                        await refresh_dialogs(hc, server, args.token)
+                    except Exception as e:
+                        print(f"[daemon] 刷新群列表异常: {e}", file=sys.stderr)
                 # 长轮询拉取本服务器分配的任务（task_ids 空=全部 enabled，无任务时 hold 30秒等待）
                 assigned = tasks
                 if not assigned:

@@ -1109,7 +1109,10 @@ https://example.com/b.jpg"></textarea></div>
       <div class="card">
         <div class="fbs">
           <div class="card-title"><span class="dot"></span>抓取任务 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">每群一个任务，独立断点 last_id；在任意机器运行 <code>python3 scripts/userbot_pull.py --server &lt;worker地址&gt; --token &lt;ub_token&gt; --task &lt;任务ID&gt;</code> 即开始抓取</span></div>
-          <button class="btn btn-primary" id="ubAddBtn">+ 添加任务</button>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn btn-ghost" id="ubChatsBtn">已有群</button>
+            <button class="btn btn-primary" id="ubAddBtn">+ 添加任务</button>
+          </div>
         </div>
         <div id="ubTaskList" style="margin-top:12px"></div>
       </div>
@@ -3566,7 +3569,8 @@ function ubotDel(id) {
   });
 }
 
-function ubotEdit(id) {
+function ubotEdit(id, prefill) {
+  prefill = prefill || {};
   api("GET", "/admin/api/userbot-tasks").then(function(r) {
     var t = null;
     if (r && r.ok) { var arr = r.data || []; for (var i = 0; i < arr.length; i++) if (arr[i].id === id) { t = arr[i]; break; } }
@@ -3575,8 +3579,8 @@ function ubotEdit(id) {
     document.getElementById("modalArea").innerHTML =
       '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:560px">' +
       '<h3>' + title + '</h3>' +
-      '<div class="fr"><label>群 chat_id（必填）</label><input class="inp" id="ubChatId" value="' + escStr(t ? t.chat_id : "") + '" placeholder="例如 -1001234567890"><div style="font-size:11px;color:var(--text-secondary);margin-top:4px">获取方式：将 @userinfobot 或 @getidsbot 添加到群里，它会显示群的 chat_id；或在群设置中查看</div></div>' +
-      '<div class="fr"><label>标题（可选，仅备注）</label><input class="inp" id="ubTitle" value="' + escStr(t ? t.title : "") + '"></div>' +
+      '<div class="fr"><label>群 chat_id（必填）</label><input class="inp" id="ubChatId" value="' + escStr(t ? t.chat_id : (prefill.chat_id || "")) + '" placeholder="例如 -1001234567890"><div style="font-size:11px;color:var(--text-secondary);margin-top:4px">获取方式：将 @userinfobot 或 @getidsbot 添加到群里，它会显示群的 chat_id；或在群设置中查看</div></div>' +
+      '<div class="fr"><label>标题（可选，仅备注）</label><input class="inp" id="ubTitle" value="' + escStr(t ? t.title : (prefill.title || "")) + '"></div>' +
       '<div class="fr"><label>标签（逗号分隔，抓取到的图片入库时带上）</label><input class="inp" id="ubTags" value="' + escStr(t ? t.tags : "") + '" placeholder="风景,美女"></div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
         '<div class="fr" style="margin:0"><label>入库到</label><select class="inp" id="ubPool"><option value="0" ' + (t && t.pool ? "" : "selected") + '>私密库</option><option value="1" ' + (t && t.pool ? "selected" : "") + '>共享库</option></select></div>' +
@@ -3602,6 +3606,41 @@ function ubotEdit(id) {
     document.getElementById("ubSave").onclick = function() { ubotSave(id); };
     document.getElementById("ubChatId").focus();
   });
+}
+
+// ---------------- 已有群列表（userbot get_dialogs 结果，点选直接建任务） ----------------
+async function ubotChats() {
+  var r = await api("GET", "/admin/api/ubot-chats");
+  var chats = (r && r.ok) ? (r.data || []) : [];
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:780px">' +
+    '<h3>已有群（userbot 账号所在群/频道）</h3>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">列表由 VPS 上的 userbot 抓取账号自动上报（get_dialogs）。点「刷新列表」通知节点下一轮上报；点「用此群创建」自动填入 chat_id 建抓取任务。</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
+      '<span id="ubChatsStatus" style="font-size:12px;color:var(--text-secondary)">' + (chats.length ? ('共 ' + chats.length + ' 个群/频道') : '暂无数据') + '</span>' +
+      '<button class="btn btn-sm" id="ubChatsRefreshBtn">刷新列表</button>' +
+    '</div>' +
+    '<div id="ubChatsBody" style="max-height:60vh;overflow:auto">' + (chats.length ? buildChatsRows(chats) : '<span style="font-size:13px;color:var(--text-secondary)">还没有群数据。先点「刷新列表」，并确认 VPS 脚本心跳在线、后台 StringSession 有效。</span>') + '</div>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="modalCancel">关闭</button></div>' +
+    '</div></div>';
+  document.getElementById("modalCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("ubChatsRefreshBtn").onclick = function() {
+    api("POST", "/admin/api/ubot-chats/refresh").then(function(rr) {
+      document.getElementById("ubChatsStatus").textContent = rr && rr.ok ? "已通知节点刷新，约 1 分钟内自动上报" : ("刷新失败：" + ((rr && rr.error) || ""));
+    });
+  };
+}
+
+function buildChatsRows(chats) {
+  var h = '<div class="tbl-wrap"><table><thead><tr><th>chat_id</th><th>名称</th><th>类型</th><th>人数</th><th style="width:120px">操作</th></tr></thead><tbody>';
+  for (var i = 0; i < chats.length; i++) {
+    var c = chats[i];
+    var tp = c.chat_type === 'channel' ? '频道' : (c.chat_type === 'supergroup' ? '超级群' : '群');
+    h += '<tr><td><code>' + escStr(c.chat_id) + '</code></td><td>' + escStr(c.title || '-') + '</td><td>' + tp + '</td><td>' + (c.participants || 0) + '</td>' +
+      '<td><button class="btn btn-primary btn-sm" data-ccid="' + escStr(c.chat_id) + '" data-ctitle="' + escStr(c.title || '') + '">用此群创建</button></td></tr>';
+  }
+  h += '</tbody></table></div>';
+  return h;
 }
 
 function ubotSave(id) {
@@ -3643,6 +3682,19 @@ document.getElementById("ubCfgSaveBtn").addEventListener("click", function() {
 });
 
 document.getElementById("ubAddBtn").addEventListener("click", function() { ubotEdit(null); });
+document.getElementById("ubChatsBtn").addEventListener("click", function() { ubotChats(); });
+(function() {
+  var ma = document.getElementById("modalArea");
+  if (!ma.__chatCreateBound) {
+    ma.__chatCreateBound = true;
+    ma.addEventListener("click", function(e) {
+      var btn = e.target && e.target.closest ? e.target.closest("button[data-ccid]") : null;
+      if (!btn) return;
+      ma.innerHTML = "";
+      ubotEdit(null, { chat_id: btn.getAttribute("data-ccid"), title: btn.getAttribute("data-ctitle") || "" });
+    });
+  }
+})();
 document.getElementById("ubSrvAddBtn").addEventListener("click", function() { srvEdit(null); });
 
 // API Key 小眼睛：切换明文/掩码

@@ -27,7 +27,7 @@ import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebh
 import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
 
 import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUserbotTasks, handleAdminUserbotTaskCreate, handleAdminUserbotTaskUpdate, handleAdminUserbotTaskDelete, handleUserbotTaskConfig, handleUserbotTaskProgress, handleAdminUbotAlbumListAction, handleAdminUbotAlbumsGet, handleAdminUbotAlbumsSelect, handleAdminUbotAlbumsTrigger, handleUbotAlbumsReport } from './src/userbot.js';
-import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript, handleDeployGenScript, handleTaskRunReport, handleServerTasksPoll, handleAdminTaskRuns } from './src/servers.js';
+import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript, handleDeployGenScript, handleTaskRunReport, handleServerTasksPoll, handleAdminTaskRuns, handleAdminUbotChats, handleAdminUbotChatsRefresh, handleUbotDialogsReport, handleUbotGlobal } from './src/servers.js';
 
 
 
@@ -277,6 +277,10 @@ export default {
     if (m === 'GET' && p === '/api/ubot/server/tasks-poll') return handleServerTasksPoll(request, env);
     if (m === 'POST' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/run-report') > 0) return handleTaskRunReport(request, env, p.split('/')[4]);
     if (m === 'GET' && p === '/admin/api/ub-task-runs') return isAdmin ? handleAdminTaskRuns(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/ubot-chats') return isAdmin ? handleAdminUbotChats(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/ubot-chats/refresh') return isAdmin ? handleAdminUbotChatsRefresh(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/api/ubot/dialogs') return handleUbotDialogsReport(request, env);
+    if (m === 'GET' && p === '/api/ubot/global') return handleUbotGlobal(request, env);
     // VPS 一键部署脚本下发（无需鉴权，脚本本身不含密钥，参数由后台生成的 URL 携带）
     if (m === 'GET' && p === '/deploy/ubot.sh') return handleDeployScript(request, env);
     if (m === 'GET' && p === '/deploy/userbot_pull.py') return handleDeployPullScript(request, env);

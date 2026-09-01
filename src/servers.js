@@ -91,7 +91,8 @@ export async function handleServerHeartbeat(request, env) {
     const lastInfo = JSON.stringify({ hostname: String(info.hostname || ''), version: String(info.version || ''), ip: String(info.ip || ''), tasks: Array.isArray(info.tasks) ? info.tasks.map(String) : [], uptime: Number(info.uptime) || 0 }).slice(0, 2000);
     await env.D1_DB.prepare('UPDATE ub_servers SET status=?, last_seen_at=?, last_ip=?, last_info=?, updated_at=? WHERE id=?')
       .bind('online', nowIso, String(info.ip || ''), lastInfo, nowIso, s.id).run();
-    return json({ ok: true, data: { saved: true, server_id: s.id } });
+    const pend = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='ubot_dialogs_pending'").first();
+    return json({ ok: true, data: { saved: true, server_id: s.id, dialogs_pending: !!(pend && pend.value) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -434,5 +435,69 @@ export async function handleAdminTaskRuns(request, env) {
       d = await env.D1_DB.prepare('SELECT * FROM ub_task_runs ORDER BY id DESC LIMIT 50').all();
     }
     return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ---------------- 已有群列表（userbot get_dialogs 结果，供后台选群建任务） ----------------
+// GET /admin/api/ubot-chats
+export async function handleAdminUbotChats(env) {
+  try {
+    const d = await env.D1_DB.prepare('SELECT chat_id, title, chat_type, username, participants, updated_at FROM ubot_chats ORDER BY participants DESC, id DESC').all();
+    return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /admin/api/ubot-chats/refresh  置"刷新群列表"标记，脚本下一轮心跳读取后 get_dialogs 上报
+export async function handleAdminUbotChatsRefresh(env) {
+  try {
+    const nowIso = new Date().toISOString();
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('ubot_dialogs_pending', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(nowIso).run();
+    return json({ ok: true, data: { triggered: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /api/ubot/dialogs?token=<ub_token>  body: { dialogs: [...] }  脚本上报 get_dialogs 结果（整表替换）
+export async function handleUbotDialogsReport(request, env) {
+  try {
+    const u = new URL(request.url);
+    const tok = u.searchParams.get('token') || request.headers.get('X-Ub-Token') || '';
+    const cfg = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('ub_token').first();
+    if (!tok || !cfg || !cfg.value || tok !== cfg.value) return json({ ok: false, error: 'Unauthorized' }, 401);
+    const b = await request.json().catch(function(){ return {}; });
+    const dialogs = Array.isArray(b.dialogs) ? b.dialogs : [];
+    const nowIso = new Date().toISOString();
+    const ops = [env.D1_DB.prepare('DELETE FROM ubot_chats').run()];
+    const allowed = {};
+    dialogs.slice(0, 500).forEach(function(x) {
+      const cid = String(x.chat_id || '');
+      if (!cid || allowed[cid]) return;
+      const type = String(x.chat_type || 'group');
+      if (type !== 'group' && type !== 'supergroup' && type !== 'channel') return;
+      allowed[cid] = 1;
+      ops.push(env.D1_DB.prepare('INSERT OR REPLACE INTO ubot_chats (chat_id, title, chat_type, username, participants, updated_at) VALUES (?,?,?,?,?,?)')
+        .bind(cid, String(x.title || '').slice(0, 200), type, String(x.username || '').slice(0, 200), Math.max(0, Math.min(Number(x.participants) || 0, 100000000)), nowIso));
+    });
+    for (let i = 0; i < ops.length; i++) await ops[i];
+    await env.D1_DB.prepare("DELETE FROM settings WHERE key='ubot_dialogs_pending'").run();
+    return json({ ok: true, data: { saved: Object.keys(allowed).length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// GET /api/ubot/global?token=<ub_token>  返回全局 userbot 配置（供脚本拉取 api_id/api_hash/session）
+export async function handleUbotGlobal(request, env) {
+  try {
+    const u = new URL(request.url);
+    const tok = u.searchParams.get('token') || request.headers.get('X-Ub-Token') || '';
+    const cfg = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('ub_token').first();
+    if (!tok || !cfg || !cfg.value || tok !== cfg.value) return json({ ok: false, error: 'Unauthorized' }, 401);
+    const g = await env.D1_DB.prepare('SELECT key,value FROM settings WHERE key IN (?,?,?,?)').bind('ub_api_id', 'ub_api_hash', 'ub_session', 'ub_api_key').all();
+    const gcfg = { api_id: '', api_hash: '', session: '', api_key: '' };
+    (g.results || []).forEach(function(r) {
+      if (r.key === 'ub_api_id') gcfg.api_id = r.value || '';
+      else if (r.key === 'ub_api_hash') gcfg.api_hash = r.value || '';
+      else if (r.key === 'ub_session') gcfg.session = r.value || '';
+      else if (r.key === 'ub_api_key') gcfg.api_key = r.value || '';
+    });
+    return json({ ok: true, data: { global: gcfg } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
