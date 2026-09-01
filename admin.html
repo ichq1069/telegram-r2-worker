@@ -3520,7 +3520,7 @@ function ubotEdit(id) {
       '<div class="fr"><label>标签（逗号分隔，抓取到的图片入库时带上）</label><input class="inp" id="ubTags" value="' + escStr(t ? t.tags : "") + '" placeholder="风景,美女"></div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
         '<div class="fr" style="margin:0"><label>入库到</label><select class="inp" id="ubPool"><option value="0" ' + (t && t.pool ? "" : "selected") + '>私密库</option><option value="1" ' + (t && t.pool ? "selected" : "") + '>共享库</option></select></div>' +
-        '<div class="fr" style="margin:0"><label>级别</label><select class="inp" id="ubLevel"><option>pt</option><option>n</option><option>r</option><option>sr</option><option>ssr</option></select></div>' +
+        '<div class="fr" style="margin:0"><label>级别</label><select class="inp" id="ubLevel"><option>pt</option><option>vip</option><option>svip</option><option>vvip</option></select></div>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
         '<div class="fr" style="margin:0"><label>最大文件 MB（默认 19；19~90MB 自动走流式上传，超过跳过）</label><input class="inp" type="number" id="ubMaxSize" value="' + (t ? Math.round((t.max_size || 0) / 1048576) : 19) + '" min="1" max="90"></div>' +
@@ -4370,7 +4370,7 @@ function genDoc() {
 }
 // 密钥管理
 // 级别 badge：pt 灰 / vip 蓝 / svip 紫 / vvip 金
-var LEVEL_STYLES = { pt: "#9ca3af", n: "#6b7280", r: "#10b981", sr: "#3b82f6", ssr: "#8b5cf6", vip: "#3b82f6", svip: "#8b5cf6", vvip: "#d97706" };
+var LEVEL_STYLES = { pt: "#9ca3af", vip: "#3b82f6", svip: "#8b5cf6", vvip: "#d97706" };
 function levelBadge(lv) {
   lv = LEVEL_STYLES[lv] ? lv : "pt";
   var color = LEVEL_STYLES[lv];
