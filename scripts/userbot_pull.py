@@ -539,19 +539,30 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             if not a["first_ts"] or ts0 < a["first_ts"]:
                 a["first_ts"] = ts0
 
-    # 每相册上传封面（取首条消息最小尺寸图 thumb=0，小图 ≤19MB 走 multipart）
+    # 每相册上传封面 + 每张图缩略图（thumb_url 供后台逐张预览/勾选）
     for gid, a in albums.items():
         a["msg_ids"].sort()
         a["sizes"].sort(key=lambda s: s["id"])
-        cover_msg = a["msg_ids"][0]
+        thumbs = {}
+        cover_url = ""
         try:
-            m = await client.get_messages(chat, ids=cover_msg)
-            data = await m.download_media(file=bytes, thumb=0)
-            if data:
-                a["cover_url"] = await upload_cover(hc, server, upload_api_key, task_id, gid, data)
+            for idx, mid in enumerate(a["msg_ids"]):
+                m = await client.get_messages(chat, ids=mid)
+                if not m or not m.media:
+                    continue
+                data = await m.download_media(file=bytes, thumb=1)
+                if data:
+                    tu = await upload_cover(hc, server, upload_api_key, task_id, f"{gid}_{mid}", data)
+                    if tu:
+                        thumbs[str(mid)] = tu
+                if idx == 0 and thumbs.get(str(mid)):
+                    cover_url = thumbs[str(mid)]
+                await asyncio.sleep(WORK_DELAY)
         except Exception as e:
-            print(f"  封面获取失败 {gid}: {e}", file=sys.stderr)
-        a["cover_url"] = a.get("cover_url", "")
+            print(f"  相册缩略图失败 {gid}: {e}", file=sys.stderr)
+        for s in a["sizes"]:
+            s["thumb_url"] = thumbs.get(str(s["id"]), "")
+        a["cover_url"] = cover_url
         await asyncio.sleep(WORK_DELAY)
 
     payload = []

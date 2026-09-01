@@ -3264,6 +3264,11 @@ function ubotTaskRowClick(e) {
 // ---------------- 群抓取：相册管理（浏览/勾选/保存/抓取已选） ----------------
 var UBotAlbumsTaskId = 0;
 var UBotAlbumsData = [];
+var UBotAlbumsSel = {}; // msg_id -> 1，逐张图勾选集合
+
+function syncAlbumsSel() {
+  UBotAlbumsData.forEach(function(a) { (a.sizes || []).forEach(function(s) { if (s.sel) UBotAlbumsSel[String(s.id)] = 1; }); });
+}
 
 function ubotAlbums(id) {
   UBotAlbumsTaskId = id;
@@ -3292,6 +3297,7 @@ function ubotAlbums(id) {
     if (r && r.ok) {
       if (r.data.task.scan_limit) document.getElementById("ubAlbumScan").value = r.data.task.scan_limit;
       UBotAlbumsData = r.data.albums || [];
+      syncAlbumsSel();
       renderUbotAlbums();
       if (r.data.task.mode === 'list') ubotAlbumsPoll(0);
     } else if (r) { document.getElementById("ubAlbumStatus").textContent = r.error || "加载失败"; }
@@ -3323,6 +3329,7 @@ function ubotAlbumsPoll(n) {
         return;
       }
       UBotAlbumsData = r.data.albums || [];
+      syncAlbumsSel();
       renderUbotAlbums();
       st.textContent = "已更新 " + UBotAlbumsData.length + " 个相册";
     });
@@ -3333,46 +3340,77 @@ function renderUbotAlbums() {
   var grid = document.getElementById("ubAlbumGrid");
   var selInfo = document.getElementById("ubAlbumSelInfo");
   if (!grid) return;
-  var selectedCount = 0;
+  var selCount = 0;
+  var totalCount = 0;
+  for (var k in UBotAlbumsSel) if (UBotAlbumsSel[k]) selCount++;
+  UBotAlbumsData.forEach(function(a) { totalCount += (a.sizes || []).length; });
   var html = '';
   for (var i = 0; i < UBotAlbumsData.length; i++) {
     var a = UBotAlbumsData[i];
-    var isSel = !!a.selected;
-    if (isSel) selectedCount++;
+    var gid = String(a.grouped_id);
+    var sizes = a.sizes || [];
+    var allSel = sizes.length > 0 && sizes.every(function(s) { return UBotAlbumsSel[String(s.id)]; });
+    var partial = !allSel && sizes.some(function(s) { return UBotAlbumsSel[String(s.id)]; });
     var ov = a.has_oversize ? '<span style="color:#e5484d;font-size:10px;font-weight:600">超限</span>' : '';
     var totalSize = 0;
-    (a.sizes || []).forEach(function(s) { totalSize += s.size || 0; });
+    sizes.forEach(function(s) { totalSize += s.size || 0; });
     var sizeTxt = totalSize > 1048576 ? (totalSize / 1048576).toFixed(1) + "MB" : Math.ceil(totalSize / 1024) + "KB";
     var timeTxt = a.first_ts ? new Date(a.first_ts * 1000).toLocaleString().slice(5, 16) : "";
-    html += '<div class="ub-album" data-gid="' + escStr(String(a.grouped_id)) + '" style="border:1px solid ' + (isSel ? "#46a758" : "var(--border,#333)") + ';border-radius:8px;overflow:hidden;cursor:pointer;position:relative;background:var(--card,#1d1f24)">' +
-      '<div style="width:100%;height:96px;background:#222;display:flex;align-items:center;justify-content:center;overflow:hidden">' +
-        (a.cover_url ? '<img src="' + escStr(a.cover_url) + '" style="width:100%;height:100%;object-fit:cover">' : '<span style="color:var(--text-secondary);font-size:11px">无封面</span>') +
+    var stTxt = allSel ? "已全选" : (partial ? "部分已选" : "点选单张");
+    var stClr = allSel ? "#46a758" : (partial ? "#e5a000" : "var(--text-secondary)");
+    html += '<div class="ub-album" data-gid="' + escStr(gid) + '" style="border:1px solid ' + (allSel ? "#46a758" : (partial ? "#e5a000" : "var(--border,#333)")) + ';border-radius:8px;margin-bottom:10px;overflow:hidden;background:var(--card,#1d1f24)">' +
+      '<div class="ub-album-head" style="padding:8px 10px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;flex-wrap:wrap">' +
+        '<span style="font-weight:600;color:var(--text,#eee)">相册 ' + escStr(gid) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-secondary)">' + (a.count || 0) + ' 张 · ' + sizeTxt + (timeTxt ? ' · ' + timeTxt : '') + '</span>' +
+        ov +
+        '<span style="font-size:11px;color:' + stClr + '">' + stTxt + '</span>' +
       '</div>' +
-      '<div style="padding:6px;font-size:11px;color:var(--text-secondary)">' +
-        '<div style="font-weight:600;color:var(--text,#eee)">' + (a.count || 0) + ' 张 ' + ov + '</div>' +
-        '<div>' + sizeTxt + (timeTxt ? ' · ' + timeTxt : '') + '</div>' +
-      '</div>' +
-      (isSel ? '<div style="position:absolute;top:6px;right:6px;background:#46a758;color:#fff;border-radius:4px;font-size:10px;padding:1px 5px">已选</div>' : '') +
-    '</div>';
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;padding:0 8px 8px">';
+    sizes.forEach(function(s) {
+      var sel = !!UBotAlbumsSel[String(s.id)];
+      var sz = (s.size || 0) > 1048576 ? ((s.size || 0) / 1048576).toFixed(1) + "MB" : Math.ceil((s.size || 0) / 1024) + "KB";
+      html += '<div data-pid="' + String(s.id) + '" class="ub-photo" style="border:2px solid ' + (sel ? "#46a758" : "transparent") + ';border-radius:6px;overflow:hidden;cursor:pointer;position:relative;background:#222">' +
+        (s.thumb_url ? '<img src="' + escStr(s.thumb_url) + '" style="width:100%;height:76px;object-fit:cover;display:block">' : '<div style="width:100%;height:76px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:10px;text-align:center">' + escStr(String(s.id)) + '</div>') +
+        '<div style="padding:3px 4px;font-size:10px;color:var(--text-secondary)">' + sz + '</div>' +
+        (sel ? '<div style="position:absolute;top:4px;right:4px;background:#46a758;color:#fff;border-radius:3px;font-size:9px;padding:0 4px">✓</div>' : '') +
+      '</div>';
+    });
+    html += '</div></div>';
   }
   grid.innerHTML = html || '<div style="grid-column:1/-1;color:var(--text-secondary);font-size:13px;padding:24px;text-align:center">没有相册数据。点击「浏览相册」让 userbot 枚举该群相册。</div>';
-  if (selInfo) selInfo.textContent = "已选 " + selectedCount + " / " + UBotAlbumsData.length + " 个相册";
+  if (selInfo) selInfo.textContent = "已选 " + selCount + " / " + totalCount + " 张图";
   Array.prototype.forEach.call(grid.querySelectorAll(".ub-album"), function(el) {
-    el.onclick = function() { toggleUbotAlbum(el); };
+    var head = el.querySelector(".ub-album-head");
+    if (head) head.onclick = function() { toggleUbotAlbum(el); };
+  });
+  Array.prototype.forEach.call(grid.querySelectorAll(".ub-photo"), function(el) {
+    el.onclick = function(e) { e.stopPropagation(); toggleUbotPhoto(el); };
   });
 }
 
 function toggleUbotAlbum(el) {
   var gid = el.getAttribute("data-gid");
-  for (var i = 0; i < UBotAlbumsData.length; i++) {
-    if (String(UBotAlbumsData[i].grouped_id) === gid) { UBotAlbumsData[i].selected = !UBotAlbumsData[i].selected; break; }
-  }
+  var a = null;
+  for (var i = 0; i < UBotAlbumsData.length; i++) if (String(UBotAlbumsData[i].grouped_id) === gid) { a = UBotAlbumsData[i]; break; }
+  if (!a) return;
+  var sizes = a.sizes || [];
+  var allSel = sizes.length > 0 && sizes.every(function(s) { return UBotAlbumsSel[String(s.id)]; });
+  sizes.forEach(function(s) { UBotAlbumsSel[String(s.id)] = allSel ? 0 : 1; });
+  renderUbotAlbums();
+}
+
+function toggleUbotPhoto(el) {
+  var pid = el.getAttribute("data-pid");
+  UBotAlbumsSel[pid] = UBotAlbumsSel[pid] ? 0 : 1;
   renderUbotAlbums();
 }
 
 function ubotAlbumsSave() {
   var msgIds = [];
-  UBotAlbumsData.forEach(function(a) { if (a.selected) { (a.msg_ids || []).forEach(function(m) { msgIds.push(String(m)); }); } });
+  for (var k in UBotAlbumsSel) if (UBotAlbumsSel[k]) msgIds.push(k);
+  if (!msgIds.length) {
+    UBotAlbumsData.forEach(function(a) { if (a.selected) { (a.msg_ids || []).forEach(function(m) { msgIds.push(String(m)); }); } });
+  }
   api("POST", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums/select", { msg_ids: msgIds }).then(function(r) {
     if (r && r.ok) toast("已保存 " + r.data.saved + " 条消息选择" + (r.data.invalid ? "（" + r.data.invalid + " 条无效）" : ""), 1);
     else toast((r && r.error) || "保存失败", 0);
