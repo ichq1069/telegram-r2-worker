@@ -417,14 +417,19 @@ export async function handleServerTasksPoll(request, env) {
 }
 
 // ---------------- Admin：查询任务执行日志 ----------------
-// GET /admin/api/ub-task-runs?task_id=<可选>
+// GET /admin/api/ub-task-runs?task_id=<可选>&server_id=<可选>
 export async function handleAdminTaskRuns(request, env) {
   try {
     const u = new URL(request.url);
     const taskId = u.searchParams.get('task_id');
+    const serverId = u.searchParams.get('server_id');
     let d;
-    if (taskId) {
+    if (taskId && serverId) {
+      d = await env.D1_DB.prepare('SELECT * FROM ub_task_runs WHERE task_id=? AND server_id=? ORDER BY id DESC LIMIT 50').bind(taskId, serverId).all();
+    } else if (taskId) {
       d = await env.D1_DB.prepare('SELECT * FROM ub_task_runs WHERE task_id=? ORDER BY id DESC LIMIT 50').bind(taskId).all();
+    } else if (serverId) {
+      d = await env.D1_DB.prepare('SELECT * FROM ub_task_runs WHERE server_id=? ORDER BY id DESC LIMIT 50').bind(serverId).all();
     } else {
       d = await env.D1_DB.prepare('SELECT * FROM ub_task_runs ORDER BY id DESC LIMIT 50').all();
     }
