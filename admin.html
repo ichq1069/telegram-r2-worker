@@ -777,6 +777,7 @@ https://example.com/b.jpg"></textarea></div>
               <option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option>
             </select>
             <input class="inp" style="width:180px" id="keyPass" type="password" placeholder="登录密码 key-pass（可选）" title="用户门户 /user 登录密码，可选；设置后用户可用密钥+此密码登录查看统计与生成接口">
+            <input class="inp" style="width:200px" id="keyScopes" value="files:read" title="权限 scopes，逗号分隔。上传需含 upload 或 files:write；填 * 表示全部权限" placeholder="scopes，如 files:read,upload">
             <button class="btn btn-primary" id="createKeyBtn">+ 生成密钥</button>
           </div>
         </div>
@@ -1876,7 +1877,7 @@ function init() {
     }
     // 密钥操作
     var keyEdit = t.closest("[data-action='edit-key']");    if (keyEdit) {
-      editKeyModal(keyEdit.getAttribute("data-id"), keyEdit.getAttribute("data-name") || "", keyEdit.getAttribute("data-expires") || "", keyEdit.getAttribute("data-level") || "pt", keyEdit.getAttribute("data-has-pass") === "1");
+      editKeyModal(keyEdit.getAttribute("data-id"), keyEdit.getAttribute("data-name") || "", keyEdit.getAttribute("data-expires") || "", keyEdit.getAttribute("data-level") || "pt", keyEdit.getAttribute("data-scopes") || "files:read", keyEdit.getAttribute("data-has-pass") === "1");
       return;
     }
     var keyToggle = t.closest("[data-action='toggle-key']");
@@ -4579,7 +4580,7 @@ async function loadKeys() {
     h += '<td>' + (k.usage_count || 0) + '</td>';
     h += '<td class="file-date">' + (k.last_used_at ? String(k.last_used_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
     h += '<td class="file-date">' + (k.created_at ? String(k.created_at).replace("T", " ").slice(0, 16) : "-") + '</td>';
-    h += '<td><button class="btn btn-ghost btn-sm" data-action="edit-key" data-id="' + k.id + '" data-name="' + escStr(k.name || "") + '" data-expires="' + (k.expires_at || "") + '" data-level="' + escStr(k.level || "pt") + '" data-has-pass="' + (k.has_pass ? 1 : 0) + '">编辑</button> ';
+    h += '<td><button class="btn btn-ghost btn-sm" data-action="edit-key" data-id="' + k.id + '" data-name="' + escStr(k.name || "") + '" data-expires="' + (k.expires_at || "") + '" data-level="' + escStr(k.level || "pt") + '" data-scopes="' + escStr(k.scopes || "files:read") + '" data-has-pass="' + (k.has_pass ? 1 : 0) + '">编辑</button> ';
     h += '<button class="btn btn-ghost btn-sm" data-action="toggle-key" data-id="' + k.id + '" data-enabled="' + k.enabled + '">' + (k.enabled ? "停用" : "启用") + '</button> ';
     h += '<button class="btn btn-danger btn-sm" data-action="delete-key" data-id="' + k.id + '">删除</button></td></tr>';
   }
@@ -4796,20 +4797,22 @@ function createKey() {
   var expires_at = document.getElementById("keyExpires") ? document.getElementById("keyExpires").value : "";
   var level = document.getElementById("keyLevel") ? document.getElementById("keyLevel").value : "pt";
   var key_pass = document.getElementById("keyPass") ? document.getElementById("keyPass").value.trim() : "";
-  api("POST", "/admin/api/keys", { name: name, expires_at: expires_at, level: level, key_pass: key_pass }).then(function(r) {
+  var key_scopes = document.getElementById("keyScopes") ? document.getElementById("keyScopes").value.trim() : "files:read";
+  api("POST", "/admin/api/keys", { name: name, expires_at: expires_at, level: level, key_pass: key_pass, scopes: key_scopes }).then(function(r) {
     if (r.ok) {
       toast("密钥已生成" + (expires_at ? "，到期 " + expires_at : "（永久有效）") + " · 级别 " + level.toUpperCase() + (key_pass ? " · 已设登录密码" : ""), 1);
       document.getElementById("keyName").value = "";
       if (document.getElementById("keyExpires")) document.getElementById("keyExpires").value = "";
       if (document.getElementById("keyLevel")) document.getElementById("keyLevel").value = "pt";
       if (document.getElementById("keyPass")) document.getElementById("keyPass").value = "";
+      if (document.getElementById("keyScopes")) document.getElementById("keyScopes").value = "files:read";
       loadKeys();
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(r.data.key);
     } else toast(r.error || "生成失败", 0);
   });
 }
 // 编辑密钥（名称 / 到期时间 / 级别 / 登录密码 key-pass）
-function editKeyModal(id, name, expires, level, hasPass) {
+function editKeyModal(id, name, expires, level, scopes, hasPass) {
   var today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
   var lvOpts = "";
   var lvs = ["pt", "vip", "svip", "vvip"];
@@ -4822,6 +4825,8 @@ function editKeyModal(id, name, expires, level, hasPass) {
     '<input class="inp" id="ekName" value="' + escStr(name) + '" placeholder="用途说明">' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">级别（决定可获取内容级别，级别对等）</label>' +
     '<select class="inp" id="ekLevel">' + lvOpts + '</select>' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">权限 scopes（逗号分隔；上传需含 upload 或 files:write，填 * = 全部权限）</label>' +
+    '<input class="inp" id="ekScopes" value="' + escStr(scopes || "files:read") + '" placeholder="files:read,upload">' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">到期日期（留空 = 永久有效）</label>' +
     '<input class="inp" type="date" id="ekExpires" value="' + escStr(expires) + '" min="' + today + '">' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">登录密码 key-pass（用户 /user 登录用）</label>' +
@@ -4834,7 +4839,8 @@ function editKeyModal(id, name, expires, level, hasPass) {
     var nm = document.getElementById("ekName").value.trim();
     var ex = document.getElementById("ekExpires").value;
     var lv = document.getElementById("ekLevel").value;
-    var body = { name: nm, expires_at: ex, level: lv };
+    var sc = document.getElementById("ekScopes").value.trim();
+    var body = { name: nm, expires_at: ex, level: lv, scopes: sc };
     if (document.getElementById("ekPassClear").checked) {
       body.key_pass = "";
     } else {

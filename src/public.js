@@ -1132,6 +1132,7 @@ export async function handleAdminKeysUpdate(request, env) {
     if (b.name !== undefined) { fields.push('name = ?'); vals.push(String(b.name).slice(0, 60)); }
     if (b.expires_at !== undefined) { fields.push('expires_at = ?'); vals.push(String(b.expires_at || '').trim().slice(0, 10)); }
     if (b.level !== undefined) { fields.push('level = ?'); vals.push(sanitizeLevel(b.level)); }
+    if (b.scopes !== undefined) { fields.push('scopes = ?'); vals.push(String(b.scopes || 'files:read').trim().slice(0, 120)); }
     if (b.key_pass !== undefined) {
       // 需要真实 key 做加盐哈希
       const cur = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE id=?').bind(id).first();
