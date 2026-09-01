@@ -473,6 +473,7 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
     """列表模式：枚举最近 scan_limit 条消息聚合相册，传封面缩略图，整批上报元数据（不下载相册媒体）。"""
     albums = {}  # grouped_id -> {msg_ids, sizes, first_ts, cover_msg_id}
     scanned = 0
+    t0 = time.time()
     it = client.iter_messages(chat, reverse=False, wait_time=ITER_WAIT)
     while True:
         try:
@@ -484,6 +485,8 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
         if scanned >= scan_limit:
             break
         scanned += 1
+        if scanned % 500 == 0:
+            print(f"  [进度] 已扫描 {scanned}/{scan_limit} 条，聚合相册 {len(albums)} 个（耗时 {int(time.time()-t0)}s）", file=sys.stderr, flush=True)
         if not msg.media or msg.grouped_id is None:
             continue
         if not isinstance(msg.media, MessageMediaPhoto):
