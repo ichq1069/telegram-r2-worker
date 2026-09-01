@@ -234,6 +234,44 @@ async def main():
         await run_task_once(hc, args, args.task)
 
 
+async def resolve_peer(client, chat_id):
+    """智能解析 chat_id：兼容普通群、已迁移超群/频道（-100 前缀）、username、t.me 链接。
+
+    普通负 ID（basic group 时期）解析失败时自动重试 -100 前缀形式——
+    Telegram 把 basic group 迁移成 supergroup/channel 后，其 peer 需用 -100 前缀（如 -1001884867389）。
+    """
+    from telethon.errors import ChatIdInvalidError, ChannelInvalidError, UsernameNotOccupiedError
+    raw = str(chat_id).strip()
+    candidates = []
+    if raw.startswith(('t.me/', 'https://t.me/')) and '/' in raw:
+        candidates.append(raw.rsplit('/', 1)[-1])
+    elif raw.startswith('@'):
+        candidates.append(raw[1:])
+    elif raw.lstrip('-').isdigit():
+        n = int(raw)
+        if n < 0:
+            candidates.append(n)
+            if not raw.startswith('-100'):
+                candidates.append(int('-100' + raw.lstrip('-')))
+        else:
+            candidates.append(n)
+            candidates.append(-n)
+            candidates.append(int('-100' + raw))
+    else:
+        candidates.append(raw)
+
+    last_err = None
+    for c in candidates:
+        try:
+            return await client.get_entity(c)
+        except (ChatIdInvalidError, ChannelInvalidError, UsernameNotOccupiedError, ValueError, TypeError) as e:
+            last_err = e
+            continue
+    raise ValueError(
+        f"无法解析 chat_id={chat_id}（已尝试 {candidates}）。若该群已迁移为超群/频道，请在后台填入 -100 前缀的 ID（如 -100{str(chat_id).lstrip('-')}），或用「已有群 → 用此群创建」自动填入正确 ID。原始错误: {last_err}"
+    )
+
+
 async def run_task_once(hc, args, task_id):
     server = args.server.rstrip("/")
     cfg_url = f"{server}/api/ubot/task/{task_id}/config?token={args.token}"
@@ -291,7 +329,7 @@ async def run_task_once(hc, args, task_id):
         if not await client.is_user_authorized():
             print("会话未授权（StringSession 失效），请在本地重新登录并更新后台配置", file=sys.stderr)
             sys.exit(1)
-        chat = await client.get_entity(chat_id)
+        chat = await resolve_peer(client, chat_id)
         print(f"群: {getattr(chat, 'title', chat_id)}")
 
         if mode == "list":
