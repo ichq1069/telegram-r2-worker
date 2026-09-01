@@ -469,18 +469,19 @@ export async function handleUbotDialogsReport(request, env) {
     const b = await request.json().catch(function(){ return {}; });
     const dialogs = Array.isArray(b.dialogs) ? b.dialogs : [];
     const nowIso = new Date().toISOString();
-    const ops = [env.D1_DB.prepare('DELETE FROM ubot_chats').run()];
+    await env.D1_DB.prepare('DELETE FROM ubot_chats').run();
     const allowed = {};
+    const insertStmts = [];
     dialogs.slice(0, 500).forEach(function(x) {
       const cid = String(x.chat_id || '');
       if (!cid || allowed[cid]) return;
       const type = String(x.chat_type || 'group');
       if (type !== 'group' && type !== 'supergroup' && type !== 'channel') return;
       allowed[cid] = 1;
-      ops.push(env.D1_DB.prepare('INSERT OR REPLACE INTO ubot_chats (chat_id, title, chat_type, username, participants, updated_at) VALUES (?,?,?,?,?,?)')
+      insertStmts.push(env.D1_DB.prepare('INSERT OR REPLACE INTO ubot_chats (chat_id, title, chat_type, username, participants, updated_at) VALUES (?,?,?,?,?,?)')
         .bind(cid, String(x.title || '').slice(0, 200), type, String(x.username || '').slice(0, 200), Math.max(0, Math.min(Number(x.participants) || 0, 100000000)), nowIso));
     });
-    for (let i = 0; i < ops.length; i++) await ops[i];
+    for (let i = 0; i < insertStmts.length; i++) await insertStmts[i].run();
     await env.D1_DB.prepare("DELETE FROM settings WHERE key='ubot_dialogs_pending'").run();
     if (b.session_valid !== undefined) {
       await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('ubot_session_state', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
