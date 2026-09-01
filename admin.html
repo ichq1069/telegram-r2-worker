@@ -3379,7 +3379,7 @@ function renderUbotAlbums() {
     var allSel = sizes.length > 0 && sizes.every(function(s) { return UBotAlbumsSel[String(s.id)]; });
     var partial = !allSel && sizes.some(function(s) { return UBotAlbumsSel[String(s.id)]; });
     var hasVideo = sizes.some(function(s) { return s.type === 'video'; });
-    var hasPhoto = sizes.some(function(s) { return s.type !== 'video'); });
+    var hasPhoto = sizes.some(function(s) { return s.type !== 'video'; });
     var typeLabel = hasVideo && hasPhoto ? '图文' : (hasVideo ? '视频' : '图片');
     var ov = a.has_oversize ? '<span style="color:#e5484d;font-size:10px;font-weight:600">超限</span>' : '';
     var totalSize = 0;
