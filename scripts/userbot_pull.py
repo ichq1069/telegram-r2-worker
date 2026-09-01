@@ -41,7 +41,7 @@ import httpx
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeVideo, DocumentAttributeDuration
 
 # 与 worker /api/v1/upload 一致：≤19MB 走 multipart；>19MB ≤90MB 走 stream 流式
 UPLOAD_SMALL_MAX = 19 * 1024 * 1024
@@ -353,7 +353,7 @@ async def run_task_once(hc, args, task_id):
 
     print(f"任务 #{task_id}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool} level={level} max_size={max_size} limit={limit} mode={mode}")
     if mode == "list":
-        print(f"列表模式：枚举最近 {scan_limit} 条消息聚合相册（不下载相册媒体）" + (f"，游标 {album_cursor} 向更早翻页" if album_cursor else ""))
+        print(f"列表模式：枚举最近 {scan_limit} 条媒体聚合（图片+视频，不含文字）" + (f"，游标 {album_cursor} 向更早翻页" if album_cursor else ""))
     elif mode == "selected":
         print(f"选择抓取模式：仅处理 {len(selected_ids)} 条已选消息")
     elif last_id:
@@ -376,16 +376,18 @@ async def run_task_once(hc, args, task_id):
             await run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, last_id, title_prefix, upload_api_key, server, args)
 
 
-async def upload_media(hc, server, task_id, msg_id, data, params):
+async def upload_media(hc, server, task_id, msg_id, data, params, media_type="photo"):
     """按文件大小选上传路径：≤19MB 走 multipart；>19MB ≤90MB 走 stream=1 流式（worker 直入 R2）。"""
-    name = f"ubot_{task_id}_{msg_id}.jpg"
+    ext = "mp4" if media_type == "video" else "jpg"
+    ct = "video/mp4" if media_type == "video" else "image/jpeg"
+    name = f"ubot_{task_id}_{msg_id}.{ext}"
     if len(data) <= UPLOAD_SMALL_MAX:
         return await hc.post(server + "/api/v1/upload", params=params,
-                             files={"file": (name, data, "image/jpeg")}, timeout=120)
+                             files={"file": (name, data, ct)}, timeout=120)
     p = dict(params)
     p["stream"] = "1"
     return await hc.post(server + "/api/v1/upload", params=p, content=data,
-                         headers={"X-File-Name": name, "Content-Type": "image/jpeg"}, timeout=600)
+                         headers={"X-File-Name": name, "Content-Type": ct}, timeout=600)
 
 
 async def upload_cover(hc, server, upload_api_key, task_id, grouped_id, data):
@@ -500,13 +502,14 @@ async def run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, l
 
 
 async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args, cursor=0):
-    """列表模式：枚举最近 scan_limit 条消息聚合相册，传封面缩略图，整批上报元数据（不下载相册媒体）。
-    cursor>0 时从该 msg id 之前继续向更早枚举（翻页）；单张图片（无 grouped_id）也纳入（gid=solo_<msgid>）。"""
-    albums = {}  # grouped_id -> {msg_ids, sizes, first_ts, cover_msg_id}
-    scanned = 0
+    """列表模式：枚举消息，只统计媒体（图片+视频），聚合相册，传封面缩略图。
+    cursor>0 时从该 msg id 之前继续向更早枚举（翻页）；无 grouped_id 的单媒体也纳入（gid=solo_<id>）。"""
+    albums = {}  # grouped_id -> {msg_ids, sizes, first_ts}
+    scanned = 0   # 媒体计数（只计 photo/video）
+    msg_count = 0  # 消息遍历数（包括文字等非媒体，用于进度）
     solo_count = 0
     group_count = 0
-    photo_total = 0
+    video_count = 0
     t0 = time.time()
     kw = dict(reverse=False, wait_time=ITER_WAIT)
     if cursor and cursor > 0:
@@ -519,18 +522,27 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             break
         except Exception:
             break
+        msg_count += 1
         if scanned >= scan_limit:
             break
-        scanned += 1
-        if scanned % 500 == 0:
-            print(f"  [进度] 已扫描 {scanned}/{scan_limit} 条，聚合相册 {len(albums)} 个（耗时 {int(time.time()-t0)}s）", file=sys.stderr, flush=True)
         if not msg.media:
             continue
-        if not isinstance(msg.media, MessageMediaPhoto):
+        # 只统计图片和视频
+        is_photo = isinstance(msg.media, MessageMediaPhoto)
+        is_video = isinstance(msg.media, MessageMediaDocument) and any(
+            isinstance(a, DocumentAttributeVideo)
+            for a in (getattr(msg.media.document, "attributes", None) or [])
+        )
+        if not is_photo and not is_video:
             continue
-        photo_total += 1
+        scanned += 1
+        if scanned % 100 == 0:
+            print(f"  [进度] 已扫描 {msg_count} 条消息 / 媒体 {scanned}/{scan_limit}，聚合 {len(albums)} 个条目（耗时 {int(time.time()-t0)}s）", file=sys.stderr, flush=True)
+        media_type = "video" if is_video else "photo"
+        if media_type == "video":
+            video_count += 1
+        # 聚合：有 grouped_id 归入相册，无则单媒体
         if msg.grouped_id is None:
-            # 单张图片：独立成条目，gid=solo_<msgid>
             solo_count += 1
             gid = f"solo_{msg.id}"
         else:
@@ -538,24 +550,34 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             gid = str(msg.grouped_id)
         a = albums.setdefault(gid, {"msg_ids": [], "sizes": [], "first_ts": 0})
         a["msg_ids"].append(msg.id)
-        photo = getattr(msg.media, "photo", None)
-        sz = 0
-        w = 0
-        h = 0
-        if photo and getattr(photo, "sizes", None):
-            for s in photo.sizes:
-                ss = getattr(s, "size", 0) or 0
-                if ss and ss > sz:
-                    sz = ss
-                    w = getattr(s, "w", 0) or 0
-                    h = getattr(s, "h", 0) or 0
-        a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h})
+        sz, w, h, dur = 0, 0, 0, 0
+        if is_photo:
+            photo = getattr(msg.media, "photo", None)
+            if photo and getattr(photo, "sizes", None):
+                for s in photo.sizes:
+                    ss = getattr(s, "size", 0) or 0
+                    if ss and ss > sz:
+                        sz = ss
+                        w = getattr(s, "w", 0) or 0
+                        h = getattr(s, "h", 0) or 0
+        elif is_video:
+            doc = getattr(msg.media, "document", None)
+            if doc:
+                sz = getattr(doc, "size", 0) or 0
+                for attr in (getattr(doc, "attributes", None) or []):
+                    if isinstance(attr, DocumentAttributeVideo):
+                        w = getattr(attr, "w", 0) or 0
+                        h = getattr(attr, "h", 0) or 0
+                        dur = getattr(attr, "duration", 0) or 0
+                    elif isinstance(attr, DocumentAttributeDuration):
+                        dur = getattr(attr, "duration", 0) or 0
+        a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h, "type": media_type, "duration": dur})
         if msg.date:
             ts0 = int(msg.date.timestamp())
             if not a["first_ts"] or ts0 < a["first_ts"]:
                 a["first_ts"] = ts0
 
-    # 每相册上传封面 + 每张图缩略图（thumb_url 供后台逐张预览/勾选）
+    # 每相册上传封面 + 每张图/视频缩略图（thumb_url 供后台逐张预览/勾选）
     for gid, a in albums.items():
         a["msg_ids"].sort()
         a["sizes"].sort(key=lambda s: s["id"])
@@ -597,9 +619,9 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             "has_oversize": 1 if any(s["size"] > max_size for s in a["sizes"]) else 0,
         })
     if cursor and cursor > 0:
-        print(f"  翻页统计：本次扫描 {scanned} 条（含 {photo_total} 张图 / 相册 {group_count} 张 / 单图 {solo_count} 张），新增条目 {len(payload)} 个，游标推进到 msg {min_msg_id}", file=sys.stderr, flush=True)
+        print(f"  翻页统计：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），新增条目 {len(payload)} 个，游标推进到 msg {min_msg_id}", file=sys.stderr, flush=True)
     else:
-        print(f"  浏览统计：扫描 {scanned} 条消息，共 {photo_total} 张图片（相册聚合 {group_count} 张，单图 {solo_count} 张），聚合条目 {len(payload)} 个", file=sys.stderr, flush=True)
+        print(f"  浏览统计：遍历 {msg_count} 条消息，共 {scanned} 张媒体（图片 {scanned - video_count} + 视频 {video_count}），聚合条目 {len(payload)} 个（相册 {group_count} 个 / 单媒体 {solo_count} 个）", file=sys.stderr, flush=True)
     # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；append=1 追加合并（翻页），否则整体替换；cursor 回传供下次续扫
     for i in range(0, len(payload), ALBUM_MAX_PER_POST):
         chunk = payload[i:i + ALBUM_MAX_PER_POST]
@@ -610,7 +632,7 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
                 print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
         except Exception as e:
             print(f"  相册上报异常: {e}", file=sys.stderr)
-    print(f"列表模式完成：扫描 {scanned} 条，聚合 {len(payload)} 个条目（相册 {group_count} 张图 / 单图 {solo_count} 张）")
+    print(f"列表模式完成：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），聚合 {len(payload)} 个条目")
 
 
 async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size, title_prefix, upload_api_key, server, args):
@@ -646,29 +668,43 @@ async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size,
             msgs = []
         for msg in msgs:
             mid = msg.id if msg else None
-            if not msg or not msg.media or not isinstance(msg.media, MessageMediaPhoto):
+            if not msg or not msg.media:
                 if mid:
                     skipped += 1
                 continue
-            size = getattr(getattr(msg.media, "photo", None), "size", 0) or 0
+            # 图片或视频都处理
+            is_photo = isinstance(msg.media, MessageMediaPhoto)
+            is_video = isinstance(msg.media, MessageMediaDocument) and any(
+                isinstance(a, DocumentAttributeVideo)
+                for a in (getattr(msg.media.document, "attributes", None) or [])
+            )
+            if not is_photo and not is_video:
+                if mid:
+                    skipped += 1
+                continue
+            media_type = "video" if is_video else "photo"
+            if is_photo:
+                size = getattr(getattr(msg.media, "photo", None), "size", 0) or 0
+            else:
+                size = getattr(getattr(msg.media, "document", None), "size", 0) or 0
             if size > max_size or size <= 0:
                 skipped += 1
-                print(f"  跳过 #{mid}: {size}B 超限(>{max_size})", file=sys.stderr)
+                print(f"  跳过 #{mid} ({media_type}): {size}B 超限(>{max_size})", file=sys.stderr)
                 continue
             if args.dry_run:
-                print(f"  [dry] #{mid} size={size}")
+                print(f"  [dry] #{mid} size={size} {media_type}")
             else:
                 try:
                     data = await msg.download_media(file=bytes)
                 except Exception as e:
-                    print(f"  下载失败 #{mid}: {e}", file=sys.stderr)
+                    print(f"  下载失败 #{mid} ({media_type}): {e}", file=sys.stderr)
                     time.sleep(5)
                     continue
                 if not data:
                     continue
                 if len(data) > max_size:
                     skipped += 1
-                    print(f"  跳过 #{mid}: {len(data)}B 超限", file=sys.stderr)
+                    print(f"  跳过 #{mid} ({media_type}): {len(data)}B 超限", file=sys.stderr)
                     continue
                 await asyncio.sleep(WORK_DELAY)
                 caption = (msg.message or "").splitlines()[0] if msg.message else ""
@@ -677,7 +713,7 @@ async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size,
                 if pool:
                     params["pool"] = "1"
                 try:
-                    r = await upload_media(hc, server, task_id, msg.id, data, params)
+                    r = await upload_media(hc, server, task_id, msg.id, data, params, media_type=media_type)
                     if r.status_code != 200:
                         print(f"  上传失败 #{mid}: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
                         if r.status_code in (429, 500, 502, 503):

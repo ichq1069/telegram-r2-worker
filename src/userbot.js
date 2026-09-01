@@ -202,7 +202,7 @@ export async function handleAdminUbotAlbumsGet(env, id) {
     const albums = (d.results || []).map(function(a) {
       let sizes = [];
       try { sizes = JSON.parse(a.sizes || '[]'); } catch (e) { sizes = []; }
-      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || '', sel: selected.has(String(s.id)) }; }), cover_url: a.cover_url, first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
+      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || '', sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0 }; }), cover_url: a.cover_url, first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
     });
     return json({ ok: true, data: { task: taskToOut(t), albums: albums } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
