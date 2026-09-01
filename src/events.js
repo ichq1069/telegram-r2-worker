@@ -1,7 +1,7 @@
 // ==================== 事件 Webhook 通知 ====================
 // fireWebhook 事件派发、Webhook 配置管理、Random pool 管理、按条件查询/搜索/流/删除/回收站/R2 检查/机器人管理/配置管理。
 import { json, invalidateStatsCache } from "./util.js";
-import { sanitizeLevel, clampInt, splitTags } from "./core.js";
+import { sanitizeLevel, clampInt, splitTags, cnDayIso } from "./core.js";
 import { bumpR2Usage } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
 // ==================== 事件 Webhook 通知 ====================
@@ -39,8 +39,10 @@ export async function handleAdminSaveWebhook(request, env) {
   try {
     const b = await request.json().catch(() => null);
     const url = b && b.url ? String(b.url).trim().slice(0, 500) : '';
+    if (url && !/^https?:\/\//i.test(url)) return json({ ok: false, error: '请输入有效的 http(s) URL' }, 400);
     const enabled = !!(b && b.enabled);
-    const events = Array.isArray(b && b.events) ? b.events.map(function(e){ return String(e); }).filter(Boolean) : [];
+    const ALLOWED_EVENTS = ['file_imported', 'file_deleted', 'file_failed'];
+    const events = Array.isArray(b && b.events) ? b.events.map(function(e){ return String(e); }).filter(function(e){ return ALLOWED_EVENTS.indexOf(e) !== -1; }) : [];
     const cfg = { enabled: enabled, url: url, events: events };
     await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('webhook_cfg', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify(cfg)).run();
     return json({ ok: true, data: cfg });
@@ -62,9 +64,12 @@ export async function handleAdminPoolTags(request, env) {
     const b = await request.json().catch(() => null);
     if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
     const mode = b.mode || 'set';
+    if (['set', 'append', 'remove'].indexOf(mode) === -1) return json({ ok: false, error: 'mode 仅支持 set/append/remove' }, 400);
     const tags = (b.tags || []).map(String).map(function(t){ return t.trim(); }).filter(Boolean);
+    let updated = 0;
     for (const id of b.ids) {
       const cur = await env.D1_DB.prepare('SELECT tags FROM random_pool WHERE id = ?').bind(id).first();
+      if (!cur) continue;
       let next = '';
       if (mode === 'append') {
         const set = new Set(splitTags(cur && cur.tags));
@@ -77,9 +82,10 @@ export async function handleAdminPoolTags(request, env) {
       } else {
         next = tags.join(',');
       }
-      await env.D1_DB.prepare('UPDATE random_pool SET tags = ? WHERE id = ?').bind(next, id).run();
+      const r = await env.D1_DB.prepare('UPDATE random_pool SET tags = ? WHERE id = ?').bind(next, id).run();
+      if (r && r.meta && r.meta.changes) updated++;
     }
-    return json({ ok: true, updated: b.ids.length });
+    return json({ ok: true, updated: updated });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -87,21 +93,33 @@ export async function handleAdminPoolBatch(request, env) {
   try {
     const b = await request.json().catch(() => null);
     if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    // level/is_private/enabled 互斥，避免同时传入时后者被静默忽略
+    const hasLevel = b.level !== undefined;
+    const hasPrivate = b.is_private !== undefined;
+    const hasEnabled = b.enabled !== undefined;
+    const given = (hasLevel ? 1 : 0) + (hasPrivate ? 1 : 0) + (hasEnabled ? 1 : 0);
+    if (!given) return json({ ok: false, error: '缺少要设置的参数（level/is_private/enabled）' }, 400);
+    if (given > 1) return json({ ok: false, error: 'level/is_private/enabled 一次只能设置一个' }, 400);
+    if (hasLevel && (b.level === null || b.level === '')) return json({ ok: false, error: 'level 不能为空' }, 400);
+    const ops = [];
     for (const id of b.ids) {
-      if (b.level !== undefined) {
-        await env.D1_DB.prepare('UPDATE random_pool SET level = ? WHERE id = ?').bind(sanitizeLevel(b.level), id).run();
-      } else if (b.is_private !== undefined) {
+      if (hasLevel) {
+        ops.push(env.D1_DB.prepare('UPDATE random_pool SET level = ? WHERE id = ?').bind(sanitizeLevel(b.level), id));
+      } else if (hasPrivate) {
         // 转入私密库：等同 vvip 最高级，级别联动；移出私密库降级为 svip
         if (b.is_private) {
-          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 1, level = ? WHERE id = ?').bind('vvip', id).run();
+          ops.push(env.D1_DB.prepare('UPDATE random_pool SET is_private = 1, level = ? WHERE id = ?').bind('vvip', id));
         } else {
-          await env.D1_DB.prepare('UPDATE random_pool SET is_private = 0, level = ? WHERE id = ?').bind('svip', id).run();
+          ops.push(env.D1_DB.prepare('UPDATE random_pool SET is_private = 0, level = ? WHERE id = ?').bind('svip', id));
         }
       } else {
-        await env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, id).run();
+        ops.push(env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, id));
       }
     }
-    return json({ ok: true, updated: b.ids.length });
+    const res = await env.D1_DB.batch(ops);
+    let updated = 0;
+    for (const r of res) { if (r && r.meta && r.meta.changes) updated++; }
+    return json({ ok: true, updated: updated });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -109,11 +127,15 @@ export async function handleAdminPoolBatchDelete(request, env) {
   try {
     const b = await request.json().catch(() => null);
     if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    // 单次事务批量删除，部分失败不产生半生效状态
+    const ops = b.ids.map(function(id) { return env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id); });
+    const res = await env.D1_DB.batch(ops);
+    let deleted = 0;
+    for (const r of res) { if (r && r.meta && r.meta.changes) deleted++; }
     for (const id of b.ids) {
-      await env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id).run();
-      fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
+      await fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
     }
-    return json({ ok: true, deleted: b.ids.length });
+    return json({ ok: true, deleted: deleted });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -122,9 +144,15 @@ export async function handleSetFilePoolStatus(request, env) {
     const b = await request.json().catch(() => null);
     if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
     const status = b.status === 'ignored' ? 'ignored' : '';
-    let n = 0;
+    const ids = [];
     for (const id of b.ids) {
-      const r = await env.D1_DB.prepare('UPDATE files SET pool_status=? WHERE id=?').bind(status, parseInt(id, 10) || 0).run();
+      const n = parseInt(id, 10);
+      if (!n) return json({ ok: false, error: '非法文件 id: ' + id }, 400);
+      ids.push(n);
+    }
+    let n = 0;
+    for (const id of ids) {
+      const r = await env.D1_DB.prepare('UPDATE files SET pool_status=? WHERE id=?').bind(status, id).run();
       n += (r && r.meta && r.meta.changes) || 0;
     }
     return json({ ok: true, updated: n });
@@ -187,21 +215,21 @@ export async function handleAdminPoolFromTg(request, env) {
     // 级别对等：b.level 指定级别（默认继承文件级别）；b.private 标记私密（进私密库）
     const levelOverride = sanitizeLevel(b.level);
     const isPrivate = b.private ? 1 : 0;
-    let added = 0, skipped = 0;
+    let added = 0, skipped = 0, duplicated = 0;
     for (const id of b.ids) {
       const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags, level FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
       if (!f) { skipped++; continue; }
       const useTags = finalTags || f.tags || '';
       const useLevel = b.level !== undefined ? levelOverride : sanitizeLevel(f.level);
       const ok = await importFileToPool(f, { level: useLevel, isPrivate: isPrivate, tags: useTags }, env);
-      if (!ok) continue; // 已存在（含私密副本），跳过
+      if (!ok) { duplicated++; continue; } // 已存在（含私密副本），跳过
       if (finalTags) {
         // 同步文件标签，保证标签计数一致（files 与 pool 同标签）
         await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(finalTags, id).run();
       }
       added++;
     }
-    return json({ ok: true, data: { added: added, skipped: skipped } });
+    return json({ ok: true, data: { added: added, skipped: skipped, duplicated: duplicated } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -211,7 +239,7 @@ export async function handleAdminPoolDelete(request, env) {
     const id = u.searchParams.get('id');
     if (!id) return json({ ok: false, error: 'id required' }, 400);
     await env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id).run();
-    fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
+    await fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
     return json({ ok: true });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -240,20 +268,20 @@ export async function handleAdminPrivatePoolFromTg(request, env) {
     if (!b || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
     const tagsOverride = Array.isArray(b.tags) ? b.tags.map(s => String(s).trim()).filter(Boolean) : [];
     const finalTags = tagsOverride.length ? Array.from(new Set(tagsOverride)).join(',') : '';
-    let added = 0, skipped = 0;
+    let added = 0, skipped = 0, duplicated = 0;
     for (const id of b.ids) {
       const f = await env.D1_DB.prepare("SELECT id, r2_url, thumb_url, file_name, file_type, width, height, file_size, tags, level FROM files WHERE id = ? AND deleted_at IS NULL AND (pool_status IS NULL OR pool_status != 'ignored')").bind(id).first();
       if (!f) { skipped++; continue; }
       const useTags = finalTags || f.tags || '';
       // 私密内容级别固定为 vvip（最高级）
       const ok = await importFileToPool(f, { level: 'vvip', isPrivate: 1, tags: useTags }, env);
-      if (!ok) continue; // 已存在（含共享库副本），跳过
+      if (!ok) { duplicated++; continue; } // 已存在（含共享库副本），跳过
       if (finalTags) {
         await env.D1_DB.prepare('UPDATE files SET tags=? WHERE id=? AND deleted_at IS NULL').bind(finalTags, id).run();
       }
       added++;
     }
-    return json({ ok: true, data: { added: added, skipped: skipped } });
+    return json({ ok: true, data: { added: added, skipped: skipped, duplicated: duplicated } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -267,17 +295,24 @@ export async function handleByChat(request, env) {
 
 export async function handleByUser(request, env) {
   const u = new URL(request.url); const ui = u.searchParams.get('user_id'); const un = u.searchParams.get('username');
+  if (ui && !/^\d+$/.test(ui)) return json({ ok: false, error: 'user_id 必须为数字' }, 400);
   const pg = clampInt(u.searchParams.get('page') || '1', 1, 1); const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100); const off = (pg - 1) * ps;
   let w = 'WHERE deleted_at IS NULL'; const p = [];
-  if (ui) { w += ' AND user_id=?'; p.push(parseInt(ui)); } if (un) { w += ' AND username LIKE ?'; p.push('%' + un + '%'); }
+  if (ui) { w += ' AND user_id=?'; p.push(parseInt(ui, 10)); } if (un) { w += ' AND username LIKE ?'; p.push('%' + un + '%'); }
   try { const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM files ' + w).bind(...p).first(); const d = await env.D1_DB.prepare('SELECT * FROM files ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, ps, off).all(); return json({ ok: true, data: { total: t?.total || 0, page: pg, page_size: ps, items: d.results || [] } }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 export async function handleByDate(request, env) {
   const u = new URL(request.url); const d2 = u.searchParams.get('date');
-  if (!d2) return json({ ok: false, error: 'date required' });
+  if (!d2 || !/^\d{4}-\d{2}-\d{2}$/.test(d2)) return json({ ok: false, error: 'date 格式应为 YYYY-MM-DD' });
+  // created_at 存的是 UTC ISO；把用户视角的东八区日期映射为 UTC 范围 [CN 日 00:00, 次日 00:00)
+  // 否则 UTC+8 凌晨上传的文件会被归入前一日，按日期查询漏数据
+  const parts = d2.split('-');
+  const nextDay = new Date(Date.UTC(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10) + 1)).toISOString().slice(0, 10);
+  const startUtc = cnDayIso(d2);
+  const endUtc = cnDayIso(nextDay);
   const pg = clampInt(u.searchParams.get('page') || '1', 1, 1); const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100); const off = (pg - 1) * ps;
-  try { const t = await env.D1_DB.prepare("SELECT COUNT(*) as total FROM files WHERE created_at LIKE ? AND deleted_at IS NULL").bind(d2 + '%').first(); const d = await env.D1_DB.prepare("SELECT * FROM files WHERE created_at LIKE ? AND deleted_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?").bind(d2 + '%', ps, off).all(); return json({ ok: true, data: { total: t?.total || 0, date: d2, page: pg, page_size: ps, items: d.results || [] } }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
+  try { const t = await env.D1_DB.prepare("SELECT COUNT(*) as total FROM files WHERE created_at>=? AND created_at<? AND deleted_at IS NULL").bind(startUtc, endUtc).first(); const d = await env.D1_DB.prepare("SELECT * FROM files WHERE created_at>=? AND created_at<? AND deleted_at IS NULL ORDER BY id DESC LIMIT ? OFFSET ?").bind(startUtc, endUtc, ps, off).all(); return json({ ok: true, data: { total: t?.total || 0, date: d2, page: pg, page_size: ps, items: d.results || [] } }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
 export async function handleSearch(request, env) {
@@ -290,7 +325,7 @@ export async function handleSearch(request, env) {
 
 export async function handleLatest(request, env) {
   const u = new URL(request.url); const lm = clampInt(u.searchParams.get('limit') || '10', 10, 1, 50); const tp = u.searchParams.get('type') || '';
-  let w = tp ? 'WHERE file_type=? AND deleted_at IS NULL' : 'WHERE deleted_at IS NULL'; const p = tp ? [lm] : [];
+  let w = tp ? 'WHERE file_type=? AND deleted_at IS NULL' : 'WHERE deleted_at IS NULL'; const p = tp ? [tp, lm] : [lm];
   try { const d = await env.D1_DB.prepare('SELECT * FROM files ' + w + ' ORDER BY id DESC LIMIT ?').bind(...p).all(); return json({ ok: true, data: d.results || [] }); } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -321,6 +356,7 @@ export async function handleDeleteFile(request, env) {
         if (r.meta && r.meta.changes) deleted++;
       } catch (e) {}
     }
+    invalidateStatsCache();
     return json({ ok: true, deleted: deleted, message: 'Purged ' + deleted + ' file(s)' });
   }
   const list = ids ? ids.split(',').map(function(s){return s.trim();}).filter(Boolean) : [id];
@@ -339,7 +375,8 @@ export async function handleDeleteFile(request, env) {
         const r = await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=? AND deleted_at IS NULL').bind(now, one).run();
         if (r.meta && r.meta.changes) deleted++;
       }
-      fireWebhook(env, 'file_deleted', { id: one, deleted: !purge, source: 'files' }).catch(function(){});
+      // await 保证 webhook 通知在响应返回前发出（fire-and-forget 会被 Worker 冻结丢弃）
+      await fireWebhook(env, 'file_deleted', { id: one, deleted: !purge, source: 'files' }).catch(function(){});
     } catch (e) {}
   }
   invalidateStatsCache();
@@ -362,7 +399,11 @@ export async function handleTrashList(request, env) {
 // Restore: clear deleted_at so the file is visible again
 export async function handleTrashRestore(request, env) {
   const b = await request.json().catch(function(){ return null; });
-  const ids = b && Array.isArray(b.ids) ? b.ids.map(String) : [];
+  // 请求体缺失/无效一律 400，避免误触"恢复全部"；只有显式传 {"ids":[]} 才恢复全部
+  if (!b || !Array.isArray(b.ids)) {
+    return json({ ok: false, error: 'ids 必填（数组）；如需恢复全部请显式传 {"ids":[]}' }, 400);
+  }
+  const ids = b.ids.map(String);
   let restored = 0;
   if (!ids.length) {
     // Empty ids -> restore everything
@@ -395,7 +436,10 @@ export async function collectReferencedKeys(db) {
     for (const x of res) {
       if (x.storage_key) refs.add(x.storage_key);
       if (x.thumb_url && x.thumb_url.indexOf('/') >= 0) {
-        const tk = x.thumb_url.substring(x.thumb_url.lastIndexOf('/') + 1);
+        // thumb_url 存的是 <public_url>/thumbs/xxx.webp（或相对 /thumbs/xxx.webp），
+        // 需还原 R2 对象 key（thumbs/xxx.webp），否则缩略图会被误判为孤儿
+        let tk = x.thumb_url.replace(/^https?:\/\/[^/]+\//, '');
+        if (tk.indexOf('/') === 0) tk = tk.slice(1);
         if (tk) refs.add(tk);
       }
     }
@@ -455,9 +499,14 @@ export async function handleListBots(env) {
   try {
     const bots = [];
     if (env.TG_BOT_TOKEN) {
-      const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getMe');
-      const j = await r.json();
-      if (j.ok) bots.push({ token: env.TG_BOT_TOKEN.substring(0, 10) + '...', username: j.result.username, name: j.result.first_name, id: j.result.id });
+      const ctrl = new AbortController();
+      const timer = setTimeout(function() { ctrl.abort(); }, 10000);
+      try {
+        const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getMe', { signal: ctrl.signal });
+        const j = await r.json();
+        if (j.ok) bots.push({ username: j.result.username, name: j.result.first_name, id: j.result.id });
+      } catch (e) { bots.push({ username: '(bot offline)', name: '', id: '' }); }
+      finally { clearTimeout(timer); }
     }
     return json({ ok: true, data: bots });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }

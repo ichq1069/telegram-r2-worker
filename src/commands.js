@@ -26,7 +26,11 @@ export function parseMenu(menuStr) {
   try {
     const arr = JSON.parse(menuStr);
     if (!Array.isArray(arr)) return [];
-    return arr.filter(function(m) { return m && m.label; });
+    return arr.filter(function(m) {
+      if (!m || !m.label) return false;
+      if (typeof m.n === 'string') m.n = parseInt(m.n, 10); // 后台可能以字符串存 n，统一归一为数字
+      return typeof m.n === 'number' && Number.isFinite(m.n) && Number.isInteger(m.n);
+    });
   } catch (e) { return []; }
 }
 export function menuButtons(items) {
@@ -41,24 +45,38 @@ export function menuText(items) {
 }
 export async function setMenuCtx(env, chatId, cmd, items) {
   try {
-    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind('menu_ctx_' + chatId, JSON.stringify({ cmd: cmd, items: items })).run();
+    const payload = { cmd: cmd, items: items, expires_at: Date.now() + 30 * 60 * 1000 };
+    await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind('menu_ctx_' + chatId, JSON.stringify(payload)).run();
   } catch (e) {}
 }
 export async function getMenuCtx(env, chatId) {
   try {
     const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind('menu_ctx_' + chatId).first();
-    if (r && r.value) { const j = JSON.parse(r.value); if (j && Array.isArray(j.items)) return j; }
+    if (r && r.value) {
+      const j = JSON.parse(r.value);
+      if (j && Array.isArray(j.items)) {
+        // 30 分钟 TTL：过期菜单不可再用，避免用户隔天发 "2" 仍触发旧动作
+        if (!j.expires_at || Date.now() < j.expires_at) return j;
+        try { await env.D1_DB.prepare('DELETE FROM settings WHERE key=?').bind('menu_ctx_' + chatId).run(); } catch (e) {}
+      }
+    }
   } catch (e) {}
   return null;
 }
+export async function clearMenuCtx(env, chatId) {
+  if (!env || !env.D1_DB || !chatId) return;
+  try { await env.D1_DB.prepare('DELETE FROM settings WHERE key=?').bind('menu_ctx_' + chatId).run(); } catch (e) {}
+}
 export async function execMenuAction(action, chatId, env, msgId) {
+  // 无论动作是否有效，执行后都清掉菜单上下文：避免旧菜单被反复触发
+  await clearMenuCtx(env, chatId);
   if (!action) { await replyText(chatId, msgId || 0, '❌ 无效选项', env); return; }
   if (action.indexOf('text:') === 0) {
     await replyTextWithKeyboard(chatId, action.slice(5), MAIN_BUTTONS, env);
     return;
   }
-  if (action === 'retry_all') return await handleRetryCommand(chatId, env, null, 8);
-  if (action === 'retry_recent') return await handleRetryCommand(chatId, env, null, 8);
+  if (action === 'retry_all') return await handleRetryCommand(chatId, env, null, 8, true);
+  if (action === 'retry_recent') return await handleRetryCommand(chatId, env, null, 8, false);
   if (action === 'unsaved_count' || action === 'pending') return await handlePendingCommand(chatId, env);
   if (action === 'count') return await handleCountCommand(chatId, env);
   if (action === 'stats') return await handleStatsCommand(chatId, env);
@@ -123,7 +141,7 @@ export async function cfR2Usage(env) {
       body: JSON.stringify({ query: q })
     }).then(function(r) { return r.json(); });
   };
-  const acct = env.CF_ACCOUNT_ID;
+  const acct = String(env.CF_ACCOUNT_ID).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   try {
     const endDate = new Date().toISOString();
     const startDate = new Date(Date.now() - 86400000).toISOString();
@@ -204,7 +222,7 @@ export async function handleUsageForecast(env) {
 // 需要 secret CF_API_TOKEN（权限：Account.Workers Analytics:Read）+ var CF_ACCOUNT_ID
 export async function cfWorkerUsage(env) {
   if (!env.CF_API_TOKEN || !env.CF_ACCOUNT_ID) return { _err: 'no CF_API_TOKEN or CF_ACCOUNT_ID' };
-  const acct = env.CF_ACCOUNT_ID;
+  const acct = String(env.CF_ACCOUNT_ID).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const gql = function(q) {
     return fetch('https://api.cloudflare.com/client/v4/graphql', {
       method: 'POST',
@@ -384,7 +402,17 @@ export function aiThrottled(chatId) {
   const last = AI_THROTTLE[chatId] || 0;
   if (now - last < 5000) return true;
   AI_THROTTLE[chatId] = now;
+  pruneThrottle(AI_THROTTLE, now, 10 * 60 * 1000);
   return false;
+}
+// 定期清理超过保留窗口的键，避免聊天数持续增长导致内存膨胀
+function pruneThrottle(map, now, keepMs) {
+  let size = 0;
+  for (const k in map) { size++; if (now - (map[k] || 0) > keepMs) delete map[k]; }
+  if (size > 500) {
+    const cutoff = now - keepMs;
+    for (const k in map) if ((map[k] || 0) < cutoff) delete map[k];
+  }
 }
 // 判断消息文本是否为「提问/请求」，仅此类文本触发 AI 自动回复；
 // 避免图片刷屏、闲聊等非提问消息反复调用 AI 消耗配额并触发服务商 429 限流
@@ -432,6 +460,7 @@ export async function handleAdminAskAI(request, env) {
     const now = Date.now();
     if (now - (AI_ASK[ip] || 0) < 3000) return json({ ok: false, error: '请求过于频繁，请 3 秒后再试' });
     AI_ASK[ip] = now;
+    pruneThrottle(AI_ASK, now, 10 * 60 * 1000);
     const b = await request.json().catch(function(){ return {}; });
     const q = String(b.question || '').trim();
     if (!q) return json({ ok: false, error: '缺少问题' });
@@ -505,7 +534,7 @@ export async function aiUnsavedText(env, limit) {
     await env.D1_DB.prepare("UPDATE files SET processing_state='failed' WHERE processing_state IN ('downloading','hashing','uploading','saving') AND deleted_at IS NULL AND julianday(created_at) < julianday('now','-30 minutes')").run();
   } catch (e) {}
   try {
-    const n = Math.min(parseInt(limit) || 10, 15);
+    const n = Math.max(1, Math.min(parseInt(limit) || 10, 15));
     const t = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL AND processing_state != 'completed'").first();
     const d = await env.D1_DB.prepare("SELECT id, file_name, processing_state, group_ref FROM files WHERE deleted_at IS NULL AND processing_state != 'completed' ORDER BY id DESC LIMIT ?").bind(n).all();
     if ((d.results || []).length === 0) return '未转存: 0 条，全部已完成 ✓';
@@ -516,7 +545,7 @@ export async function aiUnsavedText(env, limit) {
 }
 export async function aiSearchText(env, kw, limit) {
   try {
-    const n = Math.min(parseInt(limit) || 10, 15);
+    const n = Math.max(1, Math.min(parseInt(limit) || 10, 15));
     const k = '%' + kw + '%';
     const d = await env.D1_DB.prepare("SELECT id, file_name, file_type, group_ref FROM files WHERE deleted_at IS NULL AND processing_state='completed' AND (file_name LIKE ? OR caption LIKE ? OR group_ref LIKE ? OR tags LIKE ?) ORDER BY id DESC LIMIT ?").bind(k, k, k, k, n).all();
     if (!(d.results || []).length) return '未找到「' + kw + '」相关文件';
@@ -536,7 +565,8 @@ export async function aiFileText(env, id) {
 }
 export async function triggerRetryN(env, n) {
   try {
-    const fakeReq = { json: function() { return Promise.resolve({ all: true, limit: n }); } };
+    const lim = Math.max(1, Math.min(parseInt(n) || 8, 50));
+    const fakeReq = { json: function() { return Promise.resolve({ all: true, limit: lim }); } };
     const r = await handleUnsavedRetry(fakeReq, env);
     return (r && r.started) || 0;
   } catch (e) { return 0; }
@@ -588,11 +618,11 @@ export async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   }
 
   if (cmd === '/file') {
-    if (!args || isNaN(args)) {
+    if (!/^\d+$/.test(String(args || '').trim())) {
       await replyText(chatId, msgId, 'Usage: /file <id>\nExample: /file 123', env);
       return { ok: true };
     }
-    return await handleFileCommand(chatId, msgId, parseInt(args), env);
+    return await handleFileCommand(chatId, msgId, parseInt(String(args).trim(), 10), env);
   }
 
   if (cmd === '/search') {
@@ -698,18 +728,26 @@ export async function handlePendingCommand(chatId, env) {
   } catch (e) { await replyText(chatId, 0, '❌ ' + e.message, env); return { ok: true }; }
 }
 
-// 命令：继续完成未转存入库（默认批 8 条，限频 60s；limit 由菜单选项传入）
-export var lastRetryCmdTs = 0;
-export async function handleRetryCommand(chatId, env, waitFn, limit) {
+// 命令：继续完成未转存入库（默认批 8 条，限频 60s/会话；limit/all 由菜单选项传入）
+var lastRetryCmdTs = {}; // 按 chatId 独立限频，避免一个群触发后所有会话被连带拒绝
+export async function handleRetryCommand(chatId, env, waitFn, limit, all) {
   const now = Date.now();
-  if (now - lastRetryCmdTs < 60000) {
-    await replyText(chatId, 0, '⏳ 60 秒内已执行过，请稍后再试（' + Math.ceil((60000 - (now - lastRetryCmdTs)) / 1000) + 's）', env);
+  const last = lastRetryCmdTs[chatId] || 0;
+  if (now - last < 60000) {
+    await replyText(chatId, 0, '⏳ 本会话 60 秒内已执行过，请稍后再试（' + Math.ceil((60000 - (now - last)) / 1000) + 's）', env);
     return { ok: true };
   }
-  lastRetryCmdTs = now;
+  lastRetryCmdTs[chatId] = now;
+  // 定期清理超过 10 分钟的会话记录，避免聊天数持续增长导致内存膨胀
+  if (Object.keys(lastRetryCmdTs).length > 500) {
+    const cutoff = now - 10 * 60 * 1000;
+    for (const k in lastRetryCmdTs) if (lastRetryCmdTs[k] < cutoff) delete lastRetryCmdTs[k];
+  }
   if (!env.D1_DB) { await replyText(chatId, 0, '❌ D1 未配置', env); return { ok: true }; }
   try {
-    const fakeReq = { json: function() { return Promise.resolve({ all: true, limit: limit || 8 }); } };
+    // 有队列时"重试全部"可安全拉起更多条（每条仅 1 个 subrequest 入队）；无队列直接进程内转存，保守批 8 条
+    const lim = all ? (env.FILE_QUEUE ? 50 : 8) : (limit || 8);
+    const fakeReq = { json: function() { return Promise.resolve({ all: !!all, limit: lim }); } };
     const r = await handleUnsavedRetry(fakeReq, env, { waitUntil: waitFn });
     if (r && r.ok) {
       await replyTextWithKeyboard(chatId, '🚀 已开始转存 ' + (r.started || 0) + ' 条。剩余可稍后再点「继续转存」（60s 后）或在后台「未转存」页手动处理。', MAIN_BUTTONS, env);
@@ -744,7 +782,7 @@ export async function handleHealthCommand(chatId, env) {
 }
 
 export async function handleStatsCommand(chatId, env) {
-  if (!env.D1_DB) { await replyText(chatId, 0, '�?D1 not configured', env); return { ok: true }; }
+  if (!env.D1_DB) { await replyText(chatId, 0, '❌ D1 未配置', env); return { ok: true }; }
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL').first();
     const s = await env.D1_DB.prepare('SELECT SUM(file_size) as s FROM files WHERE deleted_at IS NULL').first();
@@ -768,16 +806,16 @@ export async function handleStatsCommand(chatId, env) {
     await replyTextWithKeyboard(chatId, text, MAIN_BUTTONS, env);
     return { ok: true };
   } catch (e) {
-    await replyText(chatId, 0, '�?Stats error: ' + e.message, env);
+    await replyText(chatId, 0, '❌ 统计出错: ' + e.message, env);
     return { ok: true };
   }
 }
 
 export async function handleFileCommand(chatId, msgId, fileId, env) {
-  if (!env.D1_DB) { await replyText(chatId, msgId, '�?D1 not configured', env); return { ok: true }; }
+  if (!env.D1_DB) { await replyText(chatId, msgId, '❌ D1 未配置', env); return { ok: true }; }
   try {
     const f = await env.D1_DB.prepare('SELECT * FROM files WHERE id = ? AND deleted_at IS NULL').bind(fileId).first();
-    if (!f) { await replyText(chatId, msgId, '�?File not found', env); return { ok: true }; }
+    if (!f) { await replyText(chatId, msgId, '❌ 未找到该文件', env); return { ok: true }; }
 
     const ic = { photo: '🖼', document: '📄', video: '🎬', audio: '🎵', voice: '🎤' };
     let text = `${ic[f.file_type] || '📁'} **File #${f.id}**\n\n`;
@@ -793,46 +831,52 @@ export async function handleFileCommand(chatId, msgId, fileId, env) {
     await replyText(chatId, msgId, text, env);
     return { ok: true };
   } catch (e) {
-    await replyText(chatId, msgId, '�?Error: ' + e.message, env);
+    await replyText(chatId, msgId, '❌ 查询出错: ' + e.message, env);
     return { ok: true };
   }
 }
 
 export async function handleSearchCommand(chatId, msgId, keyword, env) {
-  if (!env.D1_DB) { await replyText(chatId, msgId, '�?D1 not configured', env); return { ok: true }; }
+  if (!env.D1_DB) { await replyText(chatId, msgId, '❌ D1 未配置', env); return { ok: true }; }
   try {
     const lk = '%' + keyword + '%';
+    // 与 AI search_files 字段保持一致：文件名/说明/群名/编号/标签
     const d = await env.D1_DB.prepare(
-      'SELECT id, file_name, file_type, file_size, chat_title, r2_url FROM files WHERE (file_name LIKE ? OR caption LIKE ? OR chat_title LIKE ?) AND deleted_at IS NULL ORDER BY id DESC LIMIT 5'
-    ).bind(lk, lk, lk).all();
+      'SELECT id, file_name, file_type, file_size, chat_title, r2_url, group_ref, tags FROM files WHERE (file_name LIKE ? OR caption LIKE ? OR chat_title LIKE ? OR group_ref LIKE ? OR tags LIKE ?) AND deleted_at IS NULL ORDER BY id DESC LIMIT 5'
+    ).bind(lk, lk, lk, lk, lk).all();
 
     if (!d.results?.length) {
-      await replyText(chatId, msgId, `🔍 No results for "${keyword}"`, env);
+      await replyText(chatId, msgId, '🔍 未找到「' + keyword + '」相关文件', env);
       return { ok: true };
     }
 
-    let text = `🔍 **Search: "${keyword}"** (${d.results.length} results)\n\n`;
+    let text = '🔍 **搜索: "' + keyword + '"** (' + d.results.length + ' 条)\n\n';
     for (const f of d.results) {
       const ic = { photo: '🖼', document: '📄', video: '🎬', audio: '🎵' };
-      text += `${ic[f.file_type] || '📁'} #${f.id} ${f.file_name} (${fmtSize(f.file_size)})\n`;
-      text += `   ${f.chat_title} �?${f.r2_url}\n\n`;
+      text += `${ic[f.file_type] || '📁'} #${f.group_ref || f.id} ${f.file_name} (${fmtSize(f.file_size)})\n`;
+      text += `   ${f.chat_title} → ${f.r2_url}\n\n`;
     }
     await replyText(chatId, msgId, text, env);
     return { ok: true };
   } catch (e) {
-    await replyText(chatId, msgId, '�?Error: ' + e.message, env);
+    await replyText(chatId, msgId, '❌ 搜索出错: ' + e.message, env);
     return { ok: true };
   }
 }
 
 // 群内索图：从共享库 random_pool 随机抽 1 张符合条件(enabled=1 + level<=pt 且非私密)的图发回群里。
 // 参数为空则完全随机。支持逗号分隔标签（命中任意一个即可）或关键词（标题/URL 包含）。
+// 等级过滤：默认仅公开 'pt' 图可被群内抽出；如需按用户等级解锁 vip/vvip，可调整 IMG_LEVEL_FILTER
+var IMG_LEVEL_FILTER = ['pt'];
+function imgLevelSql() {
+  return IMG_LEVEL_FILTER.map(function(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }).join(',');
+}
 export async function handleImgCommand(chatId, msgId, args, env) {
   if (!env.D1_DB) { await replyText(chatId, msgId, '❌ D1 未配置', env); return { ok: true }; }
   try {
     const parts = String(args || '').split(/[\s,，]+/).map(function(s){ return s.trim(); }).filter(Boolean);
     const tags = parts.length ? parts : [];
-    let w = "WHERE enabled=1 AND is_private=0 AND level IN ('pt')"; const p = [];
+    let w = "WHERE enabled=1 AND is_private=0 AND level IN (" + imgLevelSql() + ")"; const p = [];
     if (tags.length) {
       const ts = [];
       tags.forEach(function(t) {
@@ -848,15 +892,17 @@ export async function handleImgCommand(chatId, msgId, args, env) {
       return { ok: true };
     }
     const cap = (it.title || '') + (it.tags ? '\n#' + splitTags(it.tags).join(' #') : '');
-    // 优先发图片（sendPhoto 支持 URL）；非图片类型退化为发链接文本
+    // 优先发图片（sendPhoto 支持 URL）；非图片类型或发送失败时退化为发链接文本
     if (it.file_type === 'photo' && it.url) {
       try {
-        await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendPhoto', {
+        const r = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendPhoto', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ chat_id: chatId, photo: it.url, caption: String(cap).slice(0, 1024), parse_mode: '' })
         });
-        return { ok: true, img: true };
+        const j = await r.json().catch(function() { return { ok: false }; });
+        if (j && j.ok) return { ok: true, img: true };
+        // 发送失败（URL 失效/类型不符等）：继续走文本兜底
       } catch (e) {}
     }
     await replyText(chatId, msgId, '📸 ' + (it.title || '（无标题）') + '\n' + it.url + (it.tags ? '\n#' + splitTags(it.tags).join(' #') : ''), env);
@@ -887,7 +933,7 @@ export async function handleInlineQuery(iq, env) {
   if (!env.D1_DB) return await fail('❌ D1 未配置');
   try {
     const parts = String(query).split(/[\s,，]+/).map(function(s){ return s.trim(); }).filter(Boolean);
-    let w = "WHERE enabled=1 AND is_private=0 AND level IN ('pt')"; const p = [];
+    let w = "WHERE enabled=1 AND is_private=0 AND level IN (" + imgLevelSql() + ")"; const p = [];
     if (parts.length) {
       const ts = [];
       parts.forEach(function(t) {
@@ -902,14 +948,20 @@ export async function handleInlineQuery(iq, env) {
     const results = rows.map(function(r, i) {
       const cap = (r.title || '') + (r.tags ? '\n#' + splitTags(r.tags).join(' #') : '');
       const w = r.width || 0, h = r.height || 0;
-      const photoW = w || 800, photoH = h || 600;
-      const item = { type: 'photo', id: 'i' + r.id + '_' + i, title: r.title || (parts.join(' ') || '图片') };
-      item.photo_url = r.url;
-      item.thumb_url = r.thumb_url || r.url;
-      item.photo_width = photoW;
-      item.photo_height = photoH;
-      item.caption = String(cap).slice(0, 1024);
-      return item;
+      // 图片类：photo 结果；非图片类（video/document 等）：article 兜底展示标题+链接，避免把非图片 URL 硬塞给 photo_url 被 Telegram 拒收
+      if (r.file_type === 'photo') {
+        return {
+          type: 'photo', id: 'i' + r.id + '_' + i, title: r.title || (parts.join(' ') || '图片'),
+          photo_url: r.url, thumb_url: r.thumb_url || r.url,
+          photo_width: w || 800, photo_height: h || 600, caption: String(cap).slice(0, 1024)
+        };
+      }
+      return {
+        type: 'article', id: 'a' + r.id + '_' + i, title: r.title || (r.file_type || '文件'),
+        description: String(cap).slice(0, 256) || undefined,
+        message_text: '📄 ' + (r.title || '文件') + (r.tags ? '\n#' + splitTags(r.tags).join(' #') : '') + '\n' + r.url,
+        thumb_url: r.thumb_url || r.url, hide_url: true
+      };
     });
     await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/answerInlineQuery', {
       method: 'POST',

@@ -75,9 +75,11 @@ export async function handleUnsavedRetry(request, env, ctx) {
       // 用展开运算符而非 bind.apply（D1 对 apply(null,...) 会报 dbSession null 错误）
       rows = (await env.D1_DB.prepare('SELECT * FROM files WHERE id IN (' + marks + ') AND deleted_at IS NULL').bind(...arr).all()).results || [];
     } else {
-      // 免费版单调用最多 50 个子请求（每条转存约占 5-8 个），默认批 8 条最安全；limit 可指定（最大 10）
+      // 免费版单调用最多 50 个子请求（每条转存约占 5-8 个），默认批 8 条最安全；limit 可指定
+      // all=true（重试全部）时上限放宽到 50（配合 FILE_QUEUE 每条仅 1 个 subrequest 入队）
       // 包含 downloading 状态：卡住的任务需要重试
-      const lim = (b && b.limit) ? Math.min(parseInt(b.limit) || 8, 10) : 8;
+      const raw = parseInt(b && b.limit, 10);
+      const lim = Math.max(1, Math.min(Number.isFinite(raw) ? raw : (b && b.all ? 50 : 8), b && b.all ? 50 : 10));
       rows = (await env.D1_DB.prepare("SELECT * FROM files WHERE deleted_at IS NULL AND processing_state IN ('pending','failed','downloading') ORDER BY id ASC LIMIT ?").bind(lim).all()).results || [];
     }
     let started = 0;
