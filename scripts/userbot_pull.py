@@ -640,12 +640,14 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             print(f"  翻页统计：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），新增条目 {len(payload)} 个，游标推进到 msg {min_msg_id}", file=sys.stderr, flush=True)
         else:
             print(f"  浏览统计：遍历 {msg_count} 条消息，共 {scanned} 张媒体（图片 {scanned - video_count} + 视频 {video_count}），聚合条目 {len(payload)} 个（相册 {group_count} 个 / 单媒体 {solo_count} 个）", file=sys.stderr, flush=True)
-        # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；append=1 追加合并（翻页），否则整体替换；cursor 回传供下次续扫
+        # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；第一个 chunk 用 append=0 全量替换，后续用 append=1 追加合并
         for i in range(0, len(payload), ALBUM_MAX_PER_POST):
             chunk = payload[i:i + ALBUM_MAX_PER_POST]
             try:
+                is_first_chunk = (i == 0)
+                append_val = 0 if (is_first_chunk and not (cursor and cursor > 0)) else 1
                 r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
-                                  json={"albums": chunk, "append": 1 if (cursor and cursor > 0) else 0, "cursor": min_msg_id}, timeout=60)
+                                  json={"albums": chunk, "append": append_val, "cursor": min_msg_id}, timeout=60)
                 if r.status_code != 200:
                     print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
             except Exception as e:

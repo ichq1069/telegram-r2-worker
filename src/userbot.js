@@ -171,7 +171,7 @@ export async function handleUserbotTaskProgress(request, env, id) {
     const vals = [lastId, done, skipped, new Date().toISOString()];
     if (scanProgress !== undefined) { sets.push('scan_progress=?'); vals.push(scanProgress); }
     // scan_progress phase=done 时把 mode 从 list 改回 normal，让前端停止轮询并加载相册数据
-    if (scanProgress && scanProgress.indexOf('"phase":"done"') !== -1) {
+    if (scanProgress && scanProgress.indexOf('"done"') !== -1) {
       sets.push("mode='normal'");
     }
     vals.push(id);
