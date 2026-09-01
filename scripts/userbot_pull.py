@@ -47,8 +47,8 @@ from telethon.utils import pack_bot_file_id
 # 与 worker /api/v1/upload 一致：≤19MB 走 multipart；>19MB ≤90MB 走 stream 流式
 UPLOAD_SMALL_MAX = 19 * 1024 * 1024
 UPLOAD_HARD_MAX = 90 * 1024 * 1024
-# 相册上报分片：单次 POST 最多多少个相册
-ALBUM_MAX_PER_POST = 500
+# 相册上报分片：单次 POST 最多多少个相册（D1 batch 逐条写入，需控制大小避免超时）
+ALBUM_MAX_PER_POST = 100
 # 翻历史消息的最小间隔（秒）
 ITER_WAIT = 1.0
 # 下载/上传前的最小间隔
@@ -518,7 +518,7 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
     group_count = 0
     video_count = 0
     t0 = time.time()
-    BATCH_REPORT_SIZE = 500  # 每 500 个新条目上报一次
+    BATCH_REPORT_SIZE = 100  # 每 100 个新条目上报一次（减少 JSON 大小）
 
     async def report_scan_progress(phase):
         """向 worker 上报列表扫描实时进度（不阻塞主循环，失败静默）"""
@@ -572,14 +572,32 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             chunk = payload[i:i + ALBUM_MAX_PER_POST]
             try:
                 append_val = 0 if (is_first_batch and i == 0 and not (cursor and cursor > 0)) else 1
+                body = {"albums": chunk, "append": append_val, "cursor": min_msg_id}
+                import json as _json
+                body_str = _json.dumps(body, ensure_ascii=False)
+                with open("/tmp/ubot_debug.log", "a") as _f:
+                    _f.write(f"[REPORT] chunk_size={len(chunk)} body_bytes={len(body_str.encode())} append={append_val} cursor={min_msg_id}\n")
                 r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
-                                  json={"albums": chunk, "append": append_val, "cursor": min_msg_id}, timeout=60)
+                                  json=body, timeout=120)
                 if r.status_code != 200:
-                    print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+                    print(f"  相册上报失败: HTTP {r.status_code} {r.text[:200]}", file=sys.stderr)
+                    with open("/tmp/ubot_debug.log", "a") as _f:
+                        _f.write(f"[REPORT FAIL] HTTP {r.status_code}: {r.text[:300]}\n")
                 else:
                     print(f"  ✓ 上报 {len(chunk)} 个条目（append={append_val}）", file=sys.stderr, flush=True)
+                    with open("/tmp/ubot_debug.log", "a") as _f:
+                        _f.write(f"[REPORT OK] {len(chunk)} items\n")
+            except httpx.TimeoutException as e:
+                print(f"  相册上报超时: {e}", file=sys.stderr)
+                with open("/tmp/ubot_debug.log", "a") as _f:
+                    _f.write(f"[REPORT TIMEOUT] {e}\n")
             except Exception as e:
-                print(f"  相册上报异常: {e}", file=sys.stderr)
+                import traceback
+                tb = traceback.format_exc()
+                print(f"  相册上报异常: {type(e).__name__}: {e}", file=sys.stderr)
+                print(tb, file=sys.stderr)
+                with open("/tmp/ubot_debug.log", "a") as _f:
+                    _f.write(f"[REPORT EXCEPTION] {type(e).__name__}: {e}\n{tb}\n")
 
     kw = dict(reverse=False, wait_time=ITER_WAIT)
     if cursor and cursor > 0:

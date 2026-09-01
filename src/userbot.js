@@ -266,17 +266,19 @@ export async function handleUbotAlbumsReport(request, env, id) {
     }
     if (albums.length) {
       const now = new Date().toISOString();
+      const stmtText = append
+        ? 'INSERT OR REPLACE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+        : 'INSERT INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)';
+      const batch = [];
       for (const a of albums) {
         const gid = String(a.grouped_id || '').slice(0, 64);
         if (!gid) continue;
         const msgIds = Array.isArray(a.msg_ids) ? a.msg_ids.filter(function(x) { return /^\d+$/.test(String(x)); }).slice(0, 500) : [];
         const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500), type: String(s.type || 'photo'), duration: Number(s.duration) || 0, file_id: String(s.file_id || '').slice(0, 200) }; }).slice(0, 500) : [];
         if (!msgIds.length) continue;
-        const stmt = append
-          ? env.D1_DB.prepare('INSERT OR REPLACE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-          : env.D1_DB.prepare('INSERT INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)');
-        await stmt.bind(id, gid, msgIds.join(','), msgIds.length, JSON.stringify(sizes), String(a.cover_url || '').slice(0, 500), Number(a.first_ts) || 0, a.has_oversize ? 1 : 0, now).run();
+        batch.push(env.D1_DB.prepare(stmtText).bind(id, gid, msgIds.join(','), msgIds.length, JSON.stringify(sizes), String(a.cover_url || '').slice(0, 500), Number(a.first_ts) || 0, a.has_oversize ? 1 : 0, now));
       }
+      if (batch.length) await env.D1_DB.batch(batch);
     }
     // 回写翻页游标：本次已扫到的最早 msg id（供下次「加载更早」续扫）
     await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='normal', album_cursor=?, updated_at=? WHERE id=? AND mode='list'")
