@@ -170,6 +170,10 @@ export async function handleUserbotTaskProgress(request, env, id) {
     const sets = ['last_id=?', 'done=?', 'skipped=?', 'updated_at=?'];
     const vals = [lastId, done, skipped, new Date().toISOString()];
     if (scanProgress !== undefined) { sets.push('scan_progress=?'); vals.push(scanProgress); }
+    // scan_progress phase=done 时把 mode 从 list 改回 normal，让前端停止轮询并加载相册数据
+    if (scanProgress && scanProgress.indexOf('"phase":"done"') !== -1) {
+      sets.push("mode='normal'");
+    }
     vals.push(id);
     await env.D1_DB.prepare('UPDATE userbot_tasks SET ' + sets.join(', ') + ' WHERE id=?').bind(...vals).run();
     return json({ ok: true, data: { saved: true } });
@@ -266,7 +270,7 @@ export async function handleUbotAlbumsReport(request, env, id) {
         const gid = String(a.grouped_id || '').slice(0, 64);
         if (!gid) continue;
         const msgIds = Array.isArray(a.msg_ids) ? a.msg_ids.filter(function(x) { return /^\d+$/.test(String(x)); }).slice(0, 500) : [];
-        const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500) }; }).slice(0, 500) : [];
+        const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500), type: String(s.type || 'photo'), duration: Number(s.duration) || 0 }; }).slice(0, 500) : [];
         if (!msgIds.length) continue;
         const stmt = append
           ? env.D1_DB.prepare('INSERT OR REPLACE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
