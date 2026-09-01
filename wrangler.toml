@@ -14,11 +14,10 @@ R2_PUBLIC_URL = "https://telegramup.wo58.cn"
 # Cloudflare 账号 ID（GraphQL Analytics 查 R2 官方用量用；机密 Token 见 secret CF_API_TOKEN）
 CF_ACCOUNT_ID = "77fc93b832a9f816ee841c3a321b57b5"
 
-# R2 存储桶绑定
+# R2 存储桶绑定（R2 Smart Tiering 属桶级/zone 级设置，请在 R2 Dashboard 开启，此处不支持）
 [[r2_buckets]]
 binding = "R2_BUCKET"
 bucket_name = "bot-telegram"
-smart_tiered_cache = true   # 智能分层缓存：热数据 CDN 缓存、冷数据按需回源，读性能更好且省钱
 
 # D1 数据库绑定（telegram-url，含 files/random_pool/settings/api_keys 等表）
 [[d1_databases]]
@@ -31,20 +30,7 @@ database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
 [triggers]
 crons = ["*/2 * * * *", "0 1 * * *"]
 
-# 可观测性：Workers Logs（免费额度 200k 事件/天；trace 关闭省额度）
-# 注意：主 [observability] enabled 必须为 true，否则子配置不生效（与面板 Logs 同源）
+# 可观测性：Workers Logs（免费额度 200k 事件/天）
 [observability]
 enabled = true
-head_sampling_rate = 1
-redact_query_string = false
-
-[observability.logs]
-enabled = true
-head_sampling_rate = 1
-persist = true
-invocation_logs = true
-
-[observability.traces]
-enabled = false
-persist = true
 head_sampling_rate = 1
