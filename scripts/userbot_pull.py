@@ -338,7 +338,7 @@ async def run_task_once(hc, args, task_id):
 
     chat_id = int(task.get("chat_id") or 0)
     tags = task.get("tags") or ""
-    pool = 1 if task.get("pool") else 0
+    pool = int(task.get("pool") or 0)
     level = task.get("level") or "pt"
     max_size = int(task.get("max_size") or 0) or UPLOAD_SMALL_MAX
     if max_size > UPLOAD_HARD_MAX:
@@ -351,7 +351,8 @@ async def run_task_once(hc, args, task_id):
     scan_limit = int(task.get("scan_limit") or 0) or ALBUM_MAX_PER_POST * 4
     album_cursor = int(task.get("album_cursor") or 0)  # 翻页游标：>0 表示从此 msg id 之前继续向更早枚举
 
-    print(f"任务 #{task_id}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool} level={level} max_size={max_size} limit={limit} mode={mode}")
+    pool_names = {0: "Tele库", 1: "共享库", 2: "私密库"}
+    print(f"任务 #{task_id}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool_names.get(pool, str(pool))} level={level} max_size={max_size} limit={limit} mode={mode}")
     if mode == "list":
         print(f"列表模式：枚举最近 {scan_limit} 条媒体聚合（图片+视频，不含文字）" + (f"，游标 {album_cursor} 向更早翻页" if album_cursor else ""))
     elif mode == "selected":
@@ -473,8 +474,10 @@ async def run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, l
             caption = (msg.message or "").splitlines()[0] if msg.message else ""
             title = (title_prefix + " " + caption).strip()[:200]
             params = {"api_key": upload_api_key, "tags": tags, "title": title, "level": level}
-            if pool:
+            if pool == 1:
                 params["pool"] = "1"
+            elif pool == 2:
+                params["is_private"] = "1"
             try:
                 r = await upload_media(hc, server, task_id, msg.id, data, params)
                 if r.status_code != 200:
@@ -724,8 +727,10 @@ async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size,
                 caption = (msg.message or "").splitlines()[0] if msg.message else ""
                 title = (title_prefix + " " + caption).strip()[:200]
                 params = {"api_key": upload_api_key, "tags": tags, "title": title, "level": level}
-                if pool:
+                if pool == 1:
                     params["pool"] = "1"
+                elif pool == 2:
+                    params["is_private"] = "1"
                 try:
                     r = await upload_media(hc, server, task_id, msg.id, data, params, media_type=media_type)
                     if r.status_code != 200:

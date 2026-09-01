@@ -3210,7 +3210,7 @@ async function loadUbotTasks() {
   var html = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>群 (chat_id)</th><th>标题</th><th>标签</th><th>库</th><th>级别</th><th>最大MB</th><th>限数</th><th>断点 last_id</th><th>累计</th><th>启用</th><th>最近执行</th><th style="width:150px">操作</th></tr></thead><tbody>';
   for (var i = 0; i < list.length; i++) {
     var t = list[i];
-    var poolTxt = t.pool ? "共享库" : "私密库";
+    var poolTxt = t.pool === 1 ? "共享库" : t.pool === 2 ? "私密库" : "Tele 库";
     html += '<tr>' +
       '<td>' + t.id + '</td>' +
       '<td>' + escStr(t.chat_id) + '</td>' +
@@ -3690,7 +3690,7 @@ function ubotEdit(id, prefill) {
       '<div class="fr"><label>标题（可选，仅备注）</label><input class="inp" id="ubTitle" value="' + escStr(t ? t.title : (prefill.title || "")) + '"></div>' +
       '<div class="fr"><label>标签（逗号分隔，抓取到的图片入库时带上）</label><input class="inp" id="ubTags" value="' + escStr(t ? t.tags : "") + '" placeholder="风景,美女"></div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
-        '<div class="fr" style="margin:0"><label>入库到</label><select class="inp" id="ubPool"><option value="0" ' + (t && t.pool ? "" : "selected") + '>私密库</option><option value="1" ' + (t && t.pool ? "selected" : "") + '>共享库</option></select></div>' +
+        '<div class="fr" style="margin:0"><label>入库到</label><select class="inp" id="ubPool"><option value="0" ' + (t && t.pool === 0 ? "selected" : (t && !t.pool ? "" : (!t ? "selected" : ""))) + '>Tele 库</option><option value="1" ' + (t && t.pool === 1 ? "selected" : "") + '>共享库</option><option value="2" ' + (t && t.pool === 2 ? "selected" : "") + '>私密库</option></select></div>' +
         '<div class="fr" style="margin:0"><label>级别</label><select class="inp" id="ubLevel"><option>pt</option><option>vip</option><option>svip</option><option>vvip</option></select></div>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
