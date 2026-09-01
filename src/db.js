@@ -5,7 +5,7 @@ let _tablesEnsured = false;
 // 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
 // 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
 // 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
-const SCHEMA_VERSION = '8';
+const SCHEMA_VERSION = '9';
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
@@ -205,7 +205,7 @@ export async function ensureTables(db) {
     } catch (e11) { console.error('webhook_logs table:', e11.message); }
     // userbot_tasks：MTProto 群历史抓取任务（每群一条，脚本从后台拉配置执行，断点 last_id 回写）
     try {
-      await db.exec("CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', mode TEXT DEFAULT 'normal', selected_msg_ids TEXT DEFAULT '', scan_limit INTEGER DEFAULT 2000, album_cursor INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT)");
+      await db.exec("CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', mode TEXT DEFAULT 'normal', selected_msg_ids TEXT DEFAULT '', scan_limit INTEGER DEFAULT 2000, album_cursor INTEGER DEFAULT 0, scan_progress TEXT DEFAULT '', created_at TEXT, updated_at TEXT)");
     } catch (e12) { console.error('userbot_tasks table:', e12.message); }
     // ub_servers：群抓取执行服务器节点（VPS/Containers），脚本定时心跳上报在线状态
     try {
@@ -223,8 +223,9 @@ export async function ensureTables(db) {
       if (utn.indexOf('selected_msg_ids') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN selected_msg_ids TEXT DEFAULT ''");
       if (utn.indexOf('scan_limit') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN scan_limit INTEGER DEFAULT 2000");
       if (utn.indexOf('album_cursor') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN album_cursor INTEGER DEFAULT 0");
-      if (utn.indexOf('mode') === -1 || utn.indexOf('selected_msg_ids') === -1 || utn.indexOf('scan_limit') === -1 || utn.indexOf('album_cursor') === -1) {
-        console.log('migrated: userbot_tasks mode/selected_msg_ids/scan_limit/album_cursor columns');
+      if (utn.indexOf('scan_progress') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN scan_progress TEXT DEFAULT ''");
+      if (utn.indexOf('mode') === -1 || utn.indexOf('selected_msg_ids') === -1 || utn.indexOf('scan_limit') === -1 || utn.indexOf('album_cursor') === -1 || utn.indexOf('scan_progress') === -1) {
+        console.log('migrated: userbot_tasks mode/selected_msg_ids/scan_limit/album_cursor/scan_progress columns');
       }
     } catch (e12b) { console.error('userbot_tasks migration:', e12b.message); }
     // ubot_albums：群相册元数据缓存（列表模式结果，任务隔离，重建时先删后插）

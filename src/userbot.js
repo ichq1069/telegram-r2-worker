@@ -15,7 +15,7 @@ function taskToOut(t) {
     id: t.id, chat_id: t.chat_id, title: t.title, tags: t.tags, pool: t.pool, level: t.level,
     max_size: t.max_size, limit: t.limit, enabled: t.enabled, last_id: t.last_id,
     done: t.done, skipped: t.skipped, note: t.note,
-    mode: t.mode || 'normal', selected_msg_ids: t.selected_msg_ids || '', scan_limit: t.scan_limit || ALBUM_SCAN_LIMIT, album_cursor: Number(t.album_cursor) || 0
+    mode: t.mode || 'normal', selected_msg_ids: t.selected_msg_ids || '', scan_limit: t.scan_limit || ALBUM_SCAN_LIMIT, album_cursor: Number(t.album_cursor) || 0, scan_progress: t.scan_progress || ''
   };
 }
 
@@ -166,8 +166,12 @@ export async function handleUserbotTaskProgress(request, env, id) {
     const lastId = clampInt(b.last_id, 0, 0, 9000000000000000000);
     const done = clampInt(b.done, 0, 0, 1000000000);
     const skipped = clampInt(b.skipped, 0, 0, 1000000000);
-    await env.D1_DB.prepare('UPDATE userbot_tasks SET last_id=?, done=?, skipped=?, updated_at=? WHERE id=?')
-      .bind(lastId, done, skipped, new Date().toISOString(), id).run();
+    const scanProgress = b.scan_progress !== undefined ? String(b.scan_progress).slice(0, 1000) : undefined;
+    const sets = ['last_id=?', 'done=?', 'skipped=?', 'updated_at=?'];
+    const vals = [lastId, done, skipped, new Date().toISOString()];
+    if (scanProgress !== undefined) { sets.push('scan_progress=?'); vals.push(scanProgress); }
+    vals.push(id);
+    await env.D1_DB.prepare('UPDATE userbot_tasks SET ' + sets.join(', ') + ' WHERE id=?').bind(...vals).run();
     return json({ ok: true, data: { saved: true } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -183,10 +187,10 @@ export async function handleAdminUbotAlbumListAction(request, env, id) {
     // before_id = 翻页游标：从此 msg id 之前继续向更早枚举；缺省 0 = 从头扫描
     const before_id = parseInt(b.before_id || '0', 10);
     if (!isNaN(before_id) && before_id > 0) {
-      await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=?, updated_at=? WHERE id=?")
+      await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=?, scan_progress='', updated_at=? WHERE id=?")
         .bind(scan, before_id, new Date().toISOString(), id).run();
     } else {
-      await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=0, updated_at=? WHERE id=?")
+      await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=0, scan_progress='', updated_at=? WHERE id=?")
         .bind(scan, new Date().toISOString(), id).run();
     }
     return json({ ok: true, data: { triggered: true, scan_limit: scan, before_id: before_id || 0 } });

@@ -503,7 +503,8 @@ async def run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, l
 
 async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args, cursor=0):
     """列表模式：枚举消息，只统计媒体（图片+视频），聚合相册，传封面缩略图。
-    cursor>0 时从该 msg id 之前继续向更早枚举（翻页）；无 grouped_id 的单媒体也纳入（gid=solo_<id>）。"""
+    cursor>0 时从该 msg id 之前继续向更早枚举（翻页）；无 grouped_id 的单媒体也纳入（gid=solo_<id>）。
+    通过 progress 接口实时上报扫描进度，前端可轮询显示。"""
     albums = {}  # grouped_id -> {msg_ids, sizes, first_ts}
     scanned = 0   # 媒体计数（只计 photo/video）
     msg_count = 0  # 消息遍历数（包括文字等非媒体，用于进度）
@@ -511,6 +512,18 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
     group_count = 0
     video_count = 0
     t0 = time.time()
+
+    async def report_scan_progress(phase):
+        """向 worker 上报列表扫描实时进度（不阻塞主循环，失败静默）"""
+        try:
+            elapsed = int(time.time() - t0)
+            sp = json.dumps({"phase": phase, "scanned_msgs": msg_count, "media_count": scanned,
+                             "video_count": video_count, "albums_count": len(albums),
+                             "elapsed_s": elapsed, "scan_limit": scan_limit}, ensure_ascii=False)
+            await hc.post(f"{server}/api/ubot/task/{task_id}/progress?token={args.token}",
+                          json={"scan_progress": sp}, timeout=10)
+        except Exception:
+            pass
     kw = dict(reverse=False, wait_time=ITER_WAIT)
     if cursor and cursor > 0:
         kw["offset_id"] = cursor
@@ -538,6 +551,7 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
         scanned += 1
         if scanned % 100 == 0:
             print(f"  [进度] 已扫描 {msg_count} 条消息 / 媒体 {scanned}/{scan_limit}，聚合 {len(albums)} 个条目（耗时 {int(time.time()-t0)}s）", file=sys.stderr, flush=True)
+            await report_scan_progress("scanning")
         media_type = "video" if is_video else "photo"
         if media_type == "video":
             video_count += 1
@@ -578,6 +592,7 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
                 a["first_ts"] = ts0
 
     # 每相册上传封面 + 每张图/视频缩略图（thumb_url 供后台逐张预览/勾选）
+    await report_scan_progress("thumbnails")
     for gid, a in albums.items():
         a["msg_ids"].sort()
         a["sizes"].sort(key=lambda s: s["id"])
@@ -633,6 +648,7 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
         except Exception as e:
             print(f"  相册上报异常: {e}", file=sys.stderr)
     print(f"列表模式完成：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），聚合 {len(payload)} 个条目")
+    await report_scan_progress("done")
 
 
 async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size, title_prefix, upload_api_key, server, args):

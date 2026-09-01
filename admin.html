@@ -3284,6 +3284,13 @@ function ubotAlbums(id) {
       '<button class="btn btn-sm" id="ubAlbumMoreBtn" title="从当前最早一条继续向更早枚举历史相册/图片">加载更早</button> ' +
       '<span id="ubAlbumStatus" style="font-size:12px;color:var(--text-secondary)"></span>' +
     '</div>' +
+    '<div id="ubAlbumProgress" style="display:none;margin-top:8px;background:#1a1d24;border-radius:6px;padding:10px 12px;font-size:12px;color:var(--text-secondary)">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">' +
+        '<div style="flex:1;height:4px;background:#2a2d35;border-radius:2px;overflow:hidden"><div id="ubAlbumProgressBar" style="height:100%;background:#4f6ef7;border-radius:2px;width:0%;transition:width .3s"></div></div>' +
+        '<span id="ubAlbumProgressPct" style="font-size:11px;color:var(--text-secondary);min-width:36px;text-align:right">0%</span>' +
+      '</div>' +
+      '<div id="ubAlbumProgressDetail"></div>' +
+    '</div>' +
     '<div id="ubAlbumGrid" style="max-height:58vh;overflow:auto;margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>' +
     '<div class="modal-actions">' +
       '<span id="ubAlbumSelInfo" style="font-size:12px;color:var(--text-secondary);margin-right:auto"></span>' +
@@ -3341,11 +3348,39 @@ function ubotAlbumsPoll(n) {
     api("GET", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums").then(function(r) {
       if (!r || !r.ok) { document.getElementById("ubAlbumStatus").textContent = "读取失败"; return; }
       var st = document.getElementById("ubAlbumStatus");
+      var prog = document.getElementById("ubAlbumProgress");
+      var progBar = document.getElementById("ubAlbumProgressBar");
+      var progPct = document.getElementById("ubAlbumProgressPct");
+      var progDetail = document.getElementById("ubAlbumProgressDetail");
+
       if (r.data.task.mode === 'list') {
         st.textContent = "枚举中…（第 " + (n + 1) + " 次轮询）";
-        if (n < 60) ubotAlbumsPoll(n + 1);
+        // 解析 scan_progress 显示实时进度
+        var sp = r.data.task.scan_progress;
+        if (sp) {
+          try { sp = JSON.parse(sp); } catch(e) { sp = null; }
+        }
+        if (sp && sp.phase) {
+          prog.style.display = '';
+          var pct = sp.scan_limit > 0 ? Math.min(100, Math.round((sp.media_count / sp.scan_limit) * 100)) : 0;
+          progBar.style.width = pct + '%';
+          progPct.textContent = pct + '%';
+          var phaseLabel = sp.phase === 'thumbnails' ? '上传缩略图' : sp.phase === 'done' ? '完成' : '扫描消息';
+          progDetail.innerHTML =
+            '阶段: ' + phaseLabel +
+            ' · 消息: ' + (sp.scanned_msgs || 0).toLocaleString() +
+            ' · 媒体: ' + (sp.media_count || 0).toLocaleString() + '/' + (sp.scan_limit || 0).toLocaleString() +
+            ' · 视频: ' + (sp.video_count || 0).toLocaleString() +
+            ' · 相册/条目: ' + (sp.albums_count || 0).toLocaleString() +
+            ' · 耗时: ' + (sp.elapsed_s || 0) + 's';
+        }
+        if (n < 120) ubotAlbumsPoll(n + 1);
         return;
       }
+
+      // 扫描结束，隐藏进度条
+      if (prog) prog.style.display = 'none';
+
       if (n === 0 && (r.data.albums || []).length === 0) {
         st.textContent = "还没有相册数据";
         return;
