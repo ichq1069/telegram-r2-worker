@@ -14,7 +14,7 @@ import { DEFAULT_COMMANDS, parseMenu, menuButtons, menuText, setMenuCtx, getMenu
 import { handleShowConfigGet, handleShowGroupsList, handleShowGroupsSave, handleShowGroupsDelete, handleShowGroupRoll, rotateProgramImages, handleShowConfigSet, handleShowPage, handleShowData, handleGalleryPage, handleGalleryData, checkApiKey, appendTagFilter, handlePublicFiles, handlePublicRandom, handlePublicUpload, handleDiagnoseKey, handleAdminTags, handleAdminTagList, handleAdminTagCreate, handleAdminTagUpdate, handleAdminTagDelete, handleSetFileTags, checkUserPortal, handleAdminKeys, handleAdminKeysCreate, handleAdminKeysUpdate, handleAdminKeysToggle, handleAdminKeysDelete, handleAdminKeyUsers, handleAdminUsernameCheck, handleAdminRedeemList, handleAdminRedeemCreate, handleAdminRedeemUpdate, handleAdminRedeemDelete, handleAdminCallLogs, handleAdminCallStats, handleUserRegister, handleUserRedeem, handleUserCallLogs, handleUserCallStats, handleUserResetPassword, handleUserGetKeyInfo, recordKnownChat, recordUserInteraction, handleAdminUsers, handleAdminUsersInteractions, handleAdminPoolList, handleAdminPoolCreate, handleAdminPoolImportPage, handleAdminPoolUpload, handleAdminFilesUpload, handleAdminFilesImport, handleAdminPoolUploadPostimages, handleAdminGetPiKey, handleAdminSavePiKey, handleAdminGetPoolTags, handleAdminSavePoolTags, handleAdminPoolToggle } from './src/public.js';
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg } from './src/batch.js';
 
-import { handleTgFileRedirect, handleFiles, handleFile, getProxyMode, getBotUsername, handleAdminGetProxyMode, handleAdminSaveProxyMode, handleAdminGetProxyOnly, handleAdminSaveProxyOnly, handleStats } from './src/api.js';
+import { handleTgFileRedirect, handleTgFileProxy, handleFiles, handleFile, getProxyMode, getBotUsername, handleAdminGetProxyMode, handleAdminSaveProxyMode, handleAdminGetProxyOnly, handleAdminSaveProxyOnly, handleStats } from './src/api.js';
 import { handleAdminGetNotify, handleAdminSaveNotify, handleAdminNotifyTest, handleAdminGetRateLimit, handleAdminSaveRateLimit } from './src/notify.js';
 
 import { fireWebhook, handleAdminGetWebhook, handleAdminSaveWebhook, handleAdminWebhookTest, handleAdminPoolTags, handleAdminPoolBatch, handleAdminPoolBatchDelete, handleSetFilePoolStatus, handleAdminGetAutoPoolTags, handleAdminSaveAutoPoolTags, handleAdminPoolFromTg, handleAdminPoolDelete, handleAdminPrivatePoolList, handleAdminPrivatePoolFromTg, handleByChat, handleByUser, handleByDate, handleSearch, handleLatest, handleStream, handleDeleteFile, handleTrashList, handleTrashRestore, handleR2Inspect, handleR2Cleanup, handleListBots, handleAddBot, handleRemoveBot, handleGetConfig, handleSetConfig, handleBotGetMeApi } from './src/events.js';
@@ -113,6 +113,13 @@ export default {
         return json({ ok: false, error: 'Rate limit exceeded' }, 429);
       }
       return handleTgFileRedirect(request, env, ctx);
+    }
+    // Telegram file_id 代理：相册浏览直接显示图片（不需要先导入到 files 表）
+    if (m === 'GET' && p === '/api/tg-proxy') {
+      if (await applyIPRateLimit(env, request)) {
+        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
+      }
+      return handleTgFileProxy(request, env, ctx);
     }
     // Admin API (auth via query param or header)
     const adminKey = url.searchParams.get('api_key') || request.headers.get('X-API-Key');

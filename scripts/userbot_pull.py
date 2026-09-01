@@ -508,14 +508,17 @@ async def run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, l
 async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args, cursor=0):
     """列表模式：枚举消息，只统计媒体（图片+视频），聚合相册，传封面缩略图。
     cursor>0 时从该 msg id 之前继续向更早枚举（翻页）；无 grouped_id 的单媒体也纳入（gid=solo_<id>）。
-    通过 progress 接口实时上报扫描进度，前端可轮询显示。"""
+    通过 progress 接口实时上报扫描进度，前端可轮询显示。
+    每 500 个新条目批量写入一次 D1（边扫描边写入）。"""
     albums = {}  # grouped_id -> {msg_ids, sizes, first_ts}
+    reported_gids = set()  # 已上报的 grouped_id
     scanned = 0   # 媒体计数（只计 photo/video）
     msg_count = 0  # 消息遍历数（包括文字等非媒体，用于进度）
     solo_count = 0
     group_count = 0
     video_count = 0
     t0 = time.time()
+    BATCH_REPORT_SIZE = 500  # 每 500 个新条目上报一次
 
     async def report_scan_progress(phase):
         """向 worker 上报列表扫描实时进度（不阻塞主循环，失败静默）"""
@@ -528,10 +531,62 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
                           json={"scan_progress": sp}, timeout=10)
         except Exception:
             pass
+
+    async def process_and_report_batch(new_gids, is_first_batch):
+        """处理一批新条目：用 file_id 拼代理 URL 作为 thumb_url，不下载任何东西"""
+        if not new_gids:
+            return
+        payload = []
+        min_msg_id = 0
+        for gid in new_gids:
+            a = albums.get(gid)
+            if not a:
+                continue
+            a["msg_ids"].sort()
+            a["sizes"].sort(key=lambda s: s["id"])
+            # 用 file_id 拼代理 URL 作为 thumb_url（前端直接显示，不经过 R2）
+            for s in a["sizes"]:
+                fid = s.get("file_id", "")
+                if fid:
+                    s["thumb_url"] = f"/api/tg-proxy?file_id={fid}"
+                else:
+                    s["thumb_url"] = ""
+            cover_url = ""
+            if a["sizes"] and a["sizes"][0].get("thumb_url"):
+                cover_url = a["sizes"][0]["thumb_url"]
+            a["cover_url"] = cover_url
+            mids = a["msg_ids"]
+            if mids and (min_msg_id == 0 or min(mids) < min_msg_id):
+                min_msg_id = min(mids)
+            payload.append({
+                "grouped_id": gid,
+                "msg_ids": mids,
+                "count": len(mids),
+                "sizes": a["sizes"],
+                "cover_url": cover_url,
+                "first_ts": a["first_ts"],
+                "has_oversize": 1 if any(s["size"] > max_size for s in a["sizes"]) else 0,
+            })
+        # 分片上报
+        for i in range(0, len(payload), ALBUM_MAX_PER_POST):
+            chunk = payload[i:i + ALBUM_MAX_PER_POST]
+            try:
+                append_val = 0 if (is_first_batch and i == 0 and not (cursor and cursor > 0)) else 1
+                r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
+                                  json={"albums": chunk, "append": append_val, "cursor": min_msg_id}, timeout=60)
+                if r.status_code != 200:
+                    print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+                else:
+                    print(f"  ✓ 上报 {len(chunk)} 个条目（append={append_val}）", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"  相册上报异常: {e}", file=sys.stderr)
+
     kw = dict(reverse=False, wait_time=ITER_WAIT)
     if cursor and cursor > 0:
         kw["offset_id"] = cursor
     it = client.iter_messages(chat, **kw)
+    is_first_batch = True
+    new_gids_since_report = []  # 自上次上报以来新增的 grouped_id
     try:
         while True:
             try:
@@ -602,67 +657,28 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
                 ts0 = int(msg.date.timestamp())
                 if not a["first_ts"] or ts0 < a["first_ts"]:
                     a["first_ts"] = ts0
+            # 追踪新增的 grouped_id
+            if gid not in reported_gids and gid not in new_gids_since_report:
+                new_gids_since_report.append(gid)
+            # 每 500 个新条目批量上报一次
+            if len(new_gids_since_report) >= BATCH_REPORT_SIZE:
+                print(f"  [批量上报] 新增 {len(new_gids_since_report)} 个条目，开始处理缩略图并上报...", file=sys.stderr, flush=True)
+                await process_and_report_batch(new_gids_since_report, is_first_batch)
+                reported_gids.update(new_gids_since_report)
+                new_gids_since_report = []
+                is_first_batch = False
+                await report_scan_progress("scanning")
     finally:
-        # 每相册上传封面 + 每张图/视频缩略图（thumb_url 供后台逐张预览/勾选）
-        # 即使扫描因异常中断，只要聚合了条目就继续上传缩略图并上报
-        await report_scan_progress("thumbnails")
-        for gid, a in albums.items():
-            a["msg_ids"].sort()
-            a["sizes"].sort(key=lambda s: s["id"])
-            thumbs = {}
-            cover_url = ""
-            try:
-                for idx, mid in enumerate(a["msg_ids"]):
-                    m = await client.get_messages(chat, ids=mid)
-                    if not m or not m.media:
-                        continue
-                    data = await m.download_media(file=bytes, thumb=1)
-                    if data:
-                        tu = await upload_cover(hc, server, upload_api_key, task_id, f"{gid}_{mid}", data)
-                        if tu:
-                            thumbs[str(mid)] = tu
-                    if idx == 0 and thumbs.get(str(mid)):
-                        cover_url = thumbs[str(mid)]
-                    await asyncio.sleep(WORK_DELAY)
-            except Exception as e:
-                print(f"  相册缩略图失败 {gid}: {e}", file=sys.stderr)
-            for s in a["sizes"]:
-                s["thumb_url"] = thumbs.get(str(s["id"]), "")
-            a["cover_url"] = cover_url
-            await asyncio.sleep(WORK_DELAY)
-
-        payload = []
-        min_msg_id = 0
-        for gid, a in albums.items():
-            mids = a["msg_ids"]
-            if mids and (min_msg_id == 0 or min(mids) < min_msg_id):
-                min_msg_id = min(mids)
-            payload.append({
-                "grouped_id": gid,
-                "msg_ids": mids,
-                "count": len(mids),
-                "sizes": a["sizes"],
-                "cover_url": a["cover_url"],
-                "first_ts": a["first_ts"],
-                "has_oversize": 1 if any(s["size"] > max_size for s in a["sizes"]) else 0,
-            })
+        # 上报剩余的条目
+        if new_gids_since_report:
+            print(f"  [批量上报] 上报剩余 {len(new_gids_since_report)} 个条目...", file=sys.stderr, flush=True)
+            await process_and_report_batch(new_gids_since_report, is_first_batch)
+            reported_gids.update(new_gids_since_report)
         if cursor and cursor > 0:
-            print(f"  翻页统计：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），新增条目 {len(payload)} 个，游标推进到 msg {min_msg_id}", file=sys.stderr, flush=True)
+            print(f"  翻页统计：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），聚合 {len(reported_gids)} 个条目", file=sys.stderr, flush=True)
         else:
-            print(f"  浏览统计：遍历 {msg_count} 条消息，共 {scanned} 张媒体（图片 {scanned - video_count} + 视频 {video_count}），聚合条目 {len(payload)} 个（相册 {group_count} 个 / 单媒体 {solo_count} 个）", file=sys.stderr, flush=True)
-        # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；第一个 chunk 用 append=0 全量替换，后续用 append=1 追加合并
-        for i in range(0, len(payload), ALBUM_MAX_PER_POST):
-            chunk = payload[i:i + ALBUM_MAX_PER_POST]
-            try:
-                is_first_chunk = (i == 0)
-                append_val = 0 if (is_first_chunk and not (cursor and cursor > 0)) else 1
-                r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
-                                  json={"albums": chunk, "append": append_val, "cursor": min_msg_id}, timeout=60)
-                if r.status_code != 200:
-                    print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
-            except Exception as e:
-                print(f"  相册上报异常: {e}", file=sys.stderr)
-        print(f"列表模式完成：遍历 {msg_count} 条消息，媒体 {scanned} 张（图片 {scanned - video_count} + 视频 {video_count}），聚合 {len(payload)} 个条目")
+            print(f"  浏览统计：遍历 {msg_count} 条消息，共 {scanned} 张媒体（图片 {scanned - video_count} + 视频 {video_count}），聚合 {len(reported_gids)} 个条目（相册 {group_count} 个 / 单媒体 {solo_count} 个）", file=sys.stderr, flush=True)
+        print(f"列表模式完成：遍历 {msg_count} 条消息，媒体 {scanned} 张，聚合 {len(reported_gids)} 个条目")
         await report_scan_progress("done")
 
 
