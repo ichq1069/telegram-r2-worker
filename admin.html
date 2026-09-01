@@ -3291,9 +3291,11 @@ function ubotAlbums(id) {
       '</div>' +
       '<div id="ubAlbumProgressDetail"></div>' +
     '</div>' +
-    '<div id="ubAlbumGrid" style="max-height:58vh;overflow:auto;margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>' +
+    '<div id="ubAlbumGrid" style="max-height:58vh;overflow:auto;margin-top:10px;columns:4;column-gap:8px"></div>' +
     '<div class="modal-actions">' +
       '<span id="ubAlbumSelInfo" style="font-size:12px;color:var(--text-secondary);margin-right:auto"></span>' +
+      '<button class="btn btn-ghost btn-sm" id="ubAlbumSelAll">全选</button>' +
+      '<button class="btn btn-ghost btn-sm" id="ubAlbumSelNone">取消全选</button>' +
       '<button class="btn btn-ghost" id="ubAlbumSelBtn">保存选择</button>' +
       '<button class="btn btn-primary" id="ubAlbumTrigBtn">抓取已选</button>' +
       '<button class="btn btn-ghost" id="modalCancel">关闭</button>' +
@@ -3303,6 +3305,11 @@ function ubotAlbums(id) {
   document.getElementById("ubAlbumMoreBtn").onclick = function() { ubotAlbumsMore(); };
   document.getElementById("ubAlbumSelBtn").onclick = function() { ubotAlbumsSave(); };
   document.getElementById("ubAlbumTrigBtn").onclick = function() { ubotAlbumsTrigger(); };
+  document.getElementById("ubAlbumSelAll").onclick = function() {
+    UBotAlbumsData.forEach(function(a) { (a.sizes || []).forEach(function(s) { UBotAlbumsSel[String(s.id)] = 1; }); });
+    renderUbotAlbums();
+  };
+  document.getElementById("ubAlbumSelNone").onclick = function() { UBotAlbumsSel = {}; renderUbotAlbums(); };
   api("GET", "/admin/api/userbot-tasks/" + id + "/albums").then(function(r) {
     if (r && r.ok) {
       if (r.data.task.scan_limit) document.getElementById("ubAlbumScan").value = r.data.task.scan_limit;
@@ -3403,69 +3410,43 @@ function renderUbotAlbums() {
   var selCount = 0;
   var totalCount = 0;
   for (var k in UBotAlbumsSel) if (UBotAlbumsSel[k]) selCount++;
-  UBotAlbumsData.forEach(function(a) { totalCount += (a.sizes || []).length; });
-  var html = '';
-  for (var i = 0; i < UBotAlbumsData.length; i++) {
-    var a = UBotAlbumsData[i];
-    var gid = String(a.grouped_id);
-    var isSolo = gid.indexOf('solo_') === 0;
-    var gidShow = isSolo ? gid.slice(5) : gid;
-    var sizes = a.sizes || [];
-    var allSel = sizes.length > 0 && sizes.every(function(s) { return UBotAlbumsSel[String(s.id)]; });
-    var partial = !allSel && sizes.some(function(s) { return UBotAlbumsSel[String(s.id)]; });
-    var hasVideo = sizes.some(function(s) { return s.type === 'video'; });
-    var hasPhoto = sizes.some(function(s) { return s.type !== 'video'; });
-    var typeLabel = hasVideo && hasPhoto ? '图文' : (hasVideo ? '视频' : '图片');
-    var ov = a.has_oversize ? '<span style="color:#e5484d;font-size:10px;font-weight:600">超限</span>' : '';
-    var totalSize = 0;
-    sizes.forEach(function(s) { totalSize += s.size || 0; });
-    var sizeTxt = totalSize > 1048576 ? (totalSize / 1048576).toFixed(1) + "MB" : Math.ceil(totalSize / 1024) + "KB";
-    var timeTxt = a.first_ts ? new Date(a.first_ts * 1000).toLocaleString().slice(5, 16) : "";
-    var stTxt = allSel ? "已全选" : (partial ? "部分已选" : "点选");
-    var stClr = allSel ? "#46a758" : (partial ? "#e5a000" : "var(--text-secondary)");
-    html += '<div class="ub-album" data-gid="' + escStr(gid) + '" style="border:1px solid ' + (allSel ? "#46a758" : (partial ? "#e5a000" : "var(--border,#333)")) + ';border-radius:8px;margin-bottom:10px;overflow:hidden;background:var(--card,#1d1f24)">' +
-      '<div class="ub-album-head" style="padding:8px 10px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;flex-wrap:wrap">' +
-        '<span style="font-weight:600;color:var(--text,#eee)">' + (isSolo ? (sizes[0] && sizes[0].type === 'video' ? '视频' : '图') : '相册') + ' ' + escStr(gidShow) + '</span>' +
-        '<span style="font-size:11px;color:var(--text-secondary)">' + (a.count || 0) + ' 张 · ' + typeLabel + ' · ' + sizeTxt + (timeTxt ? ' · ' + timeTxt : '') + '</span>' +
-        ov +
-        '<span style="font-size:11px;color:' + stClr + '">' + stTxt + '</span>' +
-      '</div>' +
-      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px;padding:0 8px 8px">';
-    sizes.forEach(function(s) {
-      var sel = !!UBotAlbumsSel[String(s.id)];
-      var sz = (s.size || 0) > 1048576 ? ((s.size || 0) / 1048576).toFixed(1) + "MB" : Math.ceil((s.size || 0) / 1024) + "KB";
-      var isVid = s.type === 'video';
-      var durTxt = isVid && s.duration ? Math.floor(s.duration / 60) + ':' + String(s.duration % 60).padStart(2, '0') : '';
-      html += '<div data-pid="' + String(s.id) + '" class="ub-photo" style="border:2px solid ' + (sel ? "#46a758" : "transparent") + ';border-radius:6px;overflow:hidden;cursor:pointer;position:relative;background:#222">' +
-        (s.thumb_url ? '<img src="' + escStr(s.thumb_url) + '" style="width:100%;height:76px;object-fit:cover;display:block">' : '<div style="width:100%;height:76px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:10px;text-align:center">' + escStr(String(s.id)) + '</div>') +
-        (isVid ? '<div style="position:absolute;top:3px;left:3px;background:#000;color:#fff;border-radius:3px;font-size:9px;padding:0 3px">▶</div>' : '') +
-        (durTxt ? '<div style="position:absolute;bottom:20px;right:3px;background:#000;color:#fff;border-radius:3px;font-size:9px;padding:0 3px">' + escStr(durTxt) + '</div>' : '') +
-        '<div style="padding:3px 4px;font-size:10px;color:var(--text-secondary)">' + sz + '</div>' +
-        (sel ? '<div style="position:absolute;top:4px;right:4px;background:#46a758;color:#fff;border-radius:3px;font-size:9px;padding:0 4px">✓</div>' : '') +
-      '</div>';
-    });
-    html += '</div></div>';
-  }
-  grid.innerHTML = html || '<div style="grid-column:1/-1;color:var(--text-secondary);font-size:13px;padding:24px;text-align:center">没有相册数据。点击「浏览相册」让 userbot 枚举该群相册。</div>';
-  if (selInfo) selInfo.textContent = "已选 " + selCount + " / " + totalCount + " 张图";
-  Array.prototype.forEach.call(grid.querySelectorAll(".ub-album"), function(el) {
-    var head = el.querySelector(".ub-album-head");
-    if (head) head.onclick = function() { toggleUbotAlbum(el); };
+  // 平铺所有 sizes
+  var flat = [];
+  UBotAlbumsData.forEach(function(a) {
+    (a.sizes || []).forEach(function(s) { flat.push(s); });
   });
+  totalCount = flat.length;
+  var html = '';
+  for (var i = 0; i < flat.length; i++) {
+    var s = flat[i];
+    var sel = !!UBotAlbumsSel[String(s.id)];
+    var sz = (s.size || 0) > 1048576 ? ((s.size || 0) / 1048576).toFixed(1) + "MB" : Math.ceil((s.size || 0) / 1024) + "KB";
+    var isVid = s.type === 'video';
+    var durTxt = isVid && s.duration ? Math.floor(s.duration / 60) + ':' + String(s.duration % 60).padStart(2, '0') : '';
+    var borderClr = sel ? "#46a758" : "transparent";
+    html += '<div data-pid="' + String(s.id) + '" class="ub-photo" style="border:2px solid ' + borderClr + ';border-radius:6px;overflow:hidden;cursor:pointer;position:relative;background:#222;break-inside:avoid;margin-bottom:8px">';
+    if (s.thumb_url) {
+      html += '<img src="' + escStr(s.thumb_url) + '" style="width:100%;display:block;object-fit:cover" loading="lazy">';
+    } else {
+      html += '<div style="width:100%;height:80px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:10px;text-align:center">' + escStr(String(s.id)) + '</div>';
+    }
+    if (isVid) {
+      html += '<div style="position:absolute;top:4px;left:4px;background:rgba(0,0,0,.7);color:#fff;border-radius:3px;font-size:9px;padding:1px 4px">&#9654;</div>';
+    }
+    if (durTxt) {
+      html += '<div style="position:absolute;bottom:24px;right:4px;background:rgba(0,0,0,.7);color:#fff;border-radius:3px;font-size:9px;padding:1px 4px">' + escStr(durTxt) + '</div>';
+    }
+    html += '<div style="padding:3px 5px;font-size:10px;color:var(--text-secondary);display:flex;justify-content:space-between"><span>' + sz + '</span><span>#' + String(s.id) + '</span></div>';
+    if (sel) {
+      html += '<div style="position:absolute;top:4px;right:4px;background:#46a758;color:#fff;border-radius:3px;font-size:9px;padding:1px 5px;font-weight:600">&#10003;</div>';
+    }
+    html += '</div>';
+  }
+  grid.innerHTML = html || '<div style="grid-column:1/-1;color:var(--text-secondary);font-size:13px;padding:24px;text-align:center">没有媒体数据。点击「浏览相册」让 userbot 枚举该群历史消息。</div>';
+  if (selInfo) selInfo.textContent = "已选 " + selCount + " / " + totalCount + " 张";
   Array.prototype.forEach.call(grid.querySelectorAll(".ub-photo"), function(el) {
     el.onclick = function(e) { e.stopPropagation(); toggleUbotPhoto(el); };
   });
-}
-
-function toggleUbotAlbum(el) {
-  var gid = el.getAttribute("data-gid");
-  var a = null;
-  for (var i = 0; i < UBotAlbumsData.length; i++) if (String(UBotAlbumsData[i].grouped_id) === gid) { a = UBotAlbumsData[i]; break; }
-  if (!a) return;
-  var sizes = a.sizes || [];
-  var allSel = sizes.length > 0 && sizes.every(function(s) { return UBotAlbumsSel[String(s.id)]; });
-  sizes.forEach(function(s) { UBotAlbumsSel[String(s.id)] = allSel ? 0 : 1; });
-  renderUbotAlbums();
 }
 
 function toggleUbotPhoto(el) {
