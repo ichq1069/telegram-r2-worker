@@ -443,7 +443,10 @@ export async function handleAdminTaskRuns(request, env) {
 export async function handleAdminUbotChats(env) {
   try {
     const d = await env.D1_DB.prepare('SELECT chat_id, title, chat_type, username, participants, updated_at FROM ubot_chats ORDER BY participants DESC, id DESC').all();
-    return json({ ok: true, data: d.results || [] });
+    const st = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='ubot_session_state'").first();
+    let session = null;
+    if (st && st.value) { try { session = JSON.parse(st.value); } catch (e) {} }
+    return json({ ok: true, data: { chats: d.results || [], session: session } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -479,6 +482,10 @@ export async function handleUbotDialogsReport(request, env) {
     });
     for (let i = 0; i < ops.length; i++) await ops[i];
     await env.D1_DB.prepare("DELETE FROM settings WHERE key='ubot_dialogs_pending'").run();
+    if (b.session_valid !== undefined) {
+      await env.D1_DB.prepare("INSERT INTO settings (key,value) VALUES ('ubot_session_state', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(JSON.stringify({ valid: b.session_valid ? 1 : 0, error: String(b.error || '').slice(0, 500), at: nowIso })).run();
+    }
     return json({ ok: true, data: { saved: Object.keys(allowed).length } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }

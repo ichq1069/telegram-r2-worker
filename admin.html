@@ -3611,16 +3611,28 @@ function ubotEdit(id, prefill) {
 // ---------------- 已有群列表（userbot get_dialogs 结果，点选直接建任务） ----------------
 async function ubotChats() {
   var r = await api("GET", "/admin/api/ubot-chats");
-  var chats = (r && r.ok) ? (r.data || []) : [];
+  var d = (r && r.ok) ? (r.data || {}) : {};
+  var chats = d.chats || [];
+  var sess = d.session || null;
+  var sessHtml = '<div style="font-size:12px;margin:6px 0 8px;padding:6px 10px;border-radius:6px;background:rgba(128,128,128,.08)">会话校验：';
+  if (!sess) {
+    sessHtml += '<span style="color:var(--text-secondary)">尚未校验（点下方「刷新列表」让节点验证 StringSession）</span>';
+  } else if (sess.valid) {
+    sessHtml += '<span style="color:#46a758;font-weight:600">✔ 有效</span><span style="color:var(--text-secondary)">（' + escStr((sess.at || '').replace('T', ' ').slice(0, 19)) + '）</span>';
+  } else {
+    sessHtml += '<span style="color:#e5484d;font-weight:600">✘ 无效</span> <span style="color:#e5484d">' + escStr(sess.error || '') + '</span>';
+  }
+  sessHtml += '</div>';
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:780px">' +
     '<h3>已有群（userbot 账号所在群/频道）</h3>' +
+    sessHtml +
     '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">列表由 VPS 上的 userbot 抓取账号自动上报（get_dialogs）。点「刷新列表」通知节点下一轮上报；点「用此群创建」自动填入 chat_id 建抓取任务。</div>' +
     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">' +
       '<span id="ubChatsStatus" style="font-size:12px;color:var(--text-secondary)">' + (chats.length ? ('共 ' + chats.length + ' 个群/频道') : '暂无数据') + '</span>' +
       '<button class="btn btn-sm" id="ubChatsRefreshBtn">刷新列表</button>' +
     '</div>' +
-    '<div id="ubChatsBody" style="max-height:60vh;overflow:auto">' + (chats.length ? buildChatsRows(chats) : '<span style="font-size:13px;color:var(--text-secondary)">还没有群数据。先点「刷新列表」，并确认 VPS 脚本心跳在线、后台 StringSession 有效。</span>') + '</div>' +
+    '<div id="ubChatsBody" style="max-height:60vh;overflow:auto">' + (chats.length ? buildChatsRows(chats) : '<span style="font-size:13px;color:var(--text-secondary)">还没有群数据。先点「刷新列表」，并确认上方会话校验为有效。</span>') + '</div>' +
     '<div class="modal-actions"><button class="btn btn-ghost" id="modalCancel">关闭</button></div>' +
     '</div></div>';
   document.getElementById("modalCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
@@ -3669,17 +3681,30 @@ function ubotSave(id) {
 
 // 群抓取静态按钮事件（面板固定存在，绑定一次）
 document.getElementById("ubCfgSaveBtn").addEventListener("click", function() {
+  var sessVal = document.getElementById("ubSession").value.trim();
+  if (sessVal && !sessionFormatOk(sessVal)) {
+    toast("StringSession 格式可疑：应以 1 开头、仅含字母数字_-，长度 200~600。请检查后保存（最终以节点实际校验为准）", 0);
+    return;
+  }
   var b = {
     api_id: document.getElementById("ubApiId").value.trim(),
     api_hash: document.getElementById("ubApiHash").value.trim(),
     api_key: document.getElementById("ubApiKey").value.trim(),
-    session: document.getElementById("ubSession").value.trim()
+    session: sessVal
   };
   api("POST", "/admin/api/settings/userbot", b).then(function(r) {
     if (r && r.ok) { toast("全局配置已保存", 1); loadUbotPage(); }
     else toast((r && r.error) || "保存失败", 0);
   });
 });
+
+function sessionFormatOk(s) {
+  if (!s) return true;
+  if (s.charAt(0) !== "1") return false;
+  if (!/^[A-Za-z0-9_-]+$/.test(s)) return false;
+  if (s.length < 200 || s.length > 600) return false;
+  return true;
+}
 
 document.getElementById("ubAddBtn").addEventListener("click", function() { ubotEdit(null); });
 document.getElementById("ubChatsBtn").addEventListener("click", function() { ubotChats(); });

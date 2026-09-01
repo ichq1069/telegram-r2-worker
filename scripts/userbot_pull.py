@@ -96,7 +96,7 @@ async def send_heartbeat(hc, server, srv_token, tasks):
 
 
 async def refresh_dialogs(hc, server, ub_token):
-    """拉取账号所在群/频道并上报（供后台选群建任务）；session 无效时静默失败。"""
+    """拉取账号所在群/频道并上报（供后台选群建任务）；同时上报 StringSession 校验结果。"""
     if not ub_token:
         return
     try:
@@ -107,6 +107,10 @@ async def refresh_dialogs(hc, server, ub_token):
         g = (r.json().get("data") or {}).get("global") or {}
         api_id, api_hash, session = g.get("api_id"), g.get("api_hash"), g.get("session")
         if not api_id or not api_hash or not session:
+            try:
+                await hc.post(f"{server}/api/ubot/dialogs?token={ub_token}", json={"dialogs": [], "session_valid": False, "error": "后台未配置 api_id/api_hash/session"}, timeout=30)
+            except Exception:
+                pass
             print("[dialogs] 后台未配置 api_id/api_hash/session", file=sys.stderr)
             return
         from telethon import TelegramClient
@@ -114,6 +118,10 @@ async def refresh_dialogs(hc, server, ub_token):
         client = TelegramClient(StringSession(session), int(api_id), api_hash, connection_retries=2)
         await client.connect()
         if not await client.is_user_authorized():
+            try:
+                await hc.post(f"{server}/api/ubot/dialogs?token={ub_token}", json={"dialogs": [], "session_valid": False, "error": "StringSession 未授权/已失效，请重新生成"}, timeout=30)
+            except Exception:
+                pass
             print("[dialogs] StringSession 未授权，无法获取群列表", file=sys.stderr)
             await client.disconnect()
             return
@@ -134,10 +142,14 @@ async def refresh_dialogs(hc, server, ub_token):
                     "participants": participants,
                 })
         await client.disconnect()
-        r2 = await hc.post(f"{server}/api/ubot/dialogs?token={ub_token}", json={"dialogs": dialogs}, timeout=30)
+        r2 = await hc.post(f"{server}/api/ubot/dialogs?token={ub_token}", json={"dialogs": dialogs, "session_valid": True, "error": ""}, timeout=30)
         print(f"[dialogs] 上报 {len(dialogs)} 个群/频道, HTTP {r2.status_code}", file=sys.stderr)
     except Exception as e:
         print(f"[dialogs] 异常: {e}", file=sys.stderr)
+        try:
+            await hc.post(f"{server}/api/ubot/dialogs?token={ub_token}", json={"dialogs": [], "session_valid": False, "error": str(e)[:200]}, timeout=30)
+        except Exception:
+            pass
 
 
 async def report_run(hc, server, args, task_id, status, error=""):
