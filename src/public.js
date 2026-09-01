@@ -1015,9 +1015,7 @@ export async function handlePublicUpload(request, env, keyLevel) {
 export async function handleAdminTags(env) {
   try {
     const d1 = await env.D1_DB.prepare("SELECT tags FROM files WHERE processing_state='completed' AND deleted_at IS NULL AND tags IS NOT NULL AND tags != ''").all();
-    // random_pool 只统计非 TG 副本（source != 'tg'），避免与 files.tags 重复计数；
-    // 同一张 TG 图在 files 里计一次即可，pool 里的副本不再重复计
-    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND source != 'tg' AND tags IS NOT NULL AND tags != ''").all();
+    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND tags IS NOT NULL AND tags != ''").all();
     const cnt = {};
     [d1, d2].forEach(function(res) {
       (res.results || []).forEach(function(r) {
@@ -1038,7 +1036,7 @@ export async function handleAdminTagList(env) {
   try {
     // 自动迁移：扫描 files/random_pool/userbot_tasks 中已用标签，自动写入 tags 表
     const d1 = await env.D1_DB.prepare("SELECT tags FROM files WHERE processing_state='completed' AND deleted_at IS NULL AND tags IS NOT NULL AND tags != ''").all();
-    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND source != 'tg' AND tags IS NOT NULL AND tags != ''").all();
+    const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND tags IS NOT NULL AND tags != ''").all();
     const d3 = await env.D1_DB.prepare("SELECT tags FROM userbot_tasks WHERE tags IS NOT NULL AND tags != ''").all();
     const cnt = {};
     [d1, d2, d3].forEach(function(res) {
