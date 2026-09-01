@@ -3230,6 +3230,7 @@ async function loadUbotTasks() {
       })() + '</td>' +
       '<td>' +
         '<button class="btn btn-ghost btn-sm" onclick="ubotEdit(' + t.id + ')">编辑</button> ' +
+        '<button class="btn btn-ghost btn-sm" onclick="ubotAlbums(' + t.id + ')">相册</button> ' +
         '<button class="btn btn-ghost btn-sm" onclick="ubotToggle(' + t.id + ',' + (t.enabled ? 0 : 1) + ')">' + (t.enabled ? "停用" : "启用") + '</button> ' +
         '<button class="btn btn-ghost btn-sm" onclick="ubotCopyCmd(' + t.id + ')">命令</button> ' +
         '<button class="btn btn-ghost btn-sm" style="color:var(--danger,#e5484d)" onclick="ubotDel(' + t.id + ')">删除</button>' +
@@ -3237,6 +3238,131 @@ async function loadUbotTasks() {
   }
   html += '</tbody></table></div>';
   box.innerHTML = html;
+}
+
+// ---------------- 群抓取：相册管理（浏览/勾选/保存/抓取已选） ----------------
+var UBotAlbumsTaskId = 0;
+var UBotAlbumsData = [];
+
+function ubotAlbums(id) {
+  UBotAlbumsTaskId = id;
+  UBotAlbumsData = [];
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:880px">' +
+    '<h3>相册管理 #' + id + '</h3>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">浏览相册 = userbot 枚举该群最近消息并聚合相册（只传封面，不下载相册原图）；勾选后「保存选择」→「抓取已选」，下一轮仅抓取所选相册并自动清空。</div>' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">' +
+      '<label style="margin:0">扫描上限（条）</label><input class="inp" id="ubAlbumScan" type="number" value="2000" min="100" style="width:110px"> ' +
+      '<button class="btn btn-sm" id="ubAlbumScanBtn">浏览相册</button> ' +
+      '<span id="ubAlbumStatus" style="font-size:12px;color:var(--text-secondary)"></span>' +
+    '</div>' +
+    '<div id="ubAlbumGrid" style="max-height:58vh;overflow:auto;margin-top:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px"></div>' +
+    '<div class="modal-actions">' +
+      '<span id="ubAlbumSelInfo" style="font-size:12px;color:var(--text-secondary);margin-right:auto"></span>' +
+      '<button class="btn btn-ghost" id="ubAlbumSelBtn">保存选择</button>' +
+      '<button class="btn btn-primary" id="ubAlbumTrigBtn">抓取已选</button>' +
+      '<button class="btn btn-ghost" id="modalCancel">关闭</button>' +
+    '</div></div></div>';
+  document.getElementById("modalCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("ubAlbumScanBtn").onclick = function() { ubotAlbumsScan(); };
+  document.getElementById("ubAlbumSelBtn").onclick = function() { ubotAlbumsSave(); };
+  document.getElementById("ubAlbumTrigBtn").onclick = function() { ubotAlbumsTrigger(); };
+  api("GET", "/admin/api/userbot-tasks/" + id + "/albums").then(function(r) {
+    if (r && r.ok) {
+      if (r.data.task.scan_limit) document.getElementById("ubAlbumScan").value = r.data.task.scan_limit;
+      UBotAlbumsData = r.data.albums || [];
+      renderUbotAlbums();
+      if (r.data.task.mode === 'list') ubotAlbumsPoll(0);
+    } else if (r) { document.getElementById("ubAlbumStatus").textContent = r.error || "加载失败"; }
+  });
+}
+
+function ubotAlbumsScan() {
+  var scan = parseInt(document.getElementById("ubAlbumScan").value) || 2000;
+  api("POST", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums/list", { scan_limit: scan }).then(function(r) {
+    if (r && r.ok) {
+      document.getElementById("ubAlbumStatus").textContent = "已触发浏览，userbot 下一轮开始枚举…";
+      ubotAlbumsPoll(0);
+    } else toast((r && r.error) || "触发失败", 0);
+  });
+}
+
+function ubotAlbumsPoll(n) {
+  setTimeout(function() {
+    api("GET", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums").then(function(r) {
+      if (!r || !r.ok) { document.getElementById("ubAlbumStatus").textContent = "读取失败"; return; }
+      var st = document.getElementById("ubAlbumStatus");
+      if (r.data.task.mode === 'list') {
+        st.textContent = "枚举中…（第 " + (n + 1) + " 次轮询）";
+        if (n < 60) ubotAlbumsPoll(n + 1);
+        return;
+      }
+      if (n === 0 && (r.data.albums || []).length === 0) {
+        st.textContent = "还没有相册数据";
+        return;
+      }
+      UBotAlbumsData = r.data.albums || [];
+      renderUbotAlbums();
+      st.textContent = "已更新 " + UBotAlbumsData.length + " 个相册";
+    });
+  }, 2000);
+}
+
+function renderUbotAlbums() {
+  var grid = document.getElementById("ubAlbumGrid");
+  var selInfo = document.getElementById("ubAlbumSelInfo");
+  if (!grid) return;
+  var selectedCount = 0;
+  var html = '';
+  for (var i = 0; i < UBotAlbumsData.length; i++) {
+    var a = UBotAlbumsData[i];
+    var isSel = !!a.selected;
+    if (isSel) selectedCount++;
+    var ov = a.has_oversize ? '<span style="color:#e5484d;font-size:10px;font-weight:600">超限</span>' : '';
+    var totalSize = 0;
+    (a.sizes || []).forEach(function(s) { totalSize += s.size || 0; });
+    var sizeTxt = totalSize > 1048576 ? (totalSize / 1048576).toFixed(1) + "MB" : Math.ceil(totalSize / 1024) + "KB";
+    var timeTxt = a.first_ts ? new Date(a.first_ts * 1000).toLocaleString().slice(5, 16) : "";
+    html += '<div class="ub-album" data-gid="' + escStr(String(a.grouped_id)) + '" style="border:1px solid ' + (isSel ? "#46a758" : "var(--border,#333)") + ';border-radius:8px;overflow:hidden;cursor:pointer;position:relative;background:var(--card,#1d1f24)">' +
+      '<div style="width:100%;height:96px;background:#222;display:flex;align-items:center;justify-content:center;overflow:hidden">' +
+        (a.cover_url ? '<img src="' + escStr(a.cover_url) + '" style="width:100%;height:100%;object-fit:cover">' : '<span style="color:var(--text-secondary);font-size:11px">无封面</span>') +
+      '</div>' +
+      '<div style="padding:6px;font-size:11px;color:var(--text-secondary)">' +
+        '<div style="font-weight:600;color:var(--text,#eee)">' + (a.count || 0) + ' 张 ' + ov + '</div>' +
+        '<div>' + sizeTxt + (timeTxt ? ' · ' + timeTxt : '') + '</div>' +
+      '</div>' +
+      (isSel ? '<div style="position:absolute;top:6px;right:6px;background:#46a758;color:#fff;border-radius:4px;font-size:10px;padding:1px 5px">已选</div>' : '') +
+    '</div>';
+  }
+  grid.innerHTML = html || '<div style="grid-column:1/-1;color:var(--text-secondary);font-size:13px;padding:24px;text-align:center">没有相册数据。点击「浏览相册」让 userbot 枚举该群相册。</div>';
+  if (selInfo) selInfo.textContent = "已选 " + selectedCount + " / " + UBotAlbumsData.length + " 个相册";
+  Array.prototype.forEach.call(grid.querySelectorAll(".ub-album"), function(el) {
+    el.onclick = function() { toggleUbotAlbum(el); };
+  });
+}
+
+function toggleUbotAlbum(el) {
+  var gid = el.getAttribute("data-gid");
+  for (var i = 0; i < UBotAlbumsData.length; i++) {
+    if (String(UBotAlbumsData[i].grouped_id) === gid) { UBotAlbumsData[i].selected = !UBotAlbumsData[i].selected; break; }
+  }
+  renderUbotAlbums();
+}
+
+function ubotAlbumsSave() {
+  var msgIds = [];
+  UBotAlbumsData.forEach(function(a) { if (a.selected) { (a.msg_ids || []).forEach(function(m) { msgIds.push(String(m)); }); } });
+  api("POST", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums/select", { msg_ids: msgIds }).then(function(r) {
+    if (r && r.ok) toast("已保存 " + r.data.saved + " 条消息选择" + (r.data.invalid ? "（" + r.data.invalid + " 条无效）" : ""), 1);
+    else toast((r && r.error) || "保存失败", 0);
+  });
+}
+
+function ubotAlbumsTrigger() {
+  api("POST", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums/trigger").then(function(r) {
+    if (r && r.ok) { toast("已下发抓取已选（" + r.data.selected + " 条消息），下一轮执行", 1); document.getElementById("modalArea").innerHTML = ""; }
+    else toast((r && r.error) || "触发失败", 0);
+  });
 }
 
 // ---------------- 群抓取执行服务器（节点管理 + 心跳状态 + 一键部署命令） ----------------
@@ -3397,9 +3523,10 @@ function ubotEdit(id) {
         '<div class="fr" style="margin:0"><label>级别</label><select class="inp" id="ubLevel"><option>pt</option><option>n</option><option>r</option><option>sr</option><option>ssr</option></select></div>' +
       '</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">' +
-        '<div class="fr" style="margin:0"><label>最大文件 MB（默认 19，与上传上限一致；超过跳过）</label><input class="inp" type="number" id="ubMaxSize" value="' + (t ? Math.round((t.max_size || 0) / 1048576) : 19) + '" min="1"></div>' +
+        '<div class="fr" style="margin:0"><label>最大文件 MB（默认 19；19~90MB 自动走流式上传，超过跳过）</label><input class="inp" type="number" id="ubMaxSize" value="' + (t ? Math.round((t.max_size || 0) / 1048576) : 19) + '" min="1" max="90"></div>' +
         '<div class="fr" style="margin:0"><label>最多抓取张数（0=不限制）</label><input class="inp" type="number" id="ubLimit" value="' + (t ? (t.limit || 0) : 0) + '" min="0"></div>' +
       '</div>' +
+      '<div class="fr"><label>相册扫描上限（条消息，浏览相册用；默认 2000）</label><input class="inp" type="number" id="ubScanLimit" value="' + (t ? (t.scan_limit || 2000) : 2000) + '" min="100" max="100000"></div>' +
       '<div class="fr"><label>断点 last_id（一般不动；从该 id 之前的消息继续抓，0=从最新开始）</label><input class="inp" type="number" id="ubLastId" value="' + (t ? (t.last_id || 0) : 0) + '" min="0"></div>' +
       '<div class="fr"><label>备注（可选）</label><input class="inp" id="ubNote" value="' + escStr(t ? t.note : "") + '"></div>' +
       '<div class="modal-actions">' +
@@ -3426,9 +3553,10 @@ function ubotSave(id) {
     tags: document.getElementById("ubTags").value,
     pool: document.getElementById("ubPool").value === "1" ? 1 : 0,
     level: document.getElementById("ubLevel").value,
-    max_size: Math.max(1, Math.round(parseFloat(document.getElementById("ubMaxSize").value) || 19)) * 1048576,
+    max_size: Math.min(90, Math.max(1, Math.round(parseFloat(document.getElementById("ubMaxSize").value) || 19))) * 1048576,
     limit: Math.max(0, parseInt(document.getElementById("ubLimit").value) || 0),
     last_id: Math.max(0, parseInt(document.getElementById("ubLastId").value) || 0),
+    scan_limit: Math.max(100, parseInt(document.getElementById("ubScanLimit").value) || 2000),
     note: document.getElementById("ubNote").value,
     enabled: 1
   };

@@ -22,15 +22,13 @@ Cloudflare D1（后台 admin → 群抓取 面板配置），本脚本只在本�
     --dry-run    只统计不上传
     --limit      覆盖后台任务的 limit（0=用后台配置）
 
-流程：
-    1. GET /api/ubot/task/<id>/config 拉取任务参数 + 全局 api_id/api_hash/StringSession
-    2. 用 StringSession 登录（无需本地 .session 文件，换机无感）
-    3. 从最新向更早翻历史图片，跳过 >max_size（默认 19MB，与 /api/v1/upload 上限一致）
-    4. 逐张 POST 到 /api/v1/upload 入库
-    5. 每批处理完回写断点 POST /api/ubot/task/<id>/progress（下次从断点续拉）
+三种模式（由后台任务 mode 字段驱动，脚本无感知自动切换）：
+    normal   普通抓取：从最新向更早翻历史图片，跳过 >max_size，断点 last_id 续拉
+    list     相册列表：枚举最近 scan_limit 条消息聚合相册，只传封面缩略图，整批上报元数据
+    selected 选择抓取：仅下载已选消息 id 的媒体并上传（一次性，完成后 worker 清空选择）
 
-断点说明：last_id 表示「已处理的最小 message id」，脚本只处理 id < last_id 的消息。
-首次运行时 last_id=0，从最新开始；后台可手动改 last_id 从指定位置重拉。
+上传：≤19MB 走 multipart；>19MB ≤90MB 走 stream=1 流式（worker 直接流入 R2，不整块进内存）；
+      >90MB 跳过（任务 max_size 上限已被后台收紧到 90MB）。
 """
 import argparse
 import asyncio
@@ -42,12 +40,14 @@ import time
 import httpx
 
 from telethon import TelegramClient
-from telethon.errors import FloodWaitError
 from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaPhoto
 
-# 与 worker /api/v1/upload 的 19MB 上限保持一致
-UPLOAD_MAX = 19 * 1024 * 1024
+# 与 worker /api/v1/upload 一致：≤19MB 走 multipart；>19MB ≤90MB 走 stream 流式
+UPLOAD_SMALL_MAX = 19 * 1024 * 1024
+UPLOAD_HARD_MAX = 90 * 1024 * 1024
+# 相册上报分片：单次 POST 最多多少个相册
+ALBUM_MAX_PER_POST = 500
 # 翻历史消息的最小间隔（秒）
 ITER_WAIT = 1.0
 # 下载/上传前的最小间隔
@@ -199,128 +199,324 @@ async def run_task_once(hc, args, task_id):
     tags = task.get("tags") or ""
     pool = 1 if task.get("pool") else 0
     level = task.get("level") or "pt"
-    max_size = int(task.get("max_size") or 0) or UPLOAD_MAX
+    max_size = int(task.get("max_size") or 0) or UPLOAD_SMALL_MAX
+    if max_size > UPLOAD_HARD_MAX:
+        max_size = UPLOAD_HARD_MAX
     limit = args.limit if args.limit is not None else int(task.get("limit") or 0)
     last_id = int(task.get("last_id") or 0)
     title_prefix = task.get("title") or ""
+    mode = task.get("mode") or "normal"
+    selected_ids = [x for x in str(task.get("selected_msg_ids") or "").replace(" ", "").split(",") if x.isdigit()]
+    scan_limit = int(task.get("scan_limit") or 0) or ALBUM_MAX_PER_POST * 4
 
-    print(f"任务 #{task_id}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool} level={level} max_size={max_size} limit={limit}")
-    if last_id:
+    print(f"任务 #{task_id}: chat={chat_id} title={task.get('title')} tags={tags} pool={pool} level={level} max_size={max_size} limit={limit} mode={mode}")
+    if mode == "list":
+        print(f"列表模式：枚举最近 {scan_limit} 条消息聚合相册（不下载相册媒体）")
+    elif mode == "selected":
+        print(f"选择抓取模式：仅处理 {len(selected_ids)} 条已选消息")
+    elif last_id:
         print(f"断点续拉：跳过 message id >= {last_id}，向更早翻")
 
-    # 复用外部传入的 httpx 客户端（上传 + 回写断点）
-    await run_pull(hc, client_kwargs=(session_str, api_id, api_hash), chat_id=chat_id,
-                   tags=tags, pool=pool, level=level, max_size=max_size, limit=limit,
-                   last_id=last_id, title_prefix=title_prefix, upload_api_key=upload_api_key,
-                   server=server, task=task, task_id=task_id, args=args)
-
-
-async def run_pull(hc, client_kwargs, chat_id, tags, pool, level, max_size, limit, last_id, title_prefix, upload_api_key, server, task, task_id, args):
-    session_str, api_id, api_hash = client_kwargs
+    # 打开会话一次，按 mode 分发到对应流程
     async with TelegramClient(StringSession(session_str), api_id, api_hash) as client:
         await client.start()
         if not await client.is_user_authorized():
             print("会话未授权（StringSession 失效），请在本地重新登录并更新后台配置", file=sys.stderr)
             sys.exit(1)
         chat = await client.get_entity(chat_id)
-        title = getattr(chat, "title", chat_id)
-        print(f"群: {title}")
+        print(f"群: {getattr(chat, 'title', chat_id)}")
 
-        done = 0
-        skipped = 0
-        min_id = last_id or None  # 已处理的最小 id，回写给后台
-        pending_progress = {"last_id": min_id or 0, "done": 0, "skipped": 0}
+        if mode == "list":
+            await run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args)
+        elif mode == "selected":
+            await run_selected_pull(hc, client, chat, task, tags, pool, level, max_size, title_prefix, upload_api_key, server, args)
+        else:
+            await run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, last_id, title_prefix, upload_api_key, server, args)
 
-        async def save_progress(final=False):
-            # 向 worker 回写断点（不阻塞主循环，失败静默）
-            pending_progress["last_id"] = min_id or 0
-            pending_progress["done"] = done
-            pending_progress["skipped"] = skipped
+
+async def upload_media(hc, server, task_id, msg_id, data, params):
+    """按文件大小选上传路径：≤19MB 走 multipart；>19MB ≤90MB 走 stream=1 流式（worker 直入 R2）。"""
+    name = f"ubot_{task_id}_{msg_id}.jpg"
+    if len(data) <= UPLOAD_SMALL_MAX:
+        return await hc.post(server + "/api/v1/upload", params=params,
+                             files={"file": (name, data, "image/jpeg")}, timeout=120)
+    p = dict(params)
+    p["stream"] = "1"
+    return await hc.post(server + "/api/v1/upload", params=p, content=data,
+                         headers={"X-File-Name": name, "Content-Type": "image/jpeg"}, timeout=600)
+
+
+async def upload_cover(hc, server, upload_api_key, task_id, grouped_id, data):
+    """相册封面缩略图：cover=1 上传到 album_covers/，不写 files 表；失败返回空串。"""
+    try:
+        params = {"api_key": upload_api_key, "cover": "1", "task_id": task_id, "grouped_id": grouped_id}
+        r = await hc.post(server + "/api/v1/upload", params=params,
+                          files={"file": (f"cover_{task_id}_{grouped_id}.jpg", data, "image/jpeg")}, timeout=60)
+        if r.status_code == 200:
+            j = r.json()
+            return (j.get("data") or {}).get("url", "")
+    except Exception as e:
+        print(f"  封面上传异常 {grouped_id}: {e}", file=sys.stderr)
+    return ""
+
+
+async def run_pull(hc, client, chat, task, tags, pool, level, max_size, limit, last_id, title_prefix, upload_api_key, server, args):
+    """普通抓取模式：从最新向更早翻历史图片，跳过 >max_size，断点 last_id 续拉。"""
+    task_id = task["id"]
+    done = 0
+    skipped = 0
+    min_id = last_id or None  # 已处理的最小 id，回写给后台
+    pending_progress = {"last_id": min_id or 0, "done": 0, "skipped": 0}
+
+    async def save_progress(final=False):
+        # 向 worker 回写断点（不阻塞主循环，失败静默）
+        pending_progress["last_id"] = min_id or 0
+        pending_progress["done"] = done
+        pending_progress["skipped"] = skipped
+        try:
+            u = f"{server}/api/ubot/task/{task_id}/progress?token={args.token}"
+            await hc.post(u, json=pending_progress)
+        except Exception:
+            pass
+
+    # 手动迭代（非 async for），支持 FloodWait 后重试同一条消息
+    it = client.iter_messages(chat, reverse=False, wait_time=ITER_WAIT)
+    while True:
+        try:
+            msg = await it.__anext__()
+        except StopAsyncIteration:
+            break
+        except Exception:
+            break
+
+        if last_id and msg.id >= last_id:
+            continue
+        if not msg.media or not isinstance(msg.media, MessageMediaPhoto):
+            continue
+        if limit and done >= limit:
+            break
+
+        size = getattr(getattr(msg.media, "photo", None), "size", 0) or 0
+        if size > max_size or size <= 0:
+            if size > max_size:
+                skipped += 1
+                print(f"  跳过 #{msg.id}: {size}B 超限(>{max_size})", file=sys.stderr)
+            min_id = msg.id if (min_id is None or msg.id < min_id) else min_id
+            done += 1
+            continue
+
+        if args.dry_run:
+            caption = (msg.message or "").splitlines()[0] if msg.message else ""
+            print(f"  [dry] #{msg.id} size={size} {caption[:40]}")
+        else:
             try:
-                u = f"{server}/api/ubot/task/{task_id}/progress?token={args.token}"
-                await hc.post(u, json=pending_progress)
-            except Exception:
-                pass
-
-        # 手动迭代（非 async for），支持 FloodWait 后重试同一条消息
-        it = client.iter_messages(chat, reverse=False, wait_time=ITER_WAIT)
-        while True:
-            try:
-                msg = await it.__anext__()
-            except StopAsyncIteration:
-                break
-            except Exception:
-                break
-
-            if last_id and msg.id >= last_id:
+                data = await msg.download_media(file=bytes)
+            except Exception as e:
+                print(f"  下载失败 #{msg.id}: {e}", file=sys.stderr)
+                time.sleep(5)
                 continue
-            if not msg.media or not isinstance(msg.media, MessageMediaPhoto):
+            if not data:
                 continue
-            if limit and done >= limit:
-                break
-
-            size = getattr(getattr(msg.media, "photo", None), "size", 0) or 0
-            if size > max_size or size <= 0:
-                if size > max_size:
-                    skipped += 1
-                    print(f"  跳过 #{msg.id}: {size}B 超限(>{max_size})", file=sys.stderr)
+            if len(data) > max_size:
+                skipped += 1
+                print(f"  跳过 #{msg.id}: {len(data)}B 超限", file=sys.stderr)
                 min_id = msg.id if (min_id is None or msg.id < min_id) else min_id
                 done += 1
                 continue
+            await asyncio.sleep(WORK_DELAY)
 
+            caption = (msg.message or "").splitlines()[0] if msg.message else ""
+            title = (title_prefix + " " + caption).strip()[:200]
+            params = {"api_key": upload_api_key, "tags": tags, "title": title, "level": level}
+            if pool:
+                params["pool"] = "1"
+            try:
+                r = await upload_media(hc, server, task_id, msg.id, data, params)
+                if r.status_code != 200:
+                    print(f"  上传失败 #{msg.id}: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+                    if r.status_code in (429, 500, 502, 503):
+                        time.sleep(10)
+                    continue
+                print(f"  ✓ #{msg.id} uploaded {len(data)}B")
+            except Exception as e:
+                print(f"  上传异常 #{msg.id}: {e}", file=sys.stderr)
+                time.sleep(5)
+                continue
+            await asyncio.sleep(FORWARD_DELAY)
+
+        min_id = msg.id if (min_id is None or msg.id < min_id) else min_id
+        done += 1
+
+        if done % BATCH_SIZE == 0:
+            await save_progress()
+            print(f"  已处理 {done} 张，休息 {BATCH_SLEEP}s…")
+            await asyncio.sleep(BATCH_SLEEP)
+
+    await save_progress()
+    print(f"完成：本次 {done} 张（跳过超限 {skipped} 张），断点 last_id={min_id or 0}")
+
+
+async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, upload_api_key, server, args):
+    """列表模式：枚举最近 scan_limit 条消息聚合相册，传封面缩略图，整批上报元数据（不下载相册媒体）。"""
+    albums = {}  # grouped_id -> {msg_ids, sizes, first_ts, cover_msg_id}
+    scanned = 0
+    it = client.iter_messages(chat, reverse=False, wait_time=ITER_WAIT)
+    while True:
+        try:
+            msg = await it.__anext__()
+        except StopAsyncIteration:
+            break
+        except Exception:
+            break
+        if scanned >= scan_limit:
+            break
+        scanned += 1
+        if not msg.media or msg.grouped_id is None:
+            continue
+        if not isinstance(msg.media, MessageMediaPhoto):
+            continue
+        gid = str(msg.grouped_id)
+        a = albums.setdefault(gid, {"msg_ids": [], "sizes": [], "first_ts": 0})
+        a["msg_ids"].append(msg.id)
+        photo = getattr(msg.media, "photo", None)
+        sz = 0
+        w = 0
+        h = 0
+        if photo and getattr(photo, "sizes", None):
+            for s in photo.sizes:
+                ss = getattr(s, "size", 0) or 0
+                if ss and ss > sz:
+                    sz = ss
+                    w = getattr(s, "w", 0) or 0
+                    h = getattr(s, "h", 0) or 0
+        a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h})
+        if msg.date:
+            ts0 = int(msg.date.timestamp())
+            if not a["first_ts"] or ts0 < a["first_ts"]:
+                a["first_ts"] = ts0
+
+    # 每相册上传封面（取首条消息最小尺寸图 thumb=0，小图 ≤19MB 走 multipart）
+    for gid, a in albums.items():
+        a["msg_ids"].sort()
+        a["sizes"].sort(key=lambda s: s["id"])
+        cover_msg = a["msg_ids"][0]
+        try:
+            m = await client.get_messages(chat, ids=cover_msg)
+            data = await m.download_media(file=bytes, thumb=0)
+            if data:
+                a["cover_url"] = await upload_cover(hc, server, upload_api_key, task_id, gid, data)
+        except Exception as e:
+            print(f"  封面获取失败 {gid}: {e}", file=sys.stderr)
+        a["cover_url"] = a.get("cover_url", "")
+        await asyncio.sleep(WORK_DELAY)
+
+    payload = []
+    for gid, a in albums.items():
+        payload.append({
+            "grouped_id": gid,
+            "msg_ids": a["msg_ids"],
+            "count": len(a["msg_ids"]),
+            "sizes": a["sizes"],
+            "cover_url": a["cover_url"],
+            "first_ts": a["first_ts"],
+            "has_oversize": 1 if any(s["size"] > max_size for s in a["sizes"]) else 0,
+        })
+    # 分片上报（单次 ≤ALBUM_MAX_PER_POST）；worker 收到后把任务 mode 收敛回 normal
+    for i in range(0, len(payload), ALBUM_MAX_PER_POST):
+        chunk = payload[i:i + ALBUM_MAX_PER_POST]
+        try:
+            r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
+                              json={"albums": chunk}, timeout=60)
+            if r.status_code != 200:
+                print(f"  相册上报失败: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+        except Exception as e:
+            print(f"  相册上报异常: {e}", file=sys.stderr)
+    print(f"列表模式完成：扫描 {scanned} 条，聚合 {len(payload)} 个相册")
+
+
+async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size, title_prefix, upload_api_key, server, args):
+    """选择抓取模式：仅下载已选消息 id 的媒体并上传入库（一次性，worker 完成后清空选择恢复 normal）。"""
+    task_id = task["id"]
+    selected_ids = [int(x) for x in str(task.get("selected_msg_ids") or "").replace(" ", "").split(",") if x.isdigit()]
+    if not selected_ids:
+        print("选择抓取模式：选择集合为空，跳过本轮", file=sys.stderr)
+        return
+    done = 0
+    skipped = 0
+    pending_progress = {"last_id": 0, "done": 0, "skipped": 0}
+
+    async def save_progress(final=False):
+        pending_progress["done"] = done
+        pending_progress["skipped"] = skipped
+        try:
+            u = f"{server}/api/ubot/task/{task_id}/progress?token={args.token}"
+            await hc.post(u, json=pending_progress)
+        except Exception:
+            pass
+
+    # 分批拉取消息（每批 50 条，减少 MTProto 往返），再逐条下载上传
+    for i in range(0, len(selected_ids), 50):
+        chunk = selected_ids[i:i + 50]
+        msgs = []
+        try:
+            got = await client.get_messages(chat, ids=chunk)
+            if got:
+                msgs = got if isinstance(got, list) else [got]
+        except Exception as e:
+            print(f"  批量取消息失败 {chunk}: {e}", file=sys.stderr)
+            msgs = []
+        for msg in msgs:
+            mid = msg.id if msg else None
+            if not msg or not msg.media or not isinstance(msg.media, MessageMediaPhoto):
+                if mid:
+                    skipped += 1
+                continue
+            size = getattr(getattr(msg.media, "photo", None), "size", 0) or 0
+            if size > max_size or size <= 0:
+                skipped += 1
+                print(f"  跳过 #{mid}: {size}B 超限(>{max_size})", file=sys.stderr)
+                continue
             if args.dry_run:
-                caption = (msg.message or "").splitlines()[0] if msg.message else ""
-                print(f"  [dry] #{msg.id} size={size} {caption[:40]}")
+                print(f"  [dry] #{mid} size={size}")
             else:
                 try:
                     data = await msg.download_media(file=bytes)
                 except Exception as e:
-                    print(f"  下载失败 #{msg.id}: {e}", file=sys.stderr)
+                    print(f"  下载失败 #{mid}: {e}", file=sys.stderr)
                     time.sleep(5)
                     continue
                 if not data:
                     continue
                 if len(data) > max_size:
                     skipped += 1
-                    print(f"  跳过 #{msg.id}: {len(data)}B 超限", file=sys.stderr)
-                    min_id = msg.id if (min_id is None or msg.id < min_id) else min_id
-                    done += 1
+                    print(f"  跳过 #{mid}: {len(data)}B 超限", file=sys.stderr)
                     continue
                 await asyncio.sleep(WORK_DELAY)
-
                 caption = (msg.message or "").splitlines()[0] if msg.message else ""
                 title = (title_prefix + " " + caption).strip()[:200]
                 params = {"api_key": upload_api_key, "tags": tags, "title": title, "level": level}
                 if pool:
                     params["pool"] = "1"
                 try:
-                    r = await hc.post(
-                        server + "/api/v1/upload",
-                        params=params,
-                        files={"file": (f"ubot_{task['id']}_{msg.id}.jpg", data, "image/jpeg")}
-                    )
+                    r = await upload_media(hc, server, task_id, msg.id, data, params)
                     if r.status_code != 200:
-                        print(f"  上传失败 #{msg.id}: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+                        print(f"  上传失败 #{mid}: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
                         if r.status_code in (429, 500, 502, 503):
                             time.sleep(10)
                         continue
-                    print(f"  ✓ #{msg.id} uploaded {len(data)}B")
+                    print(f"  ✓ #{mid} uploaded {len(data)}B")
                 except Exception as e:
-                    print(f"  上传异常 #{msg.id}: {e}", file=sys.stderr)
+                    print(f"  上传异常 #{mid}: {e}", file=sys.stderr)
                     time.sleep(5)
                     continue
                 await asyncio.sleep(FORWARD_DELAY)
-
-            min_id = msg.id if (min_id is None or msg.id < min_id) else min_id
             done += 1
-
             if done % BATCH_SIZE == 0:
                 await save_progress()
-                print(f"  已处理 {done} 张，休息 {BATCH_SLEEP}s…")
                 await asyncio.sleep(BATCH_SLEEP)
 
-        await save_progress()
-        print(f"完成：本次 {done} 张（跳过超限 {skipped} 张），断点 last_id={min_id or 0}")
+    await save_progress()
+    print(f"选择抓取完成：{done} 张（跳过 {skipped} 张）")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,30 @@
 import { json } from './util.js';
 import { sanitizeLevel, clampInt } from './core.js';
 
+// 相册模式 / 选择抓取 / 大文件流式上传 的常量与辅助
+export const UPLOAD_HARD_MAX = 90 * 1024 * 1024;      // 流式上传硬上限（与 public.js 一致）
+export const UPLOAD_SMALL_MAX = 19 * 1024 * 1024;      // 既有 multipart 路径上限（与 public.js 一致）
+export const ALBUM_SCAN_LIMIT = 2000;                  // 列表模式默认枚举消息条数
+export const ALBUM_MAX_PER_POST = 500;                 // 单次相册上报上限（超出分片）
+
+function taskToOut(t) {
+  return {
+    id: t.id, chat_id: t.chat_id, title: t.title, tags: t.tags, pool: t.pool, level: t.level,
+    max_size: t.max_size, limit: t.limit, enabled: t.enabled, last_id: t.last_id,
+    done: t.done, skipped: t.skipped, note: t.note,
+    mode: t.mode || 'normal', selected_msg_ids: t.selected_msg_ids || '', scan_limit: t.scan_limit || ALBUM_SCAN_LIMIT
+  };
+}
+
+function parseSelectedIds(str, max) {
+  const arr = String(str || '').split(',').map(function(x) { return x.trim(); }).filter(function(x) { return /^\d+$/.test(x); });
+  const uniq = [];
+  const seen = {};
+  arr.forEach(function(x) { if (!seen[x]) { seen[x] = 1; uniq.push(x); } });
+  if (max) uniq.length = Math.min(uniq.length, max);
+  return uniq;
+}
+
 // ---------------- 全局配置（settings 表，admin 可读写） ----------------
 const CFG_KEYS = ['ub_api_id', 'ub_api_hash', 'ub_session', 'ub_token', 'ub_api_key'];
 
@@ -54,7 +78,7 @@ function genUserbotToken() {
 export async function handleAdminUserbotTasks(env) {
   try {
     const d = await env.D1_DB.prepare('SELECT * FROM userbot_tasks ORDER BY id DESC').all();
-    return json({ ok: true, data: d.results || [] });
+    return json({ ok: true, data: (d.results || []).map(taskToOut) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -64,8 +88,8 @@ export async function handleAdminUserbotTaskCreate(request, env) {
     const chatId = String(b.chat_id || '').trim();
     if (!chatId) return json({ ok: false, error: 'chat_id 必填' }, 400);
     const now = new Date().toISOString();
-    const r = await env.D1_DB.prepare('INSERT INTO userbot_tasks (chat_id,title,tags,pool,level,max_size,"limit",enabled,last_id,note,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-      .bind(chatId, String(b.title || '').slice(0, 200), String(b.tags || '').slice(0, 500), b.pool ? 1 : 0, sanitizeLevel(b.level), clampInt(b.max_size, 0, 0, 100 * 1024 * 1024), clampInt(b.limit, 0, 0, 1000000), b.enabled === undefined || b.enabled ? 1 : 0, clampInt(b.last_id, 0, 0, 9000000000000000000), String(b.note || '').slice(0, 500), now, now).run();
+    const r = await env.D1_DB.prepare('INSERT INTO userbot_tasks (chat_id,title,tags,pool,level,max_size,"limit",enabled,last_id,note,mode,selected_msg_ids,scan_limit,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(chatId, String(b.title || '').slice(0, 200), String(b.tags || '').slice(0, 500), b.pool ? 1 : 0, sanitizeLevel(b.level), clampInt(b.max_size, 0, 0, UPLOAD_HARD_MAX), clampInt(b.limit, 0, 0, 1000000), b.enabled === undefined || b.enabled ? 1 : 0, clampInt(b.last_id, 0, 0, 9000000000000000000), String(b.note || '').slice(0, 500), 'normal', '', clampInt(b.scan_limit, 0, 100, 100000) || ALBUM_SCAN_LIMIT, now, now).run();
     return json({ ok: true, data: { id: r.meta?.last_row_id || 0 } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -81,11 +105,14 @@ export async function handleAdminUserbotTaskUpdate(request, env, id) {
     if (b.tags !== undefined) col('tags', String(b.tags).slice(0, 500));
     if (b.pool !== undefined) col('pool', b.pool ? 1 : 0);
     if (b.level !== undefined) col('level', sanitizeLevel(b.level));
-    if (b.max_size !== undefined) col('max_size', clampInt(b.max_size, 0, 0, 100 * 1024 * 1024));
+    if (b.max_size !== undefined) col('max_size', clampInt(b.max_size, 0, 0, UPLOAD_HARD_MAX));
     if (b.limit !== undefined) col('"limit"', clampInt(b.limit, 0, 0, 1000000));
     if (b.enabled !== undefined) col('enabled', b.enabled ? 1 : 0);
     if (b.last_id !== undefined) col('last_id', clampInt(b.last_id, 0, 0, 9000000000000000000));
     if (b.note !== undefined) col('note', String(b.note).slice(0, 500));
+    if (b.scan_limit !== undefined) col('scan_limit', clampInt(b.scan_limit, 0, 100, 100000));
+    if (b.mode !== undefined) col('mode', ['normal', 'list', 'selected'].indexOf(b.mode) !== -1 ? b.mode : 'normal');
+    if (b.selected_msg_ids !== undefined) col('selected_msg_ids', parseSelectedIds(b.selected_msg_ids, 5000).join(','));
     if (set.length === 0) return json({ ok: true, data: { updated: false } });
     set.push('updated_at=?');
     vals.push(new Date().toISOString());
@@ -97,6 +124,7 @@ export async function handleAdminUserbotTaskUpdate(request, env, id) {
 export async function handleAdminUserbotTaskDelete(env, id) {
   try {
     await env.D1_DB.prepare('DELETE FROM userbot_tasks WHERE id=?').bind(id).run();
+    await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
     return json({ ok: true, data: { deleted: true } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -121,8 +149,8 @@ export async function handleUserbotTaskConfig(request, env, id) {
     const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
     if (!t) return json({ ok: false, error: 'task not found' }, 404);
     return json({ ok: true, data: {
-      task: { id: t.id, chat_id: t.chat_id, title: t.title, tags: t.tags, pool: t.pool, level: t.level, max_size: t.max_size, limit: t.limit, enabled: t.enabled, last_id: t.last_id, note: t.note },
-      global: gcfg
+      task: taskToOut(t),
+      global: Object.assign(gcfg, { upload_small_max: UPLOAD_SMALL_MAX, upload_hard_max: UPLOAD_HARD_MAX, album_scan_limit: ALBUM_SCAN_LIMIT })
     } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -141,5 +169,96 @@ export async function handleUserbotTaskProgress(request, env, id) {
     await env.D1_DB.prepare('UPDATE userbot_tasks SET last_id=?, done=?, skipped=?, updated_at=? WHERE id=?')
       .bind(lastId, done, skipped, new Date().toISOString(), id).run();
     return json({ ok: true, data: { saved: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 相册管理（管理侧 + 脚本侧） ====================
+// 管理侧：浏览相册触发列表模式 / 读缓存 / 保存勾选 / 触发选择抓取
+export async function handleAdminUbotAlbumListAction(request, env, id) {
+  try {
+    const b = await request.json().catch(function(){ return {}; });
+    const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
+    if (!t) return json({ ok: false, error: 'task not found' }, 404);
+    const scan = b.scan_limit ? clampInt(b.scan_limit, 100, 100000) : (t.scan_limit || ALBUM_SCAN_LIMIT);
+    await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, updated_at=? WHERE id=?")
+      .bind(scan, new Date().toISOString(), id).run();
+    return json({ ok: true, data: { triggered: true, scan_limit: scan } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminUbotAlbumsGet(env, id) {
+  try {
+    const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
+    if (!t) return json({ ok: false, error: 'task not found' }, 404);
+    const d = await env.D1_DB.prepare('SELECT * FROM ubot_albums WHERE task_id=? ORDER BY first_ts DESC, id ASC').bind(id).all();
+    const selected = new Set(parseSelectedIds(t.selected_msg_ids, 5000));
+    const albums = (d.results || []).map(function(a) {
+      let sizes = [];
+      try { sizes = JSON.parse(a.sizes || '[]'); } catch (e) { sizes = []; }
+      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes, cover_url: a.cover_url, first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
+    });
+    return json({ ok: true, data: { task: taskToOut(t), albums: albums } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminUbotAlbumsSelect(request, env, id) {
+  try {
+    const b = await request.json().catch(function(){ return {}; });
+    const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
+    if (!t) return json({ ok: false, error: 'task not found' }, 404);
+    // 校验所选消息属于该任务相册缓存
+    const d = await env.D1_DB.prepare('SELECT msg_ids FROM ubot_albums WHERE task_id=?').bind(id).all();
+    const allowed = {};
+    (d.results || []).forEach(function(a) {
+      String(a.msg_ids || '').split(',').filter(Boolean).forEach(function(m) { allowed[m] = 1; });
+    });
+    const want = parseSelectedIds(b.msg_ids, 5000);
+    const valid = want.filter(function(m) { return allowed[m]; });
+    await env.D1_DB.prepare('UPDATE userbot_tasks SET selected_msg_ids=?, updated_at=? WHERE id=?')
+      .bind(valid.join(','), new Date().toISOString(), id).run();
+    return json({ ok: true, data: { saved: valid.length, invalid: want.length - valid.length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminUbotAlbumsTrigger(request, env, id) {
+  try {
+    const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
+    if (!t) return json({ ok: false, error: 'task not found' }, 404);
+    const ids = parseSelectedIds(t.selected_msg_ids, 5000);
+    if (!ids.length) return json({ ok: false, error: '选择集合为空：请先在相册列表中勾选并保存' }, 400);
+    await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='selected', updated_at=? WHERE id=?")
+      .bind(new Date().toISOString(), id).run();
+    return json({ ok: true, data: { triggered: true, selected: ids.length } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 脚本侧：批量上报相册元数据（ub_token 鉴权）；完成后任务 mode 回到 normal
+export async function handleUbotAlbumsReport(request, env, id) {
+  try {
+    const b = await request.json().catch(function(){ return {}; });
+    const u = new URL(request.url);
+    const tok = u.searchParams.get('token') || request.headers.get('X-Ub-Token') || '';
+    const cfg = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('ub_token').first();
+    if (!tok || !cfg || !cfg.value || tok !== cfg.value) return json({ ok: false, error: 'Unauthorized' }, 401);
+    const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
+    if (!t) return json({ ok: false, error: 'task not found' }, 404);
+    const albums = Array.isArray(b.albums) ? b.albums : [];
+    // 先删旧缓存再插新结果（列表模式结果整体替换）
+    await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
+    if (albums.length) {
+      const now = new Date().toISOString();
+      const stmt = env.D1_DB.prepare('INSERT INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)');
+      for (const a of albums) {
+        const gid = String(a.grouped_id || '').slice(0, 64);
+        if (!gid) continue;
+        const msgIds = Array.isArray(a.msg_ids) ? a.msg_ids.filter(function(x) { return /^\d+$/.test(String(x)); }).slice(0, 500) : [];
+        const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0 }; }).slice(0, 500) : [];
+        if (!msgIds.length) continue;
+        await stmt.bind(id, gid, msgIds.join(','), msgIds.length, JSON.stringify(sizes), String(a.cover_url || '').slice(0, 500), Number(a.first_ts) || 0, a.has_oversize ? 1 : 0, now).run();
+      }
+    }
+    await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='normal', updated_at=? WHERE id=? AND mode='list'")
+      .bind(new Date().toISOString(), id).run();
+    return json({ ok: true, data: { stored: albums.length, mode: 'normal' } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }

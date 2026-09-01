@@ -3,7 +3,7 @@
 // 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
 import { json, log, invalidateStatsCache } from "./util.js";
 import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode, splitTags } from "./core.js";
-import { lastUploadError, putR2 } from "./telegram.js";
+import { lastUploadError, putR2, putR2Stream } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
 import { applyRateLimit } from "./ratelimit.js";
@@ -907,6 +907,26 @@ export function poolFileJson(r) {
 // Body: multipart/form-data, field "file" = 文件内容（默认进 files 表；pool=1 进共享库 random_pool）
 // 级别默认 = 密钥级别（级别对等：上传内容级别不得超过密钥级别）；is_private=1 仅 vvip 密钥可用
 const PUBLIC_UPLOAD_MAX = 19 * 1024 * 1024; // 19MB
+const PUBLIC_UPLOAD_HARD_MAX = 90 * 1024 * 1024; // 90MB: 流式上传硬上限（userbot 大文件，超过跳过）
+const MIME_MAP = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+  mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+  pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain'
+};
+function classifyExt(ext) {
+  const vids = ['mp4', 'mov', 'mkv', 'webm', 'avi'];
+  const auds = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'];
+  const imgs = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
+  let fileType = 'document';
+  if (vids.indexOf(ext) !== -1) fileType = 'video';
+  else if (auds.indexOf(ext) !== -1) fileType = 'audio';
+  else if (imgs.indexOf(ext) !== -1) fileType = 'photo';
+  return { fileType: fileType, ct: MIME_MAP[ext] || 'application/octet-stream' };
+}
+function safeExtFromName(name) {
+  return (String(name || 'file.bin').split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+}
 export async function handlePublicUpload(request, env, keyLevel) {
   try {
     if (!env.R2_BUCKET) return json({ ok: false, error: 'R2 not configured' }, 500);
@@ -921,6 +941,35 @@ export async function handlePublicUpload(request, env, keyLevel) {
     const isPrivate = (u.searchParams.get('is_private') === '1' || u.searchParams.get('is_private') === 'true') && keyLevel === 'vvip' ? 1 : 0;
     const useLevel = isPrivate ? 'vvip' : reqLevel;
     const tags = splitTags(tagsParam).join(',');
+    const stream = u.searchParams.get('stream') === '1';
+
+    // 流式分支：>19MB ≤90MB 的大文件，raw body 直接流入 R2，不整块读入 worker 内存
+    if (stream) {
+      const cl = Number(request.headers.get('Content-Length') || 0);
+      if (!cl) return json({ ok: false, error: 'Content-Length required' }, 411);
+      if (cl > PUBLIC_UPLOAD_HARD_MAX) return json({ ok: false, error: 'file too large (max 90MB)' }, 413);
+      if (cl <= PUBLIC_UPLOAD_MAX) return json({ ok: false, error: 'stream mode only for files >19MB; use multipart' }, 400);
+      const name = String(request.headers.get('X-File-Name') || 'file.bin').replace(/[\\/:*?"<>|]/g, '_');
+      const ext = safeExtFromName(name);
+      const info = classifyExt(ext);
+      const ct = request.headers.get('X-File-Type') || info.ct;
+      const now = new Date();
+      const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+      const key = (pool ? 'pool/' : 'files/') + ym + '/' + randHex(16) + '.' + ext;
+      const url = await putR2Stream(key, request.body, ct, env);
+      if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
+      const iso = now.toISOString();
+      if (pool) {
+        await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+          .bind(url, url, title || name, tags, useLevel, isPrivate, info.fileType, cl, 'api', iso).run();
+        return json({ ok: true, data: { url: url, added: 1, pool: true, level: useLevel, is_private: isPrivate, file_type: info.fileType, file_size: cl } });
+      }
+      const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+        .bind(key, url, name, cl, info.fileType, ct, title, tags, useLevel, isPrivate, iso).run();
+      fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: name, file_type: info.fileType, level: useLevel, is_private: isPrivate, file_size: cl, title: title, tags: tags }).catch(function(){});
+      invalidateStatsCache();
+      return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: info.fileType, file_size: cl } });
+    }
 
     const fd = await request.formData().catch(function(){ return null; });
     if (!fd) return json({ ok: false, error: 'multipart/form-data required (field "file")' }, 400);
@@ -931,26 +980,22 @@ export async function handlePublicUpload(request, env, keyLevel) {
     if (!bytes.length) return json({ ok: false, error: 'empty file' }, 400);
 
     const name = String(file.name || 'file.bin').replace(/[\\/:*?"<>|]/g, '_');
-    const ext = (name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
-    const mimeMap = {
-      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
-      mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
-      mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
-      pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain'
-    };
-    const ct = mimeMap[ext] || 'application/octet-stream';
-    const vids = ['mp4', 'mov', 'mkv', 'webm', 'avi'];
-    const auds = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'];
-    const imgs = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
-    let fileType = 'document';
-    if (vids.indexOf(ext) !== -1) fileType = 'video';
-    else if (auds.indexOf(ext) !== -1) fileType = 'audio';
-    else if (imgs.indexOf(ext) !== -1) fileType = 'photo';
+    const ext = safeExtFromName(name);
+    const info = classifyExt(ext);
+    const ct = info.ct;
+    const fileType = info.fileType;
     const now = new Date();
     const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
-    const key = (pool ? 'pool/' : 'files/') + ym + '/' + randHex(16) + '.' + ext;
+    // cover=1：群相册封面缩略图，入 album_covers/，不写 files/random_pool 行
+    const cover = u.searchParams.get('cover') === '1';
+    const coverTask = String(u.searchParams.get('task_id') || '').replace(/[^0-9]/g, '');
+    const coverGid = String(u.searchParams.get('grouped_id') || '').replace(/[^0-9a-zA-Z_-]/g, '');
+    const key = cover
+      ? ('album_covers/' + coverTask + '/' + coverGid + '.' + ext)
+      : ((pool ? 'pool/' : 'files/') + ym + '/' + randHex(16) + '.' + ext);
     const url = await putR2(key, bytes, ct, env);
     if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
+    if (cover) return json({ ok: true, data: { url: url } });
 
     const iso = now.toISOString();
     if (pool) {

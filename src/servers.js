@@ -353,6 +353,11 @@ export async function handleTaskRunReport(request, env, taskId) {
       // 同步更新 userbot_tasks 的 done/skipped
       if (status === 'finished') {
         await env.D1_DB.prepare('UPDATE userbot_tasks SET done=?, skipped=?, updated_at=? WHERE id=?').bind(done, skipped, now, taskId).run();
+        // selected（选择抓取）一次性模式：本轮全部完成后清空选择、恢复普通模式
+        const t = await env.D1_DB.prepare("SELECT mode FROM userbot_tasks WHERE id=? AND mode='selected'").bind(taskId).first();
+        if (t) {
+          await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='normal', selected_msg_ids='', updated_at=? WHERE id=?").bind(now, taskId).run();
+        }
       }
       return json({ ok: true });
     }
