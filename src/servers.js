@@ -152,7 +152,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   (apt-get update -y && apt-get install -y python3 python3-pip) || (yum install -y python3 python3-pip) || true
 fi
 python3 -m pip install --upgrade pip -q || true
-python3 -m pip install -q telethon httpx || true
+python3 -m pip install --break-system-packages -q telethon httpx || true
 
 echo "[2/4] 下载抓取脚本..."
 mkdir -p /opt/ubot
@@ -179,7 +179,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/ubot
 EnvironmentFile=/opt/ubot/config.env
-ExecStart=/usr/bin/python3 /opt/ubot/userbot_pull.py --daemon --server \\$UBOT_SERVER --token \\$UBOT_TOKEN --srv-token \\$UBOT_SRV_TOKEN --tasks \\$UBOT_TASKS
+ExecStart=/usr/bin/python3 /opt/ubot/userbot_pull.py --daemon --server \$UBOT_SERVER --token \$UBOT_TOKEN --srv-token \$UBOT_SRV_TOKEN --tasks \$UBOT_TASKS
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/ubot-agent.log
