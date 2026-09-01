@@ -5,7 +5,7 @@ let _tablesEnsured = false;
 // 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
 // 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
 // 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
-const SCHEMA_VERSION = '7';
+const SCHEMA_VERSION = '8';
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
