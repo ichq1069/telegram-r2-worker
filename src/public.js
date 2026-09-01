@@ -1036,9 +1036,7 @@ export async function handleAdminTags(env) {
 // ==================== 标签 CRUD ====================
 export async function handleAdminTagList(env) {
   try {
-    const d = await env.D1_DB.prepare("SELECT * FROM tags ORDER BY sort_order ASC, name ASC").all();
-    const tags = d.results || [];
-    // 统计每个标签的使用次数（从 files 和 random_pool）
+    // 自动迁移：扫描 files/random_pool/userbot_tasks 中已用标签，自动写入 tags 表
     const d1 = await env.D1_DB.prepare("SELECT tags FROM files WHERE processing_state='completed' AND deleted_at IS NULL AND tags IS NOT NULL AND tags != ''").all();
     const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND source != 'tg' AND tags IS NOT NULL AND tags != ''").all();
     const d3 = await env.D1_DB.prepare("SELECT tags FROM userbot_tasks WHERE tags IS NOT NULL AND tags != ''").all();
@@ -1052,6 +1050,16 @@ export async function handleAdminTagList(env) {
         });
       });
     });
+    // 将未入库的标签自动插入 tags 表
+    const now = new Date().toISOString();
+    for (const name of Object.keys(cnt)) {
+      try {
+        await env.D1_DB.prepare("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)").bind(name, now).run();
+      } catch (e) { /* UNIQUE 冲突忽略 */ }
+    }
+    // 读取 tags 表
+    const d = await env.D1_DB.prepare("SELECT * FROM tags ORDER BY sort_order ASC, name ASC").all();
+    const tags = d.results || [];
     const result = tags.map(function(t) { return { id: t.id, name: t.name, color: t.color || '', category: t.category || '', sort_order: t.sort_order || 0, created_at: t.created_at || '', count: cnt[t.name] || 0 }; });
     return json({ ok: true, data: result });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }

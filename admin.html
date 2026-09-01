@@ -1140,6 +1140,21 @@ https://example.com/b.jpg"></textarea></div>
         <div id="ubSrvList" style="margin-top:12px"></div>
       </div>
     </div>
+
+    <!-- 相册浏览 -->
+    <div class="panel" id="panel-ubot-albums">
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>相册浏览 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">选择任务查看已扫描的相册图片，全屏瀑布流展示</span></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:12px">
+          <div class="fr" style="margin:0"><label>选择任务</label><select class="inp" id="ubAlbumGalleryTask" style="width:260px"><option value="">加载中...</option></select></div>
+          <button class="btn btn-primary" id="ubAlbumGalleryLoad">加载相册</button>
+          <span id="ubAlbumGalleryStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+        </div>
+        <div id="ubAlbumGalleryGrid" style="margin-top:16px;columns:5;column-gap:6px"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1242,7 +1257,7 @@ function toast(msg, ok) {
 }
 
 // 初始化
-var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","ops","ubot"];
+var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","ops","ubot","ubot-albums"];
 function switchTab(name) {
   var panels = document.querySelectorAll(".panel");
   var tabs = document.querySelectorAll("#tabBar .tab");
@@ -1272,6 +1287,7 @@ function switchTab(name) {
   if (name === "cmds") loadCmds();
   if (name === "ops") loadOpsPage();
   if (name === "ubot") loadUbotPage();
+  if (name === "ubot-albums") loadAlbumGallery();
   window.scrollTo(0, 0);
 }
 
@@ -1283,7 +1299,7 @@ function init() {
     { label: "素材库", items: [["pool","共享库","📚"],["private","私密库","🔒"],["quicktag","快速打标","⚡"],["tags","标签库","🏷"]] },
     { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"],["keyusers","密钥用户","👤"],["redeem","兑换码","🎟"],["logs","调用日志","📈"]] },
     { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"]] },
-    { label: "系统", items: [["ops","运维工具","🛠"],["ubot","群抓取","📥"]] }
+    { label: "系统", items: [["ops","运维工具","🛠"],["ubot","群抓取","📥"],["ubot-albums","相册浏览","🖼"]] }
   ];
   var tabBar = document.getElementById("tabBar");
   var html = "";
@@ -3898,6 +3914,65 @@ if (ubApiKeyEye) ubApiKeyEye.addEventListener("click", function() {
   ubApiKeyEye.textContent = show ? "🙈" : "👁";
   ubApiKeyEye.title = show ? "隐藏" : "显示";
 });
+
+// ==================== 相册浏览独立页面 ====================
+async function loadAlbumGallery() {
+  var sel = document.getElementById("ubAlbumGalleryTask");
+  var grid = document.getElementById("ubAlbumGalleryGrid");
+  var status = document.getElementById("ubAlbumGalleryStatus");
+  var r = await api("GET", "/admin/api/userbot-tasks");
+  if (!r || !r.ok || !r.data || !r.data.length) { sel.innerHTML = '<option value="">暂无任务</option>'; return; }
+  var h = '<option value="">选择任务...</option>';
+  for (var i = 0; i < r.data.length; i++) {
+    var t = r.data[i];
+    h += '<option value="' + t.id + '">#' + t.id + ' ' + escStr(t.title || t.chat_id) + '</option>';
+  }
+  sel.innerHTML = h;
+  sel.onchange = function() {
+    var id = parseInt(sel.value);
+    if (!id) { grid.innerHTML = ''; status.textContent = ''; return; }
+    loadAlbumGalleryImages(id);
+  };
+  document.getElementById("ubAlbumGalleryLoad").onclick = function() {
+    var id = parseInt(sel.value);
+    if (!id) { toast("请先选择任务", 0); return; }
+    loadAlbumGalleryImages(id);
+  };
+}
+
+async function loadAlbumGalleryImages(taskId) {
+  var grid = document.getElementById("ubAlbumGalleryGrid");
+  var status = document.getElementById("ubAlbumGalleryStatus");
+  grid.innerHTML = skImgs(20);
+  status.textContent = '加载中...';
+  var r = await api("GET", "/admin/api/userbot-tasks/" + taskId + "/albums");
+  if (!r || !r.ok) { grid.innerHTML = '<div style="color:var(--danger)">' + escStr((r && r.error) || "加载失败") + '</div>'; status.textContent = ''; return; }
+  var albums = r.data.albums || [];
+  if (!albums.length) { grid.innerHTML = '<div style="color:var(--text-secondary);grid-column:1/-1;text-align:center;padding:40px">暂无相册数据，请先在「群抓取」页面点击「相册」扫描</div>'; status.textContent = ''; return; }
+  var flat = [];
+  albums.forEach(function(a) {
+    (a.sizes || []).forEach(function(s) { s.grouped_id = a.grouped_id; flat.push(s); });
+  });
+  status.textContent = albums.length + ' 个条目 / ' + flat.length + ' 张媒体';
+  var h = '';
+  for (var i = 0; i < flat.length; i++) {
+    var s = flat[i];
+    var isVid = s.type === 'video';
+    var durTxt = isVid && s.duration ? Math.floor(s.duration / 60) + ':' + String(s.duration % 60).padStart(2, '0') : '';
+    var sz = (s.size || 0) > 1048576 ? ((s.size || 0) / 1048576).toFixed(1) + "MB" : Math.ceil((s.size || 0) / 1024) + "KB";
+    h += '<div style="break-inside:avoid;margin-bottom:6px;border-radius:6px;overflow:hidden;background:#222;position:relative;cursor:pointer" onclick="window.open(\'' + escStr(s.thumb_url || '') + '\',\'_blank\')">';
+    if (s.thumb_url) {
+      h += '<img src="' + escStr(s.thumb_url) + '" style="width:100%;display:block;object-fit:cover" loading="lazy">';
+    } else {
+      h += '<div style="width:100%;height:100px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:10px">#' + s.id + '</div>';
+    }
+    if (isVid) h += '<div style="position:absolute;top:4px;left:4px;background:rgba(0,0,0,.7);color:#fff;border-radius:3px;font-size:9px;padding:1px 4px">&#9654;</div>';
+    if (durTxt) h += '<div style="position:absolute;bottom:24px;right:4px;background:rgba(0,0,0,.7);color:#fff;border-radius:3px;font-size:9px;padding:1px 4px">' + escStr(durTxt) + '</div>';
+    h += '<div style="padding:3px 5px;font-size:10px;color:var(--text-secondary);display:flex;justify-content:space-between"><span>' + sz + '</span><span>#' + s.id + '</span></div>';
+    h += '</div>';
+  }
+  grid.innerHTML = h;
+}
 
 async function loadOpsPage() {
   loadBackupList();
