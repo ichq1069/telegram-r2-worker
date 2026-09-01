@@ -3316,6 +3316,7 @@ async function loadUbotTasks() {
       '<td>' +
         '<button class="btn btn-ghost btn-sm" data-act="edit" data-id="' + t.id + '">编辑</button> ' +
         '<button class="btn btn-ghost btn-sm" data-act="albums" data-id="' + t.id + '">相册</button> ' +
+        '<button class="btn btn-ghost btn-sm" data-act="logs" data-id="' + t.id + '">日志</button> ' +
         '<button class="btn btn-ghost btn-sm" data-act="toggle" data-id="' + t.id + '" data-on="' + (t.enabled ? 0 : 1) + '">' + (t.enabled ? "停用" : "启用") + '</button> ' +
         '<button class="btn btn-ghost btn-sm" data-act="cmd" data-id="' + t.id + '">命令</button> ' +
         '<button class="btn btn-ghost btn-sm" style="color:var(--danger,#e5484d)" data-act="del" data-id="' + t.id + '">删除</button>' +
@@ -3336,6 +3337,7 @@ function ubotTaskRowClick(e) {
   var id = parseInt(btn.getAttribute("data-id"), 10);
   if (act === "edit") ubotEdit(id);
   else if (act === "albums") ubotAlbums(id);
+  else if (act === "logs") ubotTaskLogs(id);
   else if (act === "toggle") ubotToggle(id, parseInt(btn.getAttribute("data-on"), 10));
   else if (act === "cmd") ubotCopyCmd(id);
   else if (act === "del") ubotDel(id);
@@ -3733,6 +3735,41 @@ function ubotToggle(id, enabled) {
   api("PATCH", "/admin/api/userbot-tasks/" + id, { enabled: enabled ? 1 : 0 }).then(function(r) {
     if (r && r.ok) { toast("已" + (enabled ? "启用" : "停用"), 1); loadUbotTasks(); }
     else toast((r && r.error) || "操作失败", 0);
+  });
+}
+
+function ubotTaskLogs(id) {
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:720px">' +
+    '<h3>任务 #' + id + ' 执行日志</h3>' +
+    '<div id="ubTaskLogsBody" style="max-height:60vh;overflow:auto;font-size:12px">' + skRows(5) + '</div>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="modalCancel">关闭</button></div>' +
+    '</div></div>';
+  document.getElementById("modalCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  api("GET", "/admin/api/ub-task-runs?task_id=" + id).then(function(r) {
+    var body = document.getElementById("ubTaskLogsBody");
+    if (!r || !r.ok) { body.innerHTML = '<span style="color:#e5484d">加载失败：' + escStr((r && r.error) || "") + '</span>'; return; }
+    var runs = r.data || [];
+    if (!runs.length) { body.innerHTML = '<span style="color:var(--text-secondary)">暂无执行记录</span>'; return; }
+    var h = '<div class="tbl-wrap"><table><thead><tr><th>ID</th><th>状态</th><th>完成/跳过</th><th>服务器</th><th>开始时间</th><th>结束时间</th><th>耗时</th><th>错误</th></tr></thead><tbody>';
+    for (var i = 0; i < runs.length; i++) {
+      var run = runs[i];
+      var st = run.status === 'finished' ? '<span style="color:#46a758;font-weight:600">完成</span>' : run.status === 'error' ? '<span style="color:#e5484d;font-weight:600">失败</span>' : '<span style="color:#f59e0b;font-weight:600">执行中</span>';
+      var start = run.started_at ? String(run.started_at).replace('T', ' ').slice(5, 19) : '-';
+      var end = run.finished_at ? String(run.finished_at).replace('T', ' ').slice(5, 19) : '-';
+      var dur = '';
+      if (run.started_at && run.finished_at) {
+        var ds = new Date(run.started_at).getTime();
+        var de = new Date(run.finished_at).getTime();
+        var sec = Math.round((de - ds) / 1000);
+        dur = sec >= 60 ? Math.floor(sec/60) + 'm' + (sec%60) + 's' : sec + 's';
+      }
+      var er = run.error ? escStr(run.error) : '-';
+      if (er.length > 80) er = '<span title="' + er + '">' + er.slice(0, 77) + '...</span>';
+      h += '<tr><td>' + run.id + '</td><td>' + st + '</td><td>' + (run.done || 0) + ' / ' + (run.skipped || 0) + '</td><td>' + escStr(run.server_name || '-') + '</td><td style="white-space:nowrap">' + start + '</td><td style="white-space:nowrap">' + end + '</td><td>' + dur + '</td><td style="color:#e5484d;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + er + '</td></tr>';
+    }
+    h += '</tbody></table></div>';
+    body.innerHTML = h;
   });
 }
 
