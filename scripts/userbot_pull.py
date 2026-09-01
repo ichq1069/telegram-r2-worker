@@ -41,7 +41,7 @@ import httpx
 
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeVideo, DocumentAttributeDuration
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeVideo
 
 # 与 worker /api/v1/upload 一致：≤19MB 走 multipart；>19MB ≤90MB 走 stream 流式
 UPLOAD_SMALL_MAX = 19 * 1024 * 1024
@@ -582,8 +582,6 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
                     if isinstance(attr, DocumentAttributeVideo):
                         w = getattr(attr, "w", 0) or 0
                         h = getattr(attr, "h", 0) or 0
-                        dur = getattr(attr, "duration", 0) or 0
-                    elif isinstance(attr, DocumentAttributeDuration):
                         dur = getattr(attr, "duration", 0) or 0
         a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h, "type": media_type, "duration": dur})
         if msg.date:
