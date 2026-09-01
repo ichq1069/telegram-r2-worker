@@ -3558,9 +3558,42 @@ function ubotAlbumsSave() {
 
 function ubotAlbumsTrigger() {
   api("POST", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums/trigger").then(function(r) {
-    if (r && r.ok) { toast("已下发抓取已选（" + r.data.selected + " 条消息），下一轮执行", 1); document.getElementById("modalArea").innerHTML = ""; }
-    else toast((r && r.error) || "触发失败", 0);
+    if (r && r.ok) {
+      toast("已触发导入（" + r.data.selected + " 条消息），VPS 将用 file_id 下载原图", 1);
+      // 显示导入进度条
+      var progDiv = document.createElement("div");
+      progDiv.id = "ubImportProg";
+      progDiv.style.cssText = "margin:12px 0;padding:12px;background:var(--bg-secondary,#f5f5f5);border-radius:6px;display:none";
+      progDiv.innerHTML = '<div style="font-size:13px;margin-bottom:8px">导入进度</div><div style="background:var(--border,#e0e0e0);height:6px;border-radius:3px;overflow:hidden"><div id="ubImportBar" style="background:var(--primary,#3b82f6);height:100%;width:0;transition:width 0.3s"></div></div><div id="ubImportText" style="font-size:12px;color:var(--text-secondary);margin-top:6px">准备中...</div>';
+      var trigBtn = document.getElementById("ubAlbumTrigBtn");
+      if (trigBtn && trigBtn.parentNode) trigBtn.parentNode.insertBefore(progDiv, trigBtn.nextSibling);
+      progDiv.style.display = "block";
+      ubotImportPoll(0);
+    } else toast((r && r.error) || "触发失败", 0);
   });
+}
+
+function ubotImportPoll(n) {
+  setTimeout(function() {
+    api("GET", "/admin/api/userbot-tasks/" + UBotAlbumsTaskId + "/albums").then(function(r) {
+      if (!r || !r.ok) return;
+      var t = r.data.task;
+      var bar = document.getElementById("ubImportBar");
+      var txt = document.getElementById("ubImportText");
+      if (t.mode === 'selected') {
+        // 还在导入中，更新进度
+        if (bar) bar.style.width = "60%";
+        if (txt) txt.textContent = "VPS 正在导入中...";
+        if (n < 300) ubotImportPoll(n + 1);
+      } else {
+        // 导入完成
+        if (bar) { bar.style.width = "100%"; bar.style.background = "#46a758"; }
+        if (txt) txt.textContent = "导入完成";
+        setTimeout(function() { var d = document.getElementById("ubImportProg"); if (d) d.style.display = "none"; }, 3000);
+        loadPool(UBotAlbumsPool); // 刷新相册列表
+      }
+    });
+  }, 2000);
 }
 
 // ---------------- 群抓取执行服务器（节点管理 + 心跳状态 + 一键部署命令） ----------------

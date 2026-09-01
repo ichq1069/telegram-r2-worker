@@ -42,6 +42,7 @@ import httpx
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, DocumentAttributeVideo
+from telethon.utils import pack_bot_file_id
 
 # 与 worker /api/v1/upload 一致：≤19MB 走 multipart；>19MB ≤90MB 走 stream 流式
 UPLOAD_SMALL_MAX = 19 * 1024 * 1024
@@ -587,7 +588,16 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
                             w = getattr(attr, "w", 0) or 0
                             h = getattr(attr, "h", 0) or 0
                             dur = getattr(attr, "duration", 0) or 0
-            a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h, "type": media_type, "duration": dur})
+            # 提取 file_id 用于后续导入（避免重新扫描消息）
+            fid = ''
+            try:
+                if is_photo:
+                    fid = pack_bot_file_id(msg.media.photo) or ''
+                elif is_video:
+                    fid = pack_bot_file_id(msg.media.document) or ''
+            except Exception:
+                fid = ''
+            a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h, "type": media_type, "duration": dur, "file_id": fid})
             if msg.date:
                 ts0 = int(msg.date.timestamp())
                 if not a["first_ts"] or ts0 < a["first_ts"]:
@@ -676,59 +686,89 @@ async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size,
         except Exception:
             pass
 
+    # 从 Worker 获取选中消息的 file_id 映射（避免重新扫描消息）
+    file_id_map = {}
+    try:
+        file_id_url = f"{server}/api/ubot/task/{task_id}/file-id-map?token={args.token}"
+        r = await hc.get(file_id_url, timeout=30)
+        if r.status_code == 200:
+            j = r.json()
+            if j.get("ok"):
+                file_id_map = j.get("data") or {}
+                print(f"  获取 file_id 映射成功：{len(file_id_map)} 条")
+    except Exception as e:
+        print(f"  获取 file_id 映射失败，回退到 get_messages 方式：{e}", file=sys.stderr)
+
     # 分批拉取消息（每批 50 条，减少 MTProto 往返），再逐条下载上传
     for i in range(0, len(selected_ids), 50):
         chunk = selected_ids[i:i + 50]
         msgs = []
-        try:
-            got = await client.get_messages(chat, ids=chunk)
-            if got:
-                msgs = got if isinstance(got, list) else [got]
-        except Exception as e:
-            print(f"  批量取消息失败 {chunk}: {e}", file=sys.stderr)
-            msgs = []
-        for msg in msgs:
-            mid = msg.id if msg else None
-            if not msg or not msg.media:
-                if mid:
-                    skipped += 1
-                continue
-            # 图片或视频都处理
-            is_photo = isinstance(msg.media, MessageMediaPhoto)
-            is_video = isinstance(msg.media, MessageMediaDocument) and any(
-                isinstance(a, DocumentAttributeVideo)
-                for a in (getattr(msg.media.document, "attributes", None) or [])
-            )
-            if not is_photo and not is_video:
-                if mid:
-                    skipped += 1
-                continue
-            media_type = "video" if is_video else "photo"
-            if is_photo:
-                size = getattr(getattr(msg.media, "photo", None), "size", 0) or 0
-            else:
-                size = getattr(getattr(msg.media, "document", None), "size", 0) or 0
-            if size > max_size or size <= 0:
+        # 优先用 file_id 下载，对没有 file_id 的消息用 get_messages
+        chunk_with_fid = [mid for mid in chunk if file_id_map.get(str(mid))]
+        chunk_without_fid = [mid for mid in chunk if not file_id_map.get(str(mid))]
+
+        # 对有 file_id 的消息，直接下载
+        for mid in chunk_with_fid:
+            fid = file_id_map.get(str(mid), '')
+            if not fid:
                 skipped += 1
-                print(f"  跳过 #{mid} ({media_type}): {size}B 超限(>{max_size})", file=sys.stderr)
                 continue
+            # 先获取消息元数据（用于 caption 等）
+            try:
+                msg_obj = await client.get_messages(chat, ids=mid)
+                if not msg_obj or not msg_obj.media:
+                    skipped += 1
+                    continue
+                # 判断媒体类型
+                is_photo = isinstance(msg_obj.media, MessageMediaPhoto)
+                is_video = isinstance(msg_obj.media, MessageMediaDocument) and any(
+                    isinstance(a, DocumentAttributeVideo)
+                    for a in (getattr(msg_obj.media.document, "attributes", None) or [])
+                )
+                if not is_photo and not is_video:
+                    skipped += 1
+                    continue
+                media_type = "video" if is_video else "photo"
+                if is_photo:
+                    size = getattr(getattr(msg_obj.media, "photo", None), "size", 0) or 0
+                else:
+                    size = getattr(getattr(msg_obj.media, "document", None), "size", 0) or 0
+                if size > max_size or size <= 0:
+                    skipped += 1
+                    print(f"  跳过 #{mid} ({media_type}): {size}B 超限(>{max_size})", file=sys.stderr)
+                    continue
+            except Exception as e:
+                print(f"  获取消息元数据失败 #{mid}: {e}", file=sys.stderr)
+                skipped += 1
+                continue
+
             if args.dry_run:
-                print(f"  [dry] #{mid} size={size} {media_type}")
+                print(f"  [dry] #{mid} size={size} {media_type} (file_id)")
             else:
                 try:
-                    data = await msg.download_media(file=bytes)
+                    # 优先用 file_id 下载
+                    data = await client.download_file(fid, file=bytes)
+                    if not data:
+                        # file_id 下载失败，回退到 get_messages
+                        print(f"  file_id 下载为空 #{mid}，回退到 get_messages", file=sys.stderr)
+                        data = await msg_obj.download_media(file=bytes)
                 except Exception as e:
-                    print(f"  下载失败 #{mid} ({media_type}): {e}", file=sys.stderr)
-                    time.sleep(5)
-                    continue
+                    print(f"  file_id 下载失败 #{mid}，回退到 get_messages：{e}", file=sys.stderr)
+                    try:
+                        data = await msg_obj.download_media(file=bytes)
+                    except Exception as e2:
+                        print(f"  下载失败 #{mid}: {e2}", file=sys.stderr)
+                        skipped += 1
+                        continue
                 if not data:
+                    skipped += 1
                     continue
                 if len(data) > max_size:
                     skipped += 1
                     print(f"  跳过 #{mid} ({media_type}): {len(data)}B 超限", file=sys.stderr)
                     continue
                 await asyncio.sleep(WORK_DELAY)
-                caption = (msg.message or "").splitlines()[0] if msg.message else ""
+                caption = (msg_obj.message or "").splitlines()[0] if msg_obj.message else ""
                 title = (title_prefix + " " + caption).strip()[:200]
                 params = {"api_key": upload_api_key, "tags": tags, "title": title, "level": level}
                 if pool == 1:
@@ -736,13 +776,13 @@ async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size,
                 elif pool == 2:
                     params["is_private"] = "1"
                 try:
-                    r = await upload_media(hc, server, task_id, msg.id, data, params, media_type=media_type)
+                    r = await upload_media(hc, server, task_id, mid, data, params, media_type=media_type)
                     if r.status_code != 200:
                         print(f"  上传失败 #{mid}: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
                         if r.status_code in (429, 500, 502, 503):
                             time.sleep(10)
                         continue
-                    print(f"  ✓ #{mid} uploaded {len(data)}B")
+                    print(f"  ✓ #{mid} uploaded {len(data)}B (file_id)")
                 except Exception as e:
                     print(f"  上传异常 #{mid}: {e}", file=sys.stderr)
                     time.sleep(5)
@@ -750,8 +790,85 @@ async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size,
                 await asyncio.sleep(FORWARD_DELAY)
             done += 1
             if done % BATCH_SIZE == 0:
+                print(f"  已处理 {done} 张，休息 {BATCH_SLEEP}s…")
                 await save_progress()
                 await asyncio.sleep(BATCH_SLEEP)
+
+        # 对没有 file_id 的消息，用原有方式处理
+        if chunk_without_fid:
+            try:
+                got = await client.get_messages(chat, ids=chunk_without_fid)
+                if got:
+                    msgs = got if isinstance(got, list) else [got]
+            except Exception as e:
+                print(f"  批量取消息失败 {chunk_without_fid}: {e}", file=sys.stderr)
+                msgs = []
+            for msg in msgs:
+                mid = msg.id if msg else None
+                if not msg or not msg.media:
+                    if mid:
+                        skipped += 1
+                    continue
+                # 图片或视频都处理
+                is_photo = isinstance(msg.media, MessageMediaPhoto)
+                is_video = isinstance(msg.media, MessageMediaDocument) and any(
+                    isinstance(a, DocumentAttributeVideo)
+                    for a in (getattr(msg.media.document, "attributes", None) or [])
+                )
+                if not is_photo and not is_video:
+                    if mid:
+                        skipped += 1
+                    continue
+                media_type = "video" if is_video else "photo"
+                if is_photo:
+                    size = getattr(getattr(msg.media, "photo", None), "size", 0) or 0
+                else:
+                    size = getattr(getattr(msg.media, "document", None), "size", 0) or 0
+                if size > max_size or size <= 0:
+                    skipped += 1
+                    print(f"  跳过 #{mid} ({media_type}): {size}B 超限(>{max_size})", file=sys.stderr)
+                    continue
+                if args.dry_run:
+                    print(f"  [dry] #{mid} size={size} {media_type}")
+                else:
+                    try:
+                        data = await msg.download_media(file=bytes)
+                    except Exception as e:
+                        print(f"  下载失败 #{mid} ({media_type}): {e}", file=sys.stderr)
+                        time.sleep(5)
+                        continue
+                    if not data:
+                        continue
+                    if len(data) > max_size:
+                        skipped += 1
+                        print(f"  跳过 #{mid} ({media_type}): {len(data)}B 超限", file=sys.stderr)
+                        continue
+                    await asyncio.sleep(WORK_DELAY)
+                    caption = (msg.message or "").splitlines()[0] if msg.message else ""
+                    title = (title_prefix + " " + caption).strip()[:200]
+                    params = {"api_key": upload_api_key, "tags": tags, "title": title, "level": level}
+                    if pool == 1:
+                        params["pool"] = "1"
+                    elif pool == 2:
+                        params["is_private"] = "1"
+                    try:
+                        r = await upload_media(hc, server, task_id, msg.id, data, params, media_type=media_type)
+                        if r.status_code != 200:
+                            print(f"  上传失败 #{mid}: HTTP {r.status_code} {r.text[:120]}", file=sys.stderr)
+                            if r.status_code in (429, 500, 502, 503):
+                                time.sleep(10)
+                            continue
+                        print(f"  ✓ #{mid} uploaded {len(data)}B")
+                    except Exception as e:
+                        print(f"  上传异常 #{mid}: {e}", file=sys.stderr)
+                        time.sleep(5)
+                        continue
+                    await asyncio.sleep(FORWARD_DELAY)
+                done += 1
+                if done % BATCH_SIZE == 0:
+                    print(f"  已处理 {done} 张，休息 {BATCH_SLEEP}s…")
+                    await save_progress()
+                    await asyncio.sleep(BATCH_SLEEP)
 
     await save_progress()
     print(f"选择抓取完成：{done} 张（跳过 {skipped} 张）")

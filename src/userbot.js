@@ -210,7 +210,7 @@ export async function handleAdminUbotAlbumsGet(env, id) {
     const albums = (d.results || []).map(function(a) {
       let sizes = [];
       try { sizes = JSON.parse(a.sizes || '[]'); } catch (e) { sizes = []; }
-      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || '', sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0 }; }), cover_url: a.cover_url, first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
+      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || '', sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0, file_id: s.file_id || '' }; }), cover_url: a.cover_url, first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
     });
     return json({ ok: true, data: { task: taskToOut(t), albums: albums } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -270,7 +270,7 @@ export async function handleUbotAlbumsReport(request, env, id) {
         const gid = String(a.grouped_id || '').slice(0, 64);
         if (!gid) continue;
         const msgIds = Array.isArray(a.msg_ids) ? a.msg_ids.filter(function(x) { return /^\d+$/.test(String(x)); }).slice(0, 500) : [];
-        const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500), type: String(s.type || 'photo'), duration: Number(s.duration) || 0 }; }).slice(0, 500) : [];
+        const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500), type: String(s.type || 'photo'), duration: Number(s.duration) || 0, file_id: String(s.file_id || '').slice(0, 200) }; }).slice(0, 500) : [];
         if (!msgIds.length) continue;
         const stmt = append
           ? env.D1_DB.prepare('INSERT OR REPLACE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)')
@@ -282,5 +282,32 @@ export async function handleUbotAlbumsReport(request, env, id) {
     await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='normal', album_cursor=?, updated_at=? WHERE id=? AND mode='list'")
       .bind(cursor, new Date().toISOString(), id).run();
     return json({ ok: true, data: { stored: albums.length, mode: 'normal', cursor: cursor } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 脚本侧：获取选中消息的 file_id 映射（用于 selected 模式直接下载，避免重新扫描消息）
+export async function handleUbotTaskFileIdMap(request, env, id) {
+  try {
+    const u = new URL(request.url);
+    const tok = u.searchParams.get('token') || request.headers.get('X-Ub-Token') || '';
+    const cfg = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('ub_token').first();
+    if (!tok || !cfg || !cfg.value || tok !== cfg.value) return json({ ok: false, error: 'Unauthorized' }, 401);
+    const t = await env.D1_DB.prepare('SELECT selected_msg_ids FROM userbot_tasks WHERE id=?').bind(id).first();
+    if (!t) return json({ ok: false, error: 'task not found' }, 404);
+    const selected = new Set(parseSelectedIds(t.selected_msg_ids, 5000));
+    if (!selected.size) return json({ ok: true, data: {} });
+    // 从 ubot_albums 中提取选中消息的 file_id
+    const d = await env.D1_DB.prepare('SELECT sizes FROM ubot_albums WHERE task_id=?').bind(id).all();
+    const fileIdMap = {};
+    (d.results || []).forEach(function(a) {
+      try {
+        JSON.parse(a.sizes || '[]').forEach(function(s) {
+          if (selected.has(String(s.id)) && s.file_id) {
+            fileIdMap[s.id] = s.file_id;
+          }
+        });
+      } catch (e) { /* ignore */ }
+    });
+    return json({ ok: true, data: fileIdMap });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
