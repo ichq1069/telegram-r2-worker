@@ -189,6 +189,7 @@ async def main():
     ap.add_argument("--dry-run", action="store_true", help="只统计不上传")
     ap.add_argument("--limit", type=int, default=None, help="覆盖后台任务 limit（0=后台配置）")
     ap.add_argument("--timeout", type=int, default=60, help="HTTP 超时秒数")
+    ap.add_argument("--php-api", default="http://127.0.0.1:19090/api.php", help="VPS PHP API 地址（相册数据存 MySQL）")
     args = ap.parse_args()
 
     server = args.server.rstrip("/")
@@ -520,9 +521,9 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
     t0 = time.time()
     BATCH_REPORT_SIZE = 100  # 每 100 个新条目上报一次（减少 JSON 大小）
 
-    # 加载已有的 grouped_ids（跳过已上报的，避免重复写入 D1 浪费额度）
+    # 加载已有的 grouped_ids（跳过已上报的，避免重复写入浪费额度）
     try:
-        r = await hc.get(f"{server}/api/ubot/task/{task_id}/albums/existing?token={args.token}", timeout=30)
+        r = await hc.get(f"{args.php_api}?action=albums.existing&task_id={task_id}", timeout=30)
         if r.status_code == 200:
             j = r.json()
             existing = j.get("data", {}).get("grouped_ids", [])
@@ -583,12 +584,12 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             chunk = payload[i:i + ALBUM_MAX_PER_POST]
             try:
                 append_val = 0 if (is_first_batch and i == 0 and not (cursor and cursor > 0)) else 1
-                body = {"albums": chunk, "append": append_val, "cursor": min_msg_id}
+                body = {"task_id": task_id, "albums": chunk, "append": append_val, "cursor": min_msg_id}
                 import json as _json
                 body_str = _json.dumps(body, ensure_ascii=False)
                 with open("/tmp/ubot_debug.log", "a") as _f:
                     _f.write(f"[REPORT] chunk_size={len(chunk)} body_bytes={len(body_str.encode())} append={append_val} cursor={min_msg_id}\n")
-                r = await hc.post(f"{server}/api/ubot/task/{task_id}/albums?token={args.token}",
+                r = await hc.post(f"{args.php_api}?action=albums.report&token={args.token}",
                                   json=body, timeout=120)
                 if r.status_code != 200:
                     print(f"  相册上报失败: HTTP {r.status_code} {r.text[:200]}", file=sys.stderr)
@@ -735,10 +736,11 @@ async def run_selected_pull(hc, client, chat, task, tags, pool, level, max_size,
         except Exception:
             pass
 
-    # 从 Worker 获取选中消息的 file_id 映射（避免重新扫描消息）
+    # 从 PHP API 获取选中消息的 file_id 映射（避免重新扫描消息）
     file_id_map = {}
     try:
-        file_id_url = f"{server}/api/ubot/task/{task_id}/file-id-map?token={args.token}"
+        selected_str = ",".join(str(x) for x in selected_ids)
+        file_id_url = f"{args.php_api}?action=albums.filemap&task_id={task_id}&selected={selected_str}"
         r = await hc.get(file_id_url, timeout=30)
         if r.status_code == 200:
             j = r.json()

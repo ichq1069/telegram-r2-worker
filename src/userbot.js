@@ -1,8 +1,14 @@
 // MTProto 群历史抓取：全局配置 + 每群任务 CRUD + 脚本侧拉配置/回写断点
 // 设计：worker 当「控制面」（配置/断点/图片入库全存 Cloudflare），Telethon 脚本在
 // 本地/VPS/Containers 上跑，但参数全部从后台拉取，换机无感。
+// 相册数据走 Hyperdrive MySQL（VPS），settings/tasks 走 D1。
 import { json } from './util.js';
 import { sanitizeLevel, clampInt } from './core.js';
+import {
+  mysqlTaskGetById, mysqlTaskGetAll, mysqlTaskCreate, mysqlTaskUpdate, mysqlTaskDelete,
+  mysqlAlbumsGetByTask, mysqlAlbumsGetGroupedIds, mysqlAlbumsGetSizes, mysqlAlbumsDeleteByTask,
+  mysqlAlbumsInsertBatch, mysqlAlbumsSelectMsgIds
+} from './mysql.js';
 
 // 相册模式 / 选择抓取 / 大文件流式上传 的常量与辅助
 export const UPLOAD_HARD_MAX = 90 * 1024 * 1024;      // 流式上传硬上限（与 public.js 一致）
@@ -124,7 +130,7 @@ export async function handleAdminUserbotTaskUpdate(request, env, id) {
 export async function handleAdminUserbotTaskDelete(env, id) {
   try {
     await env.D1_DB.prepare('DELETE FROM userbot_tasks WHERE id=?').bind(id).run();
-    await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
+    try { await mysqlAlbumsDeleteByTask(env, id); } catch (e) { /* MySQL 可能未配置 */ }
     return json({ ok: true, data: { deleted: true } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -188,11 +194,9 @@ export async function handleAdminUbotAlbumListAction(request, env, id) {
     const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
     if (!t) return json({ ok: false, error: 'task not found' }, 404);
     const scan = b.scan_limit ? clampInt(b.scan_limit, 100, 100000) : (t.scan_limit || ALBUM_SCAN_LIMIT);
-    // before_id = 翻页游标：从此 msg id 之前继续向更早枚举；缺省 0 = 从头扫描
     const before_id = parseInt(b.before_id || '0', 10);
-    // clear = 1 时清空已有相册数据（用于修复脏数据后重新扫描）
     if (b.clear) {
-      await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
+      try { await mysqlAlbumsDeleteByTask(env, id); } catch (e) { /* MySQL 可能未配置 */ }
     }
     if (!isNaN(before_id) && before_id > 0) {
       await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=?, scan_progress='', updated_at=? WHERE id=?")
@@ -209,26 +213,32 @@ export async function handleAdminUbotAlbumsGet(env, id) {
   try {
     const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
     if (!t) return json({ ok: false, error: 'task not found' }, 404);
-    const d = await env.D1_DB.prepare('SELECT * FROM ubot_albums WHERE task_id=? ORDER BY first_ts DESC, id ASC').bind(id).all();
+    let d = [];
+    try {
+      const rows = await mysqlAlbumsGetByTask(env, id);
+      d = rows;
+    } catch (e) { /* MySQL 未配置时返回空 */ }
     const selected = new Set(parseSelectedIds(t.selected_msg_ids, 5000));
-    const albums = (d.results || []).map(function(a) {
+    const albums = d.map(function(a) {
       let sizes = [];
       try { sizes = JSON.parse(a.sizes || '[]'); } catch (e) { sizes = []; }
-      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || (s.file_id ? '/api/tg-proxy?file_id=' + s.file_id : ''), sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0, file_id: s.file_id || '' }; }), cover_url: a.cover_url || (sizes[0] && sizes[0].file_id ? '/api/tg-proxy?file_id=' + sizes[0].file_id : ''), first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
+      return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.mcount || a.count || 0, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || (s.file_id ? '/api/tg-proxy?file_id=' + s.file_id : ''), sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0, file_id: s.file_id || '' }; }), cover_url: a.cover_url || (sizes[0] && sizes[0].file_id ? '/api/tg-proxy?file_id=' + sizes[0].file_id : ''), first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
     });
     return json({ ok: true, data: { task: taskToOut(t), albums: albums } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
-// 脚本侧：获取已有相册的 grouped_id 列表（用于去重，避免重复写入 D1 浪费额度）
+// 脚本侧：获取已有相册的 grouped_id 列表（用于去重，避免重复写入浪费额度）
 export async function handleUbotAlbumsExisting(request, env, id) {
   try {
     const u = new URL(request.url);
     const tok = u.searchParams.get('token') || '';
     const cfg = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('ub_token').first();
     if (!tok || !cfg || !cfg.value || tok !== cfg.value) return json({ ok: false, error: 'Unauthorized' }, 401);
-    const d = await env.D1_DB.prepare('SELECT grouped_id FROM ubot_albums WHERE task_id=? LIMIT 50000').bind(id).all();
-    const gids = (d.results || []).map(function(r) { return r.grouped_id; });
+    let gids = [];
+    try {
+      gids = await mysqlAlbumsGetGroupedIds(env, id);
+    } catch (e) { /* MySQL 未配置 */ }
     return json({ ok: true, data: { grouped_ids: gids, total: gids.length } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -238,14 +248,12 @@ export async function handleAdminUbotAlbumsSelect(request, env, id) {
     const b = await request.json().catch(function(){ return {}; });
     const t = await env.D1_DB.prepare('SELECT * FROM userbot_tasks WHERE id=?').bind(id).first();
     if (!t) return json({ ok: false, error: 'task not found' }, 404);
-    // 校验所选消息属于该任务相册缓存
-    const d = await env.D1_DB.prepare('SELECT msg_ids FROM ubot_albums WHERE task_id=?').bind(id).all();
-    const allowed = {};
-    (d.results || []).forEach(function(a) {
-      String(a.msg_ids || '').split(',').filter(Boolean).forEach(function(m) { allowed[m] = 1; });
-    });
+    let allowed = {};
+    try {
+      allowed = await mysqlAlbumsSelectMsgIds(env, id);
+    } catch (e) { /* MySQL 未配置，允许所有 */ }
     const want = parseSelectedIds(b.msg_ids, 5000);
-    const valid = want.filter(function(m) { return allowed[m]; });
+    const valid = Object.keys(allowed).length ? want.filter(function(m) { return allowed[m]; }) : want;
     await env.D1_DB.prepare('UPDATE userbot_tasks SET selected_msg_ids=?, updated_at=? WHERE id=?')
       .bind(valid.join(','), new Date().toISOString(), id).run();
     return json({ ok: true, data: { saved: valid.length, invalid: want.length - valid.length } });
@@ -277,27 +285,24 @@ export async function handleUbotAlbumsReport(request, env, id) {
     const albums = Array.isArray(b.albums) ? b.albums : [];
     const append = b.append === 1 || b.append === '1';
     const cursor = parseInt(b.cursor || '0', 10);
-    // append=1：翻页合并（不清旧缓存，同 grouped_id 覆盖）；否则整体替换
-    if (!append) {
-      await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
-    }
     if (albums.length) {
-      const now = new Date().toISOString();
-      const stmtText = append
-        ? 'INSERT OR IGNORE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
-        : 'INSERT INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)';
-      const batch = [];
-      for (const a of albums) {
+      const albumRows = albums.map(function(a) {
         const gid = String(a.grouped_id || '').slice(0, 64);
-        if (!gid) continue;
+        if (!gid) return null;
         const msgIds = Array.isArray(a.msg_ids) ? a.msg_ids.filter(function(x) { return /^\d+$/.test(String(x)); }).slice(0, 500) : [];
         const sizes = Array.isArray(a.sizes) ? a.sizes.map(function(s) { const fid = String(s.file_id || '').slice(0, 200); return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: String(s.thumb_url || '').slice(0, 500) || (fid ? '/api/tg-proxy?file_id=' + fid : ''), type: String(s.type || 'photo'), duration: Number(s.duration) || 0, file_id: fid }; }).slice(0, 500) : [];
-        if (!msgIds.length) continue;
-        batch.push(env.D1_DB.prepare(stmtText).bind(id, gid, msgIds.join(','), msgIds.length, JSON.stringify(sizes), String(a.cover_url || '').slice(0, 500), Number(a.first_ts) || 0, a.has_oversize ? 1 : 0, now));
+        if (!msgIds.length) return null;
+        return { task_id: Number(id), grouped_id: gid, msg_ids: msgIds.join(','), mcount: msgIds.length,
+                 sizes: JSON.stringify(sizes), cover_url: String(a.cover_url || '').slice(0, 500),
+                 first_ts: Number(a.first_ts) || 0, has_oversize: a.has_oversize ? 1 : 0 };
+      }).filter(Boolean);
+      if (albumRows.length) {
+        try {
+          if (!append) await mysqlAlbumsDeleteByTask(env, id);
+          await mysqlAlbumsInsertBatch(env, albumRows);
+        } catch (e) { /* MySQL 未配置时静默 */ }
       }
-      if (batch.length) await env.D1_DB.batch(batch);
     }
-    // 回写翻页游标：本次已扫到的最早 msg id（供下次「加载更早」续扫）
     await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='normal', album_cursor=?, updated_at=? WHERE id=? AND mode='list'")
       .bind(cursor, new Date().toISOString(), id).run();
     return json({ ok: true, data: { stored: albums.length, mode: 'normal', cursor: cursor } });
@@ -315,18 +320,19 @@ export async function handleUbotTaskFileIdMap(request, env, id) {
     if (!t) return json({ ok: false, error: 'task not found' }, 404);
     const selected = new Set(parseSelectedIds(t.selected_msg_ids, 5000));
     if (!selected.size) return json({ ok: true, data: {} });
-    // 从 ubot_albums 中提取选中消息的 file_id
-    const d = await env.D1_DB.prepare('SELECT sizes FROM ubot_albums WHERE task_id=?').bind(id).all();
     const fileIdMap = {};
-    (d.results || []).forEach(function(a) {
-      try {
-        JSON.parse(a.sizes || '[]').forEach(function(s) {
-          if (selected.has(String(s.id)) && s.file_id) {
-            fileIdMap[s.id] = s.file_id;
-          }
-        });
-      } catch (e) { /* ignore */ }
-    });
+    try {
+      const rows = await mysqlAlbumsGetSizes(env, id);
+      rows.forEach(function(a) {
+        try {
+          JSON.parse(a.sizes || '[]').forEach(function(s) {
+            if (selected.has(String(s.id)) && s.file_id) {
+              fileIdMap[s.id] = s.file_id;
+            }
+          });
+        } catch (e) { /* ignore */ }
+      });
+    } catch (e) { /* MySQL 未配置 */ }
     return json({ ok: true, data: fileIdMap });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }

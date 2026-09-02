@@ -25,6 +25,14 @@ binding = "D1_DB"
 database_name = "telegram-url"
 database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
 
+# Hyperdrive 绑定：直连 VPS MySQL（相册数据存储）
+# 在 Cloudflare Dashboard → Workers → Settings → Bindings → Hyperdrive 创建后，
+# 将生成的 ID 填入下方。连接字符串格式：
+#   postgresql://telequnphoto:telequnphoto@84.247.129.220:3306/telequnphoto
+[[hyperdrive]]
+binding = "telequnphoto"
+id = "PLACEHOLDER_HYPERDRIVE_ID"
+
 # Cron 触发器：scheduled() 兜底轮询 + 未转存自动补齐 + 查重后台化 + webhook 自愈
 # "0 1 * * *" = UTC 01:00（北京时间 09:00）日报推送
 [triggers]
