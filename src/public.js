@@ -531,9 +531,9 @@ var curProgram='';
 var SHOW_TITLE=true,SHOW_TAGS=true,SHOW_COUNTER=true,statsInjected=false;
 var scheduleArr=[],boundaryTimer=null;
 function $(i){return document.getElementById(i);}
-export function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-export function p2m(t){var p=String(t||'').split(':');return (parseInt(p[0]||'0',10)||0)*60+(parseInt(p[1]||'0',10)||0);}
-export function renderScheduleList(){
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function p2m(t){var p=String(t||'').split(':');return (parseInt(p[0]||'0',10)||0)*60+(parseInt(p[1]||'0',10)||0);}
+function renderScheduleList(){
   var box=$('scheduleList');
   if(!box) return;
   if(!scheduleArr.length){box.innerHTML='<div class="sb-empty">未配置节目单</div>';return;}
@@ -549,7 +549,7 @@ export function renderScheduleList(){
   }
   box.innerHTML=h||'<div class="sb-empty">未配置节目单</div>';
 }
-export function planBoundary(){
+function planBoundary(){
   if(boundaryTimer){clearTimeout(boundaryTimer);boundaryTimer=null;}
   if(!scheduleArr.length) return;
   var now=new Date(),hm=now.getHours()*60+now.getMinutes(),next=null;
@@ -566,7 +566,7 @@ export function planBoundary(){
   }
 }
 // Config comes from /show/data at runtime (no server-side config lookup on page load)
-export function injectStats(code){
+function injectStats(code){
   if(statsInjected||!code) return;
   statsInjected=true;
   var div=document.createElement('div');
@@ -580,7 +580,7 @@ export function injectStats(code){
   }
   while(div.firstChild){document.body.appendChild(div.firstChild);}
 }
-export function applyCfg(cfg){
+function applyCfg(cfg){
   cfg=cfg||{};
   AUTOSEC=parseInt(cfg.interval)||5;
   AUTOADVANCE=cfg.autoAdvance?1:0;
@@ -595,7 +595,7 @@ export function applyCfg(cfg){
   planBoundary();
   injectStats(cfg.statsCode);
 }
-export function load(){
+function load(){
   $('overlay').style.display='none';
   var done=false;
   var to=setTimeout(function(){ if(!done){ $('loading').textContent='加载超时，请刷新或稍后再试'; } },20000);
@@ -612,14 +612,14 @@ export function load(){
   }).catch(function(){done=true;clearTimeout(to);$('loading').textContent='加载失败，请刷新重试';});
 }
 var errCount=0;
-export function updateProgram(){
+function updateProgram(){
   var el=$('program');
   if(el){if(curProgram){el.style.display='block';el.textContent='正在播放 · '+curProgram;}else{el.style.display='none';}}
   var ov=$('ovProgram');
   if(ov) ov.textContent=curProgram?('下一组将播放 · '+curProgram):'共享库暂无更多内容';
   renderScheduleList();
 }
-export function show(){
+function show(){
   var it=items[idx];
   var img=$('main');
   if(img._t) clearTimeout(img._t);
@@ -648,17 +648,17 @@ export function show(){
   $('dots').innerHTML=d;
   var nx=new Image();nx.src=items[(idx+1)%items.length].url;
 }
-export function next(){
+function next(){
   idx=(idx+1)%items.length;
   if(idx===0){show();groupEnd();return;}
   show();
 }
-export function prev(){idx=(idx-1+items.length)%items.length;show();}
-export function groupEnd(){stop();$('overlay').style.display='flex';}
-export function start(){stop();timer=setInterval(next,AUTOSEC*1000);}
-export function stop(){if(timer){clearInterval(timer);timer=null;}}
-export function togglePlay(){if(timer){stop();paused=true;$('playBtn').textContent='播放';}else{start();paused=false;$('playBtn').textContent='暂停';}}
-export function probe(){
+function prev(){idx=(idx-1+items.length)%items.length;show();}
+function groupEnd(){stop();$('overlay').style.display='flex';}
+function start(){stop();timer=setInterval(next,AUTOSEC*1000);}
+function stop(){if(timer){clearInterval(timer);timer=null;}}
+function togglePlay(){if(timer){stop();paused=true;$('playBtn').textContent='播放';}else{start();paused=false;$('playBtn').textContent='暂停';}}
+function probe(){
   fetch('/show/data?count=1').then(function(r){return r.json();}).then(function(j){
     if(!j||!j.ok) return;
     applyCfg(j.data&&j.data.cfg);
