@@ -34,8 +34,10 @@ jobs:
 
       # Cloudflare 版本管理限制：最新版本未部署时不允许 wrangler secret put。
       # 所以顺序必须：先 deploy 部署版本，再 secret put 写入机密。
+      # wrangler-action@v4（声明 node24）兼容 GitHub Actions 默认 Node 24 runner；
+      # @v3 声明 node20 已被 GitHub 弃用（2025-09 起默认不再运行），导致 npx 退出码 1。
       - name: Deploy Worker to Cloudflare
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -72,21 +74,21 @@ jobs:
           GITHUB_RUN_NUMBER: ${{ github.run_number }}
 
       - name: Upload admin.html to R2 (bot-telegram bucket)
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: r2 object put bot-telegram/admin.html --file=admin.html --content-type text/html --cache-control "public, max-age=300"
 
       - name: Upload admin-guide.html to R2 (bot-telegram bucket)
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: r2 object put bot-telegram/admin-guide.html --file=admin-guide.html --content-type text/html --cache-control "public, max-age=300"
 
       - name: Upload user.html to R2 (bot-telegram bucket)
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
