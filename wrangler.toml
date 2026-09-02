@@ -6,8 +6,8 @@
 
 name = "telegram-r2-bot"
 main = "worker.js"
-compatibility_date = "2026-08-01"   # 若线上运行正常，可从 Dashboard 复制原值覆盖此项，避免行为变化
-compatibility_flags = ["nodejs_compat"]   # mysql2 依赖 Node 内建模块（net/tls/stream），必须开启
+compatibility_date = "2026-08-31"   # >=2026-08-04 默认启用完整 nodejs_compat(v1+v2)，mysql2 net.connect 才可用
+compatibility_flags = ["nodejs_compat"]   # mysql2 依赖 Node 内建模块（net/tls/stream）
 
 # 公开变量（非密钥）
 [vars]
