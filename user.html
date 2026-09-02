@@ -129,6 +129,7 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
     </div>
     <div class="topbar-right">
       <span style="font-size:12px;color:var(--text-secondary)" id="levelTop"></span>
+      <button class="btn btn-primary btn-sm" id="manageBtn">图片管理</button>
       <button class="btn-logout" id="logoutBtn">退出</button>
     </div>
   </div>
@@ -462,6 +463,13 @@ document.getElementById("logoutBtn").addEventListener("click", function() {
   document.getElementById("appMain").style.display = "none";
   document.getElementById("loginKey").value = "";
   document.getElementById("loginPass").value = "";
+});
+document.getElementById("manageBtn").addEventListener("click", function() {
+  if (AK) {
+    window.location.href = "/user-manage?api_key=" + encodeURIComponent(AK);
+  } else {
+    toast("请先登录", 0);
+  }
 });
 
 // 接口生成器
