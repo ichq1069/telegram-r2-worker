@@ -30,7 +30,7 @@ import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUser
 import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript, handleDeployGenScript, handleTaskRunReport, handleServerTasksPoll, handleAdminTaskRuns, handleAdminUbotChats, handleAdminUbotChatsRefresh, handleUbotDialogsReport, handleUbotGlobal } from './src/servers.js';
 import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
-import { mysqlFailoverGet } from './src/mysql.js';
+import { mysqlFailoverGet, mysqlRows, mysqlGet } from './src/mysql.js';
 
 
 
@@ -528,7 +528,13 @@ async function handleDbModeGet(env) {
   try {
     const m = await currentMode(env);
     const fs = await mysqlFailoverGet(env);
-    return json({ ok: true, data: { current: m.mode, source: m.source, manual: fs } });
+    // 真实连通测试：直接执行 SELECT 1，暴露 Hyperdrive 实际错误
+    let ping = { ok: false, error: 'not attempted' };
+    try {
+      const r = await mysqlRows(env, 'SELECT 1 AS one', []);
+      ping = { ok: true, one: r && r[0] && r[0].one };
+    } catch (e) { ping = { ok: false, error: String(e && e.message || e), name: e && e.name }; }
+    return json({ ok: true, data: { current: m.mode, source: m.source, manual: fs, hd: !!env.telequnphoto, ping: ping } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
