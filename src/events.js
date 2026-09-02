@@ -238,6 +238,27 @@ export async function handleAdminPoolDelete(request, env) {
     const u = new URL(request.url);
     const id = u.searchParams.get('id');
     if (!id) return json({ ok: false, error: 'id required' }, 400);
+    
+    // Get the file info before deleting
+    const file = await env.D1_DB.prepare('SELECT * FROM random_pool WHERE id = ?').bind(id).first();
+    if (file) {
+      // If this is a user upload, also delete from user_uploads
+      if (file.source === 'user_upload' && file.title) {
+        const userId = file.title.split('_')[0]; // Extract user_id from title prefix
+        if (userId) {
+          await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE file_name = ? AND user_id = ? AND deleted_at IS NULL')
+            .bind(cnNowISO(), file.title.replace(userId + '_', ''), userId).run();
+        }
+      }
+      
+      // Also soft-delete from files table if it exists
+      if (file.url && file.url.startsWith('/file/tg/')) {
+        const fileId = file.url.replace('/file/tg/', '');
+        await env.D1_DB.prepare('UPDATE files SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')
+          .bind(cnNowISO(), fileId).run();
+      }
+    }
+    
     await env.D1_DB.prepare('DELETE FROM random_pool WHERE id = ?').bind(id).run();
     await fireWebhook(env, 'file_deleted', { id: id, deleted: true, source: 'pool' }).catch(function(){});
     return json({ ok: true });
@@ -352,6 +373,9 @@ export async function handleDeleteFile(request, env) {
           const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
           if (!ref || (ref.c || 0) <= 1) { try { await env.R2_BUCKET.delete(f.storage_key); } catch (e) {} }
         }
+        // Also delete from random_pool and user_uploads
+        await env.D1_DB.prepare('DELETE FROM random_pool WHERE url = ?').bind('/file/tg/' + f.id).run();
+        await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE url = ?').bind(now, '/file/tg/' + f.id).run();
         const r = await env.D1_DB.prepare('DELETE FROM files WHERE id=?').bind(f.id).run();
         if (r.meta && r.meta.changes) deleted++;
       } catch (e) {}
@@ -369,11 +393,20 @@ export async function handleDeleteFile(request, env) {
           const ref = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE storage_key=?').bind(f.storage_key).first();
           if (!ref || (ref.c || 0) <= 1) { try { await env.R2_BUCKET.delete(f.storage_key); } catch (e) {} }
         }
+        // Also delete from random_pool and user_uploads
+        await env.D1_DB.prepare('DELETE FROM random_pool WHERE url = ?').bind('/file/tg/' + one).run();
+        await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE url = ?').bind(now, '/file/tg/' + one).run();
         const r = await env.D1_DB.prepare('DELETE FROM files WHERE id=?').bind(one).run();
         if (r.meta && r.meta.changes) deleted++;
       } else {
+        // Soft delete from files
         const r = await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=? AND deleted_at IS NULL').bind(now, one).run();
-        if (r.meta && r.meta.changes) deleted++;
+        if (r.meta && r.meta.changes) {
+          deleted++;
+          // Also soft-delete from random_pool and user_uploads
+          await env.D1_DB.prepare('DELETE FROM random_pool WHERE url = ?').bind('/file/tg/' + one).run();
+          await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE url = ?').bind(now, '/file/tg/' + one).run();
+        }
       }
       // await 保证 webhook 通知在响应返回前发出（fire-and-forget 会被 Worker 冻结丢弃）
       await fireWebhook(env, 'file_deleted', { id: one, deleted: !purge, source: 'files' }).catch(function(){});

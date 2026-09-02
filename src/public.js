@@ -2129,6 +2129,14 @@ export async function handleAdminUpdateUserQuota(request, env) {
       updates.push('level = ?');
       params.push(String(b.level).trim() || 'pt');
     }
+    if (b.upload_used !== undefined) {
+      updates.push('upload_used = ?');
+      params.push(parseInt(b.upload_used, 10) || 0);
+    }
+    if (b.storage_used !== undefined) {
+      updates.push('storage_used = ?');
+      params.push(parseInt(b.storage_used, 10) || 0);
+    }
     
     if (updates.length === 0) return json({ ok: false, error: 'No fields to update' }, 400);
     

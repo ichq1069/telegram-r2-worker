@@ -14,9 +14,30 @@ export const LEVEL_RANK = { pt: 0, vip: 1, svip: 2, vvip: 3 };
 export const LEVEL_ORDER = ['pt', 'vip', 'svip', 'vvip'];
 export function sanitizeLevel(lv) { return LEVEL_RANK[lv] === undefined ? 'pt' : lv; }
 // 根据访问方级别生成 SQL 过滤子句与参数（低级别密钥不得获取高级别内容）
+// 支持多级别：keyLevel 可以是 "pt"、"pt,vip"、"*" 等
 export function levelFilter(keyLevel) {
-  const rank = LEVEL_RANK[keyLevel] === undefined ? 0 : LEVEL_RANK[keyLevel];
-  const allowed = LEVEL_ORDER.filter(function(l) { return LEVEL_RANK[l] <= rank; });
+  // Handle "* " (all levels) or empty
+  if (!keyLevel || keyLevel === '*') {
+    return { sql: '', params: [] };
+  }
+  
+  // Parse comma-separated levels
+  const levels = keyLevel.split(',').map(function(l) { return l.trim(); }).filter(function(l) { return LEVEL_RANK[l] !== undefined; });
+  
+  if (levels.length === 0) {
+    return { sql: ' AND level IN (?)', params: ['pt'] };
+  }
+  
+  // For each selected level, include all levels with rank <= that level's rank
+  const allowedSet = new Set();
+  levels.forEach(function(lv) {
+    const rank = LEVEL_RANK[lv];
+    LEVEL_ORDER.forEach(function(l) {
+      if (LEVEL_RANK[l] <= rank) allowedSet.add(l);
+    });
+  });
+  
+  const allowed = Array.from(allowedSet);
   return { sql: ' AND level IN (' + allowed.map(function() { return '?'; }).join(',') + ')', params: allowed };
 }
 
