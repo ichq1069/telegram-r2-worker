@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>图片管理</title>
+<style>
+:root {
+  --bg: #f8fafc; --card: #fff; --border: #e2e8f0; --text: #1e293b; --text-secondary: #64748b;
+  --primary: #6366f1; --primary-light: #eef2ff; --primary-hover: #4f46e5;
+  --danger: #ef4444; --danger-light: #fef2f2; --success: #10b981; --warning: #f59e0b;
+  --radius: 12px; --shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+.wrap { max-width:1400px; margin:0 auto; padding:16px; }
+
+/* Topbar */
+.topbar { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); margin-bottom:16px; }
+.topbar-title { font-size:16px; font-weight:700; }
+.topbar-right { display:flex; align-items:center; gap:12px; }
+
+/* Card */
+.card { background:var(--card); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); margin-bottom:16px; }
+.card-title { font-size:14px; font-weight:700; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--primary); display:inline-block; }
+
+/* Stats */
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:12px; margin-bottom:16px; }
+.stat-card { background:var(--primary-light); border-radius:10px; padding:12px; text-align:center; }
+.stat-card .value { font-size:24px; font-weight:700; color:var(--primary); }
+.stat-card .label { font-size:11px; color:var(--text-secondary); margin-top:4px; }
+
+/* Form */
+.inp { border:1px solid var(--border); border-radius:8px; padding:8px 12px; font-size:13px; outline:none; transition:border-color .2s; background:var(--card); }
+.inp:focus { border-color:var(--primary); }
+.btn { border:none; border-radius:8px; padding:8px 16px; font-size:13px; font-weight:600; cursor:pointer; transition:all .2s; }
+.btn-primary { background:var(--primary); color:#fff; }
+.btn-primary:hover { background:var(--primary-hover); }
+.btn-ghost { background:transparent; color:var(--text-secondary); }
+.btn-ghost:hover { background:var(--primary-light); color:var(--primary); }
+.btn-danger { background:var(--danger); color:#fff; }
+.btn-danger:hover { background:#dc2626; }
+.btn-sm { padding:4px 10px; font-size:12px; }
+
+/* File Manager Layout */
+.file-manager-layout { display:flex; gap:16px; align-items:flex-start; }
+.folder-sidebar { width:220px; min-width:220px; background:var(--card); border-radius:var(--radius); padding:12px; box-shadow:var(--shadow); }
+.folder-tree { max-height:400px; overflow-y:auto; }
+.folder-item { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:8px; cursor:pointer; font-size:13px; transition:all .15s; }
+.folder-item:hover { background:var(--primary-light); }
+.folder-item.active { background:var(--primary-light); color:var(--primary); font-weight:600; }
+.folder-icon { font-size:14px; }
+.folder-name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.folder-count { font-size:11px; color:var(--text-secondary); }
+.file-manager-content { flex:1; min-width:0; }
+
+/* Toolbar */
+.toolbar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.view-toggle { display:flex; gap:2px; margin-left:auto; }
+.view-toggle button { width:32px; height:32px; border:1px solid var(--border); background:var(--card); border-radius:6px; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; }
+.view-toggle button.active { background:var(--primary); color:#fff; border-color:var(--primary); }
+
+/* Drop Zone */
+.drop-zone { border:2px dashed var(--border); border-radius:var(--radius); padding:40px; text-align:center; margin-bottom:16px; transition:all .2s; }
+.drop-zone.dragover { border-color:var(--primary); background:var(--primary-light); }
+.drop-zone-icon { font-size:40px; margin-bottom:8px; }
+.drop-zone-text { font-size:14px; color:var(--text-secondary); }
+.drop-zone-hint { font-size:12px; color:var(--text-secondary); margin-top:4px; }
+
+/* File Grid */
+.file-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:12px; }
+.file-grid.list-view { grid-template-columns:1fr; }
+.file-card { background:var(--card); border-radius:10px; overflow:hidden; box-shadow:var(--shadow); transition:transform .2s; cursor:pointer; }
+.file-card:hover { transform:translateY(-2px); }
+.file-card img { width:100%; height:120px; object-fit:cover; }
+.file-card.list-view { display:flex; align-items:center; }
+.file-card.list-view img { width:60px; height:60px; }
+.file-card-info { padding:8px; }
+.file-card-name { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-card-meta { font-size:11px; color:var(--text-secondary); margin-top:4px; }
+.file-card-tags { font-size:11px; color:var(--primary); margin-top:4px; }
+.file-card-actions { display:flex; gap:4px; margin-top:6px; }
+
+/* Preview Modal */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:1000; display:flex; align-items:center; justify-content:center; }
+.modal-content { max-width:90vw; max-height:90vh; position:relative; }
+.modal-content img { max-width:100%; max-height:85vh; object-fit:contain; border-radius:8px; }
+.modal-nav { position:absolute; top:50%; transform:translateY(-50%); width:40px; height:40px; background:rgba(255,255,255,.9); border:none; border-radius:50%; cursor:pointer; font-size:18px; display:flex; align-items:center; justify-content:center; }
+.modal-nav.prev { left:-50px; }
+.modal-nav.next { right:-50px; }
+.modal-close { position:absolute; top:-40px; right:0; width:32px; height:32px; background:rgba(255,255,255,.9); border:none; border-radius:50%; cursor:pointer; font-size:16px; }
+
+/* Pagination */
+.pagination { display:flex; justify-content:center; gap:8px; margin-top:16px; }
+
+/* Toast */
+.toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); padding:10px 20px; border-radius:8px; font-size:13px; z-index:2000; animation:fadeIn .3s; }
+.toast.success { background:var(--success); color:#fff; }
+.toast.error { background:var(--danger); color:#fff; }
+@keyframes fadeIn { from { opacity:0; transform:translateX(-50%) translateY(10px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
+
+/* Skeleton */
+.sk { background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%); background-size:200% 100%; animation:sk 1.5s infinite; border-radius:8px; }
+@keyframes sk { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
+
+@media(max-width:768px) {
+  .file-manager-layout { flex-direction:column; }
+  .folder-sidebar { width:100%; min-width:0; }
+  .file-grid { grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); }
+}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-title">图片管理</div>
+    <div class="topbar-right">
+      <button class="btn btn-ghost btn-sm" id="refreshBtn">刷新</button>
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">退出</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- 统计 -->
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card"><div class="value" id="stTotal">-</div><div class="label">总文件数</div></div>
+      <div class="stat-card"><div class="value" id="stImages">-</div><div class="label">图片</div></div>
+      <div class="stat-card"><div class="value" id="stVideos">-</div><div class="label">视频</div></div>
+      <div class="stat-card"><div class="value" id="stSize">-</div><div class="label">存储用量</div></div>
+    </div>
+
+    <!-- 上传区 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>上传文件</div>
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-zone-icon">📤</div>
+        <div class="drop-zone-text">拖拽文件到此处上传</div>
+        <div class="drop-zone-hint">支持图片、视频等文件，单文件最大 19MB</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+        <div style="flex:1;min-width:240px">
+          <label style="font-size:12px;color:var(--text-secondary)">选择文件</label>
+          <input class="inp" type="file" id="fileInput" accept="image/*,video/*" multiple style="width:100%">
+        </div>
+        <div style="flex:1;min-width:160px">
+          <label style="font-size:12px;color:var(--text-secondary)">标签（逗号分隔）</label>
+          <input class="inp" id="uploadTags" placeholder="风景,美女" style="width:100%">
+        </div>
+        <div style="flex:1;min-width:160px">
+          <label style="font-size:12px;color:var(--text-secondary)">绑定群组 ID（可选）</label>
+          <input class="inp" id="uploadGroupId" placeholder="-1001234567890" style="width:100%">
+        </div>
+        <button class="btn btn-primary" id="uploadBtn">上传</button>
+      </div>
+      <div id="uploadStatus" style="font-size:12px;color:var(--text-secondary);margin-top:8px"></div>
+    </div>
+
+    <!-- 文件管理 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>文件管理</div>
+      <div class="file-manager-layout">
+        <div class="folder-sidebar" id="folderSidebar">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <span style="font-size:13px;font-weight:600">群组</span>
+          </div>
+          <div class="folder-tree" id="folderTree">
+            <div class="folder-item active" data-id="">
+              <span class="folder-icon">📁</span>
+              <span class="folder-name">全部文件</span>
+            </div>
+          </div>
+        </div>
+        <div class="file-manager-content">
+          <div class="toolbar" style="margin-bottom:12px">
+            <input class="inp" id="searchKw" placeholder="文件名/标题" style="max-width:180px">
+            <input class="inp" id="searchTags" placeholder="标签筛选" style="max-width:160px">
+            <select class="inp" id="searchType" style="max-width:120px">
+              <option value="">全部类型</option>
+              <option value="photo">图片</option>
+              <option value="video">视频</option>
+            </select>
+            <button class="btn btn-primary btn-sm" id="searchBtn">筛选</button>
+            <button class="btn btn-ghost btn-sm" id="resetBtn">重置</button>
+            <div class="view-toggle" id="viewToggle">
+              <button class="active" data-view="grid" title="网格视图">▦</button>
+              <button data-view="list" title="列表视图">☰</button>
+            </div>
+          </div>
+          <div id="fileGrid" class="file-grid"></div>
+          <div id="pagination" class="pagination"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- API 文档 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>API 访问</div>
+      <div style="font-size:13px;line-height:1.8">
+        <p style="margin-bottom:10px"><b>认证方式：</b>所有 API 请求需要携带 <code>X-API-Key</code> 头或 <code>?api_key=</code> 参数。</p>
+        <p style="margin-bottom:6px"><b>可用端点：</b></p>
+        <ul style="margin-left:20px;margin-bottom:10px">
+          <li><code>POST /api/v1/upload</code> - 上传图片（multipart/form-data，字段名 file）</li>
+          <li><code>GET /api/v1/files?pool=1</code> - 获取文件列表</li>
+          <li><code>GET /api/v1/random</code> - 随机获取图片</li>
+        </ul>
+        <p style="margin-bottom:6px"><b>参数说明：</b></p>
+        <ul style="margin-left:20px;margin-bottom:10px">
+          <li><code>group_id</code> - 群组 ID，自动绑定图片到指定群组</li>
+          <li><code>tags</code> - 标签，逗号分隔</li>
+          <li><code>title</code> - 标题</li>
+        </ul>
+        <p style="margin-bottom:6px"><b>文件名规则：</b>上传时自动添加用户 ID 前缀，格式为 <code>{user_id}_{原文件名}</code></p>
+        <div id="apiExamples" style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;font-family:monospace;font-size:12px;white-space:pre-wrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Preview Modal -->
+  <div class="modal-overlay" id="previewModal" style="display:none">
+    <button class="modal-close" id="modalClose">&times;</button>
+    <button class="modal-nav prev" id="modalPrev">&lsaquo;</button>
+    <div class="modal-content">
+      <img id="modalImg" src="">
+    </div>
+    <button class="modal-nav next" id="modalNext">&rsaquo;</button>
+  </div>
+
+<script>
+var AK = localStorage.getItem('user_api_key') || '';
+var OR = location.origin;
+var currentPage = 1;
+var totalPages = 1;
+var currentGroupId = '';
+var currentView = 'grid';
+var currentFiles = [];
+var previewIndex = 0;
+
+// Auth check
+if (!AK) { AK = new URLSearchParams(location.search).get('api_key') || ''; }
+if (AK) localStorage.setItem('user_api_key', AK);
+if (!AK) { location.href = '/user.html'; }
+
+// Toast
+function toast(msg, ok) {
+  var el = document.createElement('div');
+  el.className = 'toast ' + (ok ? 'success' : 'error');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(function() { el.remove(); }, 3000);
+}
+
+// Format helpers
+function fmtSize(b) {
+  if (!b) return '0B';
+  var u = ['B','KB','MB','GB'];
+  var i = Math.floor(Math.log(b) / Math.log(1024));
+  return (b / Math.pow(1024, i)).toFixed(i ? 1 : 0) + u[i];
+}
+function fmtDT(s) {
+  if (!s) return '-';
+  var d = new Date(s);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+function escStr(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// API call
+async function api(method, path, body) {
+  var opts = { method: method, headers: { 'X-API-Key': AK } };
+  if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  try {
+    var r = await fetch(OR + path, opts);
+    var data = await r.json();
+    return data;
+  } catch(e) { return { ok: false, error: e.message }; }
+}
+
+// Load stats
+async function loadStats() {
+  var r = await api('GET', '/api/v1/user/quota');
+  if (r.ok) {
+    document.getElementById('stTotal').textContent = r.data.upload_used || 0;
+    document.getElementById('stImages').textContent = r.data.upload_used || 0;
+    document.getElementById('stVideos').textContent = '-';
+    document.getElementById('stSize').textContent = fmtSize(r.data.storage_used || 0);
+  }
+}
+
+// Load files
+async function loadFiles(page) {
+  page = page || 1;
+  var kw = document.getElementById('searchKw').value.trim();
+  var tags = document.getElementById('searchTags').value.trim();
+  var type = document.getElementById('searchType').value;
+  
+  var url = '/api/v1/files?pool=1&page=' + page + '&page_size=20';
+  if (kw) url += '&keyword=' + encodeURIComponent(kw);
+  if (tags) url += '&tags=' + encodeURIComponent(tags);
+  if (type) url += '&type=' + type;
+  
+  var r = await api('GET', url);
+  if (!r.ok) { document.getElementById('fileGrid').innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-secondary);padding:40px">' + (r.error || '加载失败') + '</div>'; return; }
+  
+  currentFiles = r.data || [];
+  totalPages = Math.ceil((r.total || 0) / 20);
+  currentPage = page;
+  
+  renderFiles();
+  renderPagination();
+}
+
+function renderFiles() {
+  var grid = document.getElementById('fileGrid');
+  grid.className = 'file-grid' + (currentView === 'list' ? ' list-view' : '');
+  
+  if (!currentFiles.length) {
+    grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-secondary);padding:40px">暂无文件</div>';
+    return;
+  }
+  
+  var h = '';
+  for (var i = 0; i < currentFiles.length; i++) {
+    var f = currentFiles[i];
+    var isList = currentView === 'list';
+    h += '<div class="file-card' + (isList ? ' list-view' : '') + '" data-index="' + i + '">';
+    h += '<img src="' + escStr(f.url) + '" loading="lazy">';
+    h += '<div class="file-card-info">';
+    h += '<div class="file-card-name" title="' + escStr(f.file_name) + '">' + escStr(f.file_name || '未命名') + '</div>';
+    h += '<div class="file-card-meta">' + fmtSize(f.file_size) + ' · ' + fmtDT(f.created_at) + '</div>';
+    if (f.tags) h += '<div class="file-card-tags">' + escStr(f.tags) + '</div>';
+    h += '<div class="file-card-actions">';
+    h += '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();copyUrl(\'' + escStr(f.url) + '\')">复制</button>';
+    h += '<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteFile(' + f.id + ')">删除</button>';
+    h += '</div>';
+    h += '</div></div>';
+  }
+  grid.innerHTML = h;
+  
+  // Add click handlers for preview
+  var cards = grid.querySelectorAll('.file-card');
+  cards.forEach(function(card) {
+    card.addEventListener('click', function() {
+      var idx = parseInt(this.dataset.index);
+      openPreview(idx);
+    });
+  });
+}
+
+function renderPagination() {
+  var el = document.getElementById('pagination');
+  if (totalPages <= 1) { el.innerHTML = ''; return; }
+  
+  var h = '';
+  if (currentPage > 1) h += '<button class="btn btn-ghost btn-sm" onclick="loadFiles(' + (currentPage-1) + ')">上一页</button>';
+  h += '<span style="font-size:12px;color:var(--text-secondary);padding:6px 10px">' + currentPage + ' / ' + totalPages + '</span>';
+  if (currentPage < totalPages) h += '<button class="btn btn-ghost btn-sm" onclick="loadFiles(' + (currentPage+1) + ')">下一页</button>';
+  el.innerHTML = h;
+}
+
+// Preview
+function openPreview(idx) {
+  previewIndex = idx;
+  var f = currentFiles[idx];
+  if (!f) return;
+  document.getElementById('modalImg').src = f.url;
+  document.getElementById('previewModal').style.display = 'flex';
+}
+
+function closePreview() {
+  document.getElementById('previewModal').style.display = 'none';
+}
+
+function prevPreview() {
+  if (previewIndex > 0) { previewIndex--; openPreview(previewIndex); }
+}
+
+function nextPreview() {
+  if (previewIndex < currentFiles.length - 1) { previewIndex++; openPreview(previewIndex); }
+}
+
+// Upload
+async function uploadFiles(files) {
+  var status = document.getElementById('uploadStatus');
+  status.textContent = '正在上传...';
+  
+  var formData = new FormData();
+  for (var i = 0; i < files.length; i++) {
+    formData.append('file', files[i]);
+  }
+  
+  var tags = document.getElementById('uploadTags').value.trim();
+  var groupId = document.getElementById('uploadGroupId').value.trim();
+  
+  var url = '/api/v1/upload?api_key=' + encodeURIComponent(AK);
+  if (tags) url += '&tags=' + encodeURIComponent(tags);
+  if (groupId) url += '&group_id=' + encodeURIComponent(groupId);
+  
+  try {
+    var r = await fetch(OR + url, { method: 'POST', body: formData });
+    var data = await r.json();
+    
+    if (data.ok) {
+      status.textContent = '上传成功！';
+      loadFiles(1);
+      loadStats();
+    } else {
+      status.textContent = '上传失败：' + (data.error || '未知错误');
+    }
+  } catch(e) {
+    status.textContent = '上传失败：' + e.message;
+  }
+}
+
+// Delete
+async function deleteFile(id) {
+  if (!confirm('确定要删除这个文件吗？')) return;
+  
+  var r = await api('DELETE', '/api/v1/files/' + id);
+  if (r.ok) {
+    toast('已删除', true);
+    loadFiles(currentPage);
+    loadStats();
+  } else {
+    toast(r.error || '删除失败', false);
+  }
+}
+
+// Copy URL
+function copyUrl(url) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(function() { toast('已复制链接', true); });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('已复制链接', true); } catch(e) { toast('复制失败', false); }
+    ta.remove();
+  }
+}
+
+// Load groups
+async function loadGroups() {
+  var r = await api('GET', '/admin/api/groups');
+  if (!r.ok) return;
+  
+  var groups = r.data || [];
+  var tree = document.getElementById('folderTree');
+  var h = '<div class="folder-item active" data-id="" onclick="filterByGroup(\'\')"><span class="folder-icon">📁</span><span class="folder-name">全部文件</span></div>';
+  
+  for (var i = 0; i < groups.length; i++) {
+    var g = groups[i];
+    h += '<div class="folder-item" data-id="' + g.id + '" onclick="filterByGroup(' + g.id + ')">';
+    h += '<span class="folder-icon">👥</span>';
+    h += '<span class="folder-name">' + escStr(g.name) + '</span>';
+    h += '</div>';
+  }
+  tree.innerHTML = h;
+}
+
+function filterByGroup(groupId) {
+  currentGroupId = groupId;
+  // Update active state
+  var items = document.querySelectorAll('#folderTree .folder-item');
+  items.forEach(function(item) {
+    item.classList.toggle('active', item.dataset.id === String(groupId));
+  });
+  // Reload files with group filter
+  loadFiles(1);
+}
+
+// Event listeners
+document.addEventListener('DOMContentLoaded', function() {
+  // Load data
+  loadStats();
+  loadFiles(1);
+  loadGroups();
+  
+  // Render API examples
+  var examples = '# 获取文件列表\ncurl -H "X-API-Key: YOUR_KEY" "' + OR + '/api/v1/files?pool=1"\n\n' +
+    '# 上传图片\ncurl -F "file=@image.jpg" -H "X-API-Key: YOUR_KEY" "' + OR + '/api/v1/upload?group_id=-1001234567890"\n\n' +
+    '# 随机获取\ncurl -H "X-API-Key: YOUR_KEY" "' + OR + '/api/v1/random?count=1"';
+  document.getElementById('apiExamples').textContent = examples;
+  
+  // Upload button
+  document.getElementById('uploadBtn').addEventListener('click', function() {
+    var files = document.getElementById('fileInput').files;
+    if (files.length) uploadFiles(files);
+  });
+  
+  // File input
+  document.getElementById('fileInput').addEventListener('change', function() {
+    if (this.files.length) uploadFiles(this.files);
+  });
+  
+  // Drop zone
+  var dropZone = document.getElementById('dropZone');
+  dropZone.addEventListener('dragover', function(e) { e.preventDefault(); this.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', function() { this.classList.remove('dragover'); });
+  dropZone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    this.classList.remove('dragover');
+    if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
+  });
+  
+  // Search
+  document.getElementById('searchBtn').addEventListener('click', function() { loadFiles(1); });
+  document.getElementById('resetBtn').addEventListener('click', function() {
+    document.getElementById('searchKw').value = '';
+    document.getElementById('searchTags').value = '';
+    document.getElementById('searchType').value = '';
+    loadFiles(1);
+  });
+  
+  // View toggle
+  document.querySelectorAll('#viewToggle button').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      currentView = this.dataset.view;
+      document.querySelectorAll('#viewToggle button').forEach(function(b) { b.classList.remove('active'); });
+      this.classList.add('active');
+      renderFiles();
+    });
+  });
+  
+  // Preview modal
+  document.getElementById('modalClose').addEventListener('click', closePreview);
+  document.getElementById('modalPrev').addEventListener('click', prevPreview);
+  document.getElementById('modalNext').addEventListener('click', nextPreview);
+  document.getElementById('previewModal').addEventListener('click', function(e) {
+    if (e.target === this) closePreview();
+  });
+  
+  // Keyboard shortcuts
+  document.addEventListener('keydown', function(e) {
+    if (document.getElementById('previewModal').style.display !== 'flex') return;
+    if (e.key === 'Escape') closePreview();
+    if (e.key === 'ArrowLeft') prevPreview();
+    if (e.key === 'ArrowRight') nextPreview();
+  });
+  
+  // Refresh
+  document.getElementById('refreshBtn').addEventListener('click', function() {
+    loadStats();
+    loadFiles(currentPage);
+    loadGroups();
+  });
+  
+  // Logout
+  document.getElementById('logoutBtn').addEventListener('click', function() {
+    localStorage.removeItem('user_api_key');
+    location.href = '/user.html';
+  });
+});
+</script>
+</body>
+</html>

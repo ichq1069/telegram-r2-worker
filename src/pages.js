@@ -48,6 +48,20 @@ export async function handleUserFromR2(env) {
   }
 }
 
+// 用户图片管理页：从 R2 读取 user-manage.html（文件管理 + 上传 + API 文档）
+export async function handleUserManageFromR2(env) {
+  try {
+    const obj = await env.R2_BUCKET.get('user-manage.html');
+    if (!obj) return new Response('user-manage.html not found in R2. Please upload user-manage.html to R2 bucket.', { status: 404 });
+    const headers = new Headers();
+    headers.set('Content-Type', 'text/html; charset=utf-8');
+    headers.set('Cache-Control', 'no-cache');
+    return new Response(obj.body, { headers });
+  } catch (e) {
+    return new Response('Error loading user-manage page: ' + e.message, { status: 500 });
+  }
+}
+
 // 用户门户登录：支持「密钥 + key-pass」或「用户名 + 密码」两种方式，返回该密钥的统计信息（不含密码哈希）
 export async function handleUserLogin(request, env) {
   try {

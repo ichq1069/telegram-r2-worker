@@ -963,6 +963,7 @@ export async function handlePublicUpload(request, env, keyLevel) {
     const pool = u.searchParams.get('pool') === '1' || u.searchParams.get('pool') === 'true';
     const tagsParam = u.searchParams.get('tags') || '';
     const title = String(u.searchParams.get('title') || '').slice(0, 200);
+    const groupId = u.searchParams.get('group_id') || '';
     // 请求级别不得超过密钥级别（级别对等）；未传 level 时默认 = 密钥级别
     const reqLvRaw = u.searchParams.get('level');
     let reqLevel = reqLvRaw ? sanitizeLevel(reqLvRaw) : keyLevel;
@@ -971,6 +972,14 @@ export async function handlePublicUpload(request, env, keyLevel) {
     const useLevel = isPrivate ? 'vvip' : reqLevel;
     const tags = splitTags(tagsParam).join(',');
     const stream = u.searchParams.get('stream') === '1';
+    
+    // Get user_id from api_key for filename prefix
+    let userId = '';
+    const apiKey = u.searchParams.get('api_key') || request.headers.get('X-API-Key');
+    if (apiKey) {
+      const keyRec = await env.D1_DB.prepare('SELECT id FROM api_keys WHERE key = ?').bind(apiKey).first();
+      if (keyRec) userId = String(keyRec.id);
+    }
 
     // 流式分支：>19MB ≤90MB 的大文件，raw body 直接流入 R2，不整块读入 worker 内存
     if (stream) {
@@ -984,20 +993,22 @@ export async function handlePublicUpload(request, env, keyLevel) {
       const ct = request.headers.get('X-File-Type') || info.ct;
       const now = new Date();
       const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+      // Add user_id prefix to filename if available
+      const fileNameWithPrefix = userId ? `${userId}_${name}` : name;
       const key = (pool ? 'pool/' : 'files/') + ym + '/' + randHex(16) + '.' + ext;
       const url = await putR2Stream(key, request.body, ct, env);
       if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
       const iso = now.toISOString();
       if (pool) {
         await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
-          .bind(url, url, title || name, tags, useLevel, isPrivate, info.fileType, cl, 'api', iso).run();
+          .bind(url, url, title || fileNameWithPrefix, tags, useLevel, isPrivate, info.fileType, cl, 'api', iso).run();
         return json({ ok: true, data: { url: url, added: 1, pool: true, level: useLevel, is_private: isPrivate, file_type: info.fileType, file_size: cl } });
       }
-      const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
-        .bind(key, url, name, cl, info.fileType, ct, title, tags, useLevel, isPrivate, iso).run();
-      fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: name, file_type: info.fileType, level: useLevel, is_private: isPrivate, file_size: cl, title: title, tags: tags }).catch(function(){});
+      const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+        .bind(key, url, fileNameWithPrefix, cl, info.fileType, ct, title, tags, useLevel, isPrivate, groupId, iso).run();
+      fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: fileNameWithPrefix, file_type: info.fileType, level: useLevel, is_private: isPrivate, file_size: cl, title: title, tags: tags, group_id: groupId }).catch(function(){});
       invalidateStatsCache();
-      return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: info.fileType, file_size: cl } });
+      return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: info.fileType, file_size: cl, group_id: groupId } });
     }
 
     const fd = await request.formData().catch(function(){ return null; });
@@ -1015,6 +1026,8 @@ export async function handlePublicUpload(request, env, keyLevel) {
     const fileType = info.fileType;
     const now = new Date();
     const ym = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
+    // Add user_id prefix to filename if available
+    const fileNameWithPrefix = userId ? `${userId}_${name}` : name;
     const key = (pool ? 'pool/' : 'files/') + ym + '/' + randHex(16) + '.' + ext;
     const url = await putR2(key, bytes, ct, env);
     if (!url) return json({ ok: false, error: 'R2 upload failed' }, 500);
@@ -1022,14 +1035,14 @@ export async function handlePublicUpload(request, env, keyLevel) {
     const iso = now.toISOString();
     if (pool) {
       await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
-        .bind(url, url, title || name, tags, useLevel, isPrivate, fileType, bytes.length, 'api', iso).run();
+        .bind(url, url, title || fileNameWithPrefix, tags, useLevel, isPrivate, fileType, bytes.length, 'api', iso).run();
       return json({ ok: true, data: { url: url, added: 1, pool: true, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length } });
     }
-    const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
-      .bind(key, url, name, bytes.length, fileType, ct, title, tags, useLevel, isPrivate, iso).run();
-    fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: name, file_type: fileType, level: useLevel, is_private: isPrivate, file_size: bytes.length, title: title, tags: tags }).catch(function(){});
+    const res = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+      .bind(key, url, fileNameWithPrefix, bytes.length, fileType, ct, title, tags, useLevel, isPrivate, groupId, iso).run();
+    fireWebhook(env, 'file_imported', { source: 'api', id: res.meta?.last_row_id || null, url: url, file_name: fileNameWithPrefix, file_type: fileType, level: useLevel, is_private: isPrivate, file_size: bytes.length, title: title, tags: tags, group_id: groupId }).catch(function(){});
     invalidateStatsCache();
-    return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length } });
+    return json({ ok: true, data: { id: res.meta?.last_row_id || null, url: url, added: 1, pool: false, level: useLevel, is_private: isPrivate, file_type: fileType, file_size: bytes.length, group_id: groupId } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

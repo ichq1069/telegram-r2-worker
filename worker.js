@@ -24,7 +24,7 @@ import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebh
 
 
 
-import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
+import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserManageFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
 
 import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
@@ -69,6 +69,7 @@ export default {
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
     // 用户门户（普通用户用 key + key-pass 登录，查看密钥统计 + 生成公开接口 URL）
     if (m === 'GET' && p === '/user') return handleUserFromR2(env);
+    if (m === 'GET' && p === '/user-manage') return handleUserManageFromR2(env);
     if (m === 'POST' && p === '/api/user/login') {
       // 公开 API：添加 IP 速率限制
       if (await applyIPRateLimit(env, request)) {
