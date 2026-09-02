@@ -309,6 +309,11 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
           <div id="d1TableRows" style="padding-top:4px"><div class="sk-row"><div class="sk" style="width:50%;height:13px"></div><div class="sk" style="width:20%;height:13px;border-radius:20px"></div></div><div class="sk-row"><div class="sk" style="width:42%;height:13px"></div><div class="sk" style="width:16%;height:13px;border-radius:20px"></div></div></div>
         </div>
       </div>
+      <!-- MySQL / Hyperdrive 备库（D1 故障时的读写备库） -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title"><span class="dot" style="background:#06b6d4"></span>MySQL / Hyperdrive 备库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">D1 故障时的降级读写通道</span></div>
+        <div id="hdStatusBody" style="font-size:13px;color:var(--text-secondary)"><div class="sk" style="width:70%;height:14px;margin:2px 0"></div><div style="height:6px"></div><div class="sk" style="width:50%;height:12px"></div></div>
+      </div>
       <!-- R2 对象存储 -->
       <div class="card" style="margin-bottom:16px">
         <div class="card-title"><span class="dot" style="background:#f59e0b"></span>R2 对象存储</div>
@@ -1986,6 +1991,11 @@ function init() {
     var onTab = document.querySelector(".tab.on");
     if (onTab && onTab.getAttribute("data-tab") === "files" && !document.hidden) loadFiles(currentPage);
   }, 30000);
+  // MySQL/Hyperdrive 备库实时状态（15s，仅概览 tab 可见时；避免无谓 SELECT 1）
+  setInterval(function() {
+    var onTab = document.querySelector(".tab.on");
+    if (onTab && onTab.getAttribute("data-tab") === "stats" && !document.hidden) loadHdStatus();
+  }, 15000);
   initAiFloat();
 }
 
@@ -2631,6 +2641,56 @@ async function loadStats() {
   }
   document.getElementById("byChat").innerHTML = bc || '<div class="empty">暂无数据</div>';
   loadR2UsageCards();
+  loadHdStatus();
+}
+
+// ==================== MySQL / Hyperdrive 备库状态（实时 SELECT 1 连通 + 连接信息） ====================
+var hdSkeletonRendered = false;
+function renderHdSkeleton() {
+  var el = document.getElementById("hdStatusBody");
+  if (el) {
+    el.innerHTML = skRows(4);
+  }
+}
+async function loadHdStatus() {
+  try {
+    var el = document.getElementById("hdStatusBody");
+    if (!el) return;
+    if (!hdSkeletonRendered) { renderHdSkeleton(); hdSkeletonRendered = true; }
+    var r = await api("GET", "/admin/api/db-mode");
+    if (!r.ok || !r.data) return;
+    var d = r.data;
+    var hd = d.hdFields || {};
+    var ping = d.ping || {};
+    var runtime = d.runtime || {};
+    var cur = d.current || 'auto';
+    var curText = cur === 'd1' ? 'D1' : (cur === 'mysql' ? 'MySQL' : '自动');
+    var srcText = d.source === 'manual' ? '手动' : (d.source === 'auto-window' ? '自动降级窗口' : '自动');
+    var pingOk = ping.ok === true;
+    var h = '';
+    // 状态徽章
+    if (!d.hd) {
+      h += '<div style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;color:#b91c1c;background:#fee2e2;margin-bottom:10px">Hyperdrive 未绑定</div>';
+    } else if (pingOk) {
+      h += '<div style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;color:#166534;background:#dcfce7;margin-bottom:10px">连接正常 · SELECT 1 = ' + escStr(ping.one) + '</div>';
+    } else {
+      h += '<div style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;color:#b91c1c;background:#fee2e2;margin-bottom:10px">连接失败 · ' + escStr((ping.error || 'unknown').slice(0, 90)) + '</div>';
+    }
+    // 信息行
+    function row(label, val, mono) {
+      return '<div style="display:flex;justify-content:space-between;gap:16px;padding:5px 0;border-bottom:1px solid #f1f5f9"><span style="color:var(--text-secondary);font-size:12px">' + label + '</span><span style="font-weight:600;color:var(--text-primary);font-size:12px;' + (mono ? 'font-family:monospace' : '') + ';word-break:break-all;text-align:right">' + val + '</span></div>';
+    }
+    h += row('当前读写模式', '<span style="color:#0ea5e9">' + curText + '</span>（' + srcText + '）');
+    h += row('Hyperdrive 绑定', d.hd ? '<span style="color:#16a34a">已配置</span>' : '<span style="color:#b91c1c">未配置</span>');
+    if (d.hd) {
+      h += row('连接地址', escStr(hd.host) + ':' + escStr(hd.port), true);
+      h += row('数据库', escStr(hd.database || '-'), true);
+      h += row('用户', escStr(hd.user || '-'), true);
+    }
+    h += row('node:net 真实 socket', runtime.hasNet ? '<span style="color:#16a34a">可用</span>' : '<span style="color:#b91c1c">不可用</span>');
+    h += '<div style="margin-top:8px;font-size:11px;color:var(--text-secondary)">每次打开/切换本页实时执行 SELECT 1 探测，反映 Hyperdrive 真实连通状态</div>';
+    el.innerHTML = h;
+  } catch (e) { /* 忽略，保留骨架 */ }
 }
 
 // ==================== R2 用量（存储 / A类 / B类 操作 + 剩余 + 超限提示） ====================
