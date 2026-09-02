@@ -3687,7 +3687,7 @@ function renderProgPreviewBox(box, items) {
     h += '<button type="button" class="prog-preview-rm" data-i="' + i + '" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#ef4444;color:#fff;font-size:11px;line-height:18px;cursor:pointer">✕</button>';
     h += '</div>';
   }
-  box.innerHTML = h;
+  box.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px">' + h + '</div>';
   var btns = box.querySelectorAll(".prog-preview-rm");
   for (var b = 0; b < btns.length; b++) {
     btns[b].addEventListener("click", function() {
