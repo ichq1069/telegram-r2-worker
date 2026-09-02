@@ -1702,6 +1702,7 @@ export async function handleAdminPoolList(request, env) {
     const kw = u.searchParams.get('keyword') || '';
     const idsParam = u.searchParams.get('ids') || '';
     const levelParam = u.searchParams.get('level') || '';
+    const folderIdParam = u.searchParams.get('folder_id');
     const limit = clampInt(u.searchParams.get('limit') || '500', 500, 1, 500);
     const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
     let w = 'WHERE is_private=0'; const p = [];
@@ -1713,6 +1714,11 @@ export async function handleAdminPoolList(request, env) {
     if (idsParam) {
       const arr = idsParam.split(',').map(function(s){ return parseInt(s.trim(), 10); }).filter(function(n){ return n > 0; });
       if (arr.length) { w += ' AND id IN (' + arr.map(function(){ return '?'; }).join(',') + ')'; arr.forEach(function(a){ p.push(a); }); }
+    }
+    if (folderIdParam) {
+      const folderId = parseInt(folderIdParam, 10);
+      if (folderId > 0) { w += ' AND folder_id=?'; p.push(folderId); }
+      else if (folderIdParam === '0' || folderIdParam === 'null') { w += ' AND folder_id IS NULL'; }
     }
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
     const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
@@ -2082,6 +2088,110 @@ export async function handleAdminPoolToggle(request, env) {
       await env.D1_DB.prepare('UPDATE random_pool SET enabled = ? WHERE id = ?').bind(b.enabled ? 1 : 0, b.id).run();
     }
     return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== Folders ====================
+export async function handleAdminFoldersList(request, env) {
+  try {
+    const d = await env.D1_DB.prepare('SELECT * FROM folders ORDER BY parent_id NULLS FIRST, name ASC').all();
+    return json({ ok: true, data: d.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminFoldersCreate(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.name) return json({ ok: false, error: 'name required' }, 400);
+    const name = String(b.name).trim().slice(0, 100);
+    const parentId = b.parent_id ? parseInt(b.parent_id, 10) : null;
+    const now = new Date().toISOString();
+    
+    // Check if folder with same name already exists in the same parent
+    const existing = await env.D1_DB.prepare(
+      'SELECT id FROM folders WHERE name = ? AND parent_id IS ? LIMIT 1'
+    ).bind(name, parentId).first();
+    if (existing) return json({ ok: false, error: 'Folder with same name already exists' }, 400);
+    
+    const r = await env.D1_DB.prepare(
+      'INSERT INTO folders (name, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?)'
+    ).bind(name, parentId, now, now).run();
+    return json({ ok: true, data: { id: r.meta.last_row_id, name, parent_id: parentId } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminFoldersRename(request, env) {
+  try {
+    const u = new URL(request.url);
+    const pathParts = u.pathname.split('/');
+    const folderId = parseInt(pathParts[pathParts.length - 2], 10);
+    if (!folderId) return json({ ok: false, error: 'folder id required' }, 400);
+    
+    const b = await request.json().catch(() => null);
+    if (!b || !b.name) return json({ ok: false, error: 'name required' }, 400);
+    const name = String(b.name).trim().slice(0, 100);
+    
+    // Check if folder exists
+    const folder = await env.D1_DB.prepare('SELECT id FROM folders WHERE id = ?').bind(folderId).first();
+    if (!folder) return json({ ok: false, error: 'Folder not found' }, 404);
+    
+    // Check if folder with same name already exists in the same parent
+    const existing = await env.D1_DB.prepare(
+      'SELECT id FROM folders WHERE name = ? AND parent_id = (SELECT parent_id FROM folders WHERE id = ?) AND id != ? LIMIT 1'
+    ).bind(name, folderId, folderId).first();
+    if (existing) return json({ ok: false, error: 'Folder with same name already exists' }, 400);
+    
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare('UPDATE folders SET name = ?, updated_at = ? WHERE id = ?').bind(name, now, folderId).run();
+    return json({ ok: true, data: { id: folderId, name } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminFoldersDelete(request, env) {
+  try {
+    const u = new URL(request.url);
+    const pathParts = u.pathname.split('/');
+    const folderId = parseInt(pathParts[pathParts.length - 1], 10);
+    if (!folderId) return json({ ok: false, error: 'folder id required' }, 400);
+    
+    // Check if folder exists
+    const folder = await env.D1_DB.prepare('SELECT id FROM folders WHERE id = ?').bind(folderId).first();
+    if (!folder) return json({ ok: false, error: 'Folder not found' }, 404);
+    
+    // Move all files in this folder to root (folder_id = NULL)
+    await env.D1_DB.prepare('UPDATE random_pool SET folder_id = NULL WHERE folder_id = ?').bind(folderId).run();
+    
+    // Move all subfolders to root (parent_id = NULL)
+    await env.D1_DB.prepare('UPDATE folders SET parent_id = NULL WHERE parent_id = ?').bind(folderId).run();
+    
+    // Delete the folder
+    await env.D1_DB.prepare('DELETE FROM folders WHERE id = ?').bind(folderId).run();
+    
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminPoolMoveToFolder(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.ids || !Array.isArray(b.ids) || !b.ids.length) return json({ ok: false, error: 'ids required' }, 400);
+    const folderId = b.folder_id ? parseInt(b.folder_id, 10) : null;
+    
+    // Validate folder exists if folder_id is provided
+    if (folderId) {
+      const folder = await env.D1_DB.prepare('SELECT id FROM folders WHERE id = ?').bind(folderId).first();
+      if (!folder) return json({ ok: false, error: 'Folder not found' }, 404);
+    }
+    
+    // Update all selected files
+    const ids = b.ids.map(function(id) { return parseInt(id, 10); }).filter(function(id) { return id > 0; });
+    if (!ids.length) return json({ ok: false, error: 'valid ids required' }, 400);
+    
+    for (const id of ids) {
+      await env.D1_DB.prepare('UPDATE random_pool SET folder_id = ? WHERE id = ?').bind(folderId, id).run();
+    }
+    
+    return json({ ok: true, data: { moved: ids.length, folder_id: folderId } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

@@ -5,7 +5,7 @@ let _tablesEnsured = false;
 // 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
 // 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
 // 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
-const SCHEMA_VERSION = '9';
+const SCHEMA_VERSION = '10';
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
@@ -59,7 +59,9 @@ export async function ensureTables(db) {
     "CREATE INDEX IF NOT EXISTS idx_calls_key ON api_call_logs(key_id);" +
     "CREATE INDEX IF NOT EXISTS idx_calls_created ON api_call_logs(created_at);" +
     "CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, color TEXT DEFAULT '', category TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at TEXT);" +
-    "CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);"
+    "CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);" +
+    "CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parent_id INTEGER DEFAULT NULL, created_at TEXT, updated_at TEXT);" +
+    "CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -155,13 +157,14 @@ export async function ensureTables(db) {
       if (sgn.indexOf('updated_at') === -1) await db.exec("ALTER TABLE show_groups ADD COLUMN updated_at TEXT");
       console.log('migrated: show_groups mode/daily_count/updated_at columns');
     } catch (e5) { console.error('show_groups migration:', e5.message); }
-    // random_pool.level / is_private：内容分级与私密库（旧库无此列则补加）
+    // random_pool.level / is_private / folder_id：内容分级、私密库与文件夹（旧库无此列则补加）
     try {
       const rp = await db.prepare("PRAGMA table_info(random_pool)").all();
       const rpn = (rp.results || []).map(function(c) { return c.name; });
       if (rpn.indexOf('level') === -1) await db.exec("ALTER TABLE random_pool ADD COLUMN level TEXT DEFAULT 'pt'");
       if (rpn.indexOf('is_private') === -1) await db.exec("ALTER TABLE random_pool ADD COLUMN is_private INTEGER DEFAULT 0");
-      console.log('migrated: random_pool level/is_private columns');
+      if (rpn.indexOf('folder_id') === -1) await db.exec("ALTER TABLE random_pool ADD COLUMN folder_id INTEGER DEFAULT NULL");
+      console.log('migrated: random_pool level/is_private/folder_id columns');
     } catch (e6) { console.error('random_pool migration:', e6.message); }
     // user_stats 交互统计列（旧库有表但缺列时补加，避免 INSERT 失败）
     try {
