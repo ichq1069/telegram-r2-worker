@@ -7,6 +7,8 @@ import { lastUploadError, putR2, putR2Stream } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
 import { applyRateLimit } from "./ratelimit.js";
+import { isD1FaultError, noteD1Fault, d1Read } from "./dbaccess.js";
+import { mysqlGet, mysqlRows } from "./mysql.js";
 // ==================== Public slideshow page (random pool showcase) ====================
 // 30s in-memory cache so /show and /show/data skip D1 on hot requests (cold starts used to add seconds)
 let _showCfg = null, _showCfgAt = 0;
@@ -690,16 +692,33 @@ export async function checkApiKey(request, env) {
   if (!k) {
     const sk = u.searchParams.get('sk');
     if (sk) {
-      const bySk = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE short_key=? LIMIT 1').bind(String(sk).trim()).first().catch(function() { return null; });
+      let bySk = null;
+      try {
+        bySk = await env.D1_DB.prepare('SELECT key FROM api_keys WHERE short_key=? LIMIT 1').bind(String(sk).trim()).first();
+      } catch (e) {
+        if (isD1FaultError(e)) {
+          noteD1Fault();
+          try { bySk = await mysqlGet(env, 'SELECT `key` FROM api_keys WHERE short_key=? LIMIT 1', [String(sk).trim()]); } catch (e2) {}
+        }
+      }
       if (bySk) k = bySk.key;
     }
   }
   if (!k) return null;
   try {
-    const rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
+    // D1 优先；D1 故障/限额自动降级 MySQL 镜像（api_keys 表已全量镜像）
+    let rec = null;
+    try {
+      rec = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key=? AND enabled=1 AND (expires_at IS NULL OR expires_at=\'\' OR expires_at >= date(\'now\')) LIMIT 1').bind(k).first();
+    } catch (e) {
+      if (isD1FaultError(e)) {
+        noteD1Fault();
+        rec = await mysqlGet(env, "SELECT * FROM api_keys WHERE `key`=? AND enabled=1 AND (expires_at IS NULL OR expires_at='' OR expires_at >= CURDATE()) LIMIT 1", [k]);
+      } else { throw e; }
+    }
     log.debug('checkApiKey result:', rec ? 'FOUND id=' + rec.id : 'NULL', 'key_prefix=' + k.slice(0,8));
     if (!rec) return null;
-    // usage bump (fire and forget)
+    // usage bump (fire and forget) — D1 降级期跳过写，不影响鉴权主流程
     env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
     // 限流：settings.api_rate_limit = {enabled, limit_per_min}
     const limited = await applyRateLimit(env, k);
@@ -849,19 +868,25 @@ export async function handlePublicFiles(request, env, keyLevel) {
     else { w += ' AND (file_name LIKE ? OR caption LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
   }
   try {
-    // COUNT 与 SELECT 并行执行，减少一次串行 D1 往返
-    const [t, d] = await Promise.all([
-      env.D1_DB.prepare('SELECT COUNT(*) as total FROM ' + table + ' ' + w).bind(...p).first(),
-      (function() {
-        if (random || fromPool) {
-          // pool 模式默认随机排序（每次刷新内容不同）；非 pool 加 random=1 才随机
-          return env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, limit).all();
-        }
-        return env.D1_DB.prepare('SELECT * FROM ' + table + ' ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
-      })()
-    ]);
+    const randomOrder = (random || fromPool);
+    const d1sqlCount = 'SELECT COUNT(*) as total FROM ' + table + ' ' + w;
+    const d1sqlSel = randomOrder
+      ? 'SELECT * FROM ' + table + ' ' + w + ' ORDER BY RANDOM() LIMIT ?'
+      : 'SELECT * FROM ' + table + ' ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?';
+    const myOrder = randomOrder ? 'ORDER BY RAND() LIMIT ?' : 'ORDER BY id DESC LIMIT ? OFFSET ?';
+    const countR = await d1Read(env, {
+      runFirst: true,
+      run: () => env.D1_DB.prepare(d1sqlCount).bind(...p).first(),
+      mysqlFn: () => mysqlGet(env, 'SELECT COUNT(*) as total FROM ' + table + ' ' + w, p)
+    });
+    const selR = await d1Read(env, {
+      run: () => env.D1_DB.prepare(d1sqlSel).bind(...(randomOrder ? p.concat([limit]) : p.concat([limit, offset]))).all(),
+      mysqlFn: () => mysqlRows(env, 'SELECT * FROM ' + table + ' ' + w + ' ' + myOrder,
+        randomOrder ? p.concat([limit]) : p.concat([limit, offset]))
+    });
     const mapper = fromPool ? poolFileJson : publicFileJson;
-    return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, items: (d.results || []).map(mapper) } });
+    const rows = (selR.source === 'd1' || selR.source === 'mysql') ? selR.rows : [];
+    return json({ ok: true, data: { total: (countR.row && countR.row.total) || 0, limit: limit, offset: offset, source: selR.source, items: rows.map(mapper) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -881,13 +906,17 @@ export async function handlePublicRandom(request, env, keyLevel) {
   if (type) { w += ' AND file_type=?'; p.push(type); }
   if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
   try {
-    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, mode === 'img' ? 1 : count).all();
-    const items = (d.results || []).map(poolFileJson);
+    const myOrder = 'ORDER BY RAND() LIMIT ?';
+    const selR = await d1Read(env, {
+      run: () => env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, mode === 'img' ? 1 : count).all(),
+      mysqlFn: () => mysqlRows(env, 'SELECT * FROM random_pool ' + w + ' ' + myOrder, p.concat([mode === 'img' ? 1 : count]))
+    });
+    const items = (selR.rows || []).map(poolFileJson);
     if (mode === 'img') {
       if (!items.length) return json({ ok: false, error: 'No file matches' }, 404);
       return new Response('', { status: 302, headers: { Location: items[0].url } });
     }
-    return json({ ok: true, data: { items: items } });
+    return json({ ok: true, data: { source: selR.source, items: items } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

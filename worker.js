@@ -28,6 +28,9 @@ import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUser
 
 import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUserbotTasks, handleAdminUserbotTaskCreate, handleAdminUserbotTaskUpdate, handleAdminUserbotTaskDelete, handleUserbotTaskConfig, handleUserbotTaskProgress, handleAdminUbotAlbumListAction, handleAdminUbotAlbumsGet, handleAdminUbotAlbumsSelect, handleAdminUbotAlbumsTrigger, handleUbotAlbumsReport, handleUbotTaskFileIdMap, handleUbotAlbumsExisting } from './src/userbot.js';
 import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript, handleDeployGenScript, handleTaskRunReport, handleServerTasksPoll, handleAdminTaskRuns, handleAdminUbotChats, handleAdminUbotChatsRefresh, handleUbotDialogsReport, handleUbotGlobal } from './src/servers.js';
+import { handleMigrate } from './src/migrate.js';
+import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
+import { mysqlFailoverGet } from './src/mysql.js';
 
 
 
@@ -169,6 +172,11 @@ export default {
     if (m === 'DELETE' && p === '/admin/api/tags') return isAdmin ? handleAdminTagDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/files/tags') return isAdmin ? handleSetFileTags(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/files/pool-status') return isAdmin ? handleSetFilePoolStatus(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // D1 → MySQL 存量数据迁移（幂等，分批执行）
+    if (m === 'GET' && p === '/admin/api/migrate') return isAdmin ? handleMigrate(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // D1 降级控制：GET 查当前模式，POST 设置（d1|mysql|auto）
+    if (m === 'GET' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeGet(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeSet(request, env) : json({ok:false,error:'Unauthorized'},401);
     // API key management (for third-party programs)
     if (m === 'GET' && p === '/admin/api/keys') return isAdmin ? handleAdminKeys(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -514,6 +522,24 @@ async function handleQueueMessage(body, env) {
 
 // ==================== DB ====================
 // ensureTablesOnce 已移入 src/db.js，由顶部 import 引入（冷启动每 isolate 一次，复用避免每次请求多秒 D1 开销）。
+
+// D1 降级模式：GET 查当前模式 / POST 手动切换（d1|mysql|auto）
+async function handleDbModeGet(env) {
+  try {
+    const m = await currentMode(env);
+    const fs = await mysqlFailoverGet(env);
+    return json({ ok: true, data: { current: m.mode, source: m.source, manual: fs } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleDbModeSet(request, env) {
+  try {
+    const b = await request.json().catch(function(){ return {}; });
+    const r = await setMode(env, b.mode, b.reason || '');
+    return r.ok ? json({ ok: true, data: r }) : json(r, 400);
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 
 // 剩余区块（WEBHOOK/API HANDLERS/Public slideshow/事件通知/ADMIN API/ADMIN PAGE/DOCS/DASHBOARD/群资源编号/批量编号/告警限流配置）
 // 已分别拆分到 src/webhook.js、src/api.js、src/public.js、src/events.js、src/admin.js、src/pages.js、src/batch.js、src/notify.js，
