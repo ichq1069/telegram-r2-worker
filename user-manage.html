@@ -288,7 +288,7 @@ async function loadFiles(page) {
   var tags = document.getElementById('searchTags').value.trim();
   var type = document.getElementById('searchType').value;
   
-  var url = '/api/v1/files?pool=1&page=' + page + '&page_size=20';
+  var url = '/api/v1/user/files?page=' + page + '&page_size=20';
   if (kw) url += '&keyword=' + encodeURIComponent(kw);
   if (tags) url += '&tags=' + encodeURIComponent(tags);
   if (type) url += '&type=' + type;
@@ -408,7 +408,7 @@ async function uploadFiles(files) {
 async function deleteFile(id) {
   if (!confirm('确定要删除这个文件吗？')) return;
   
-  var r = await api('DELETE', '/api/v1/files/' + id);
+  var r = await api('DELETE', '/api/v1/user/files/' + id);
   if (r.ok) {
     toast('已删除', true);
     loadFiles(currentPage);

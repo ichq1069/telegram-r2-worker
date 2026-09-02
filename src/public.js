@@ -2339,6 +2339,8 @@ export async function handleUserUpload(request, env) {
       if (setting && setting.value) groupId = setting.value;
     } catch (e) { /* ignore */ }
     
+    if (!groupId) return json({ ok: false, error: 'No upload group configured' }, 400);
+    
     const formData = await request.formData();
     const files = formData.getAll('files');
     if (!files.length) return json({ ok: false, error: 'No files provided' }, 400);
@@ -2359,27 +2361,50 @@ export async function handleUserUpload(request, env) {
       }
       
       try {
+        // Send photo to Telegram group
+        const telegramFormData = new FormData();
+        telegramFormData.append('chat_id', groupId);
+        telegramFormData.append('photo', file);
+        telegramFormData.append('caption', `${user.name || user.id} - ${file.name}`);
+        
+        const tgResponse = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendPhoto`, {
+          method: 'POST',
+          body: telegramFormData
+        });
+        
+        const tgResult = await tgResponse.json();
+        if (!tgResult.ok) {
+          results.push({ name: file.name, error: `Telegram error: ${tgResult.description}` });
+          continue;
+        }
+        
+        // Get photo file_id from the largest photo size
+        const photo = tgResult.result.photo;
+        const fileId = photo[photo.length - 1].file_id;
+        const messageId = tgResult.result.message_id;
+        
+        // Generate proxy URL
+        const proxyUrl = `/file/tg/${fileId}`;
+        
         // Add user_id prefix to filename
         const fileNameWithPrefix = `${user.id}_${file.name}`;
-        const key = `user/${user.id}/${Date.now()}_${file.name}`;
-        await env.R2_BUCKET.put(key, file);
         
-        const url = `https://telegramup.wo58.cn/file/${key}`;
+        // Insert into files table (Tele库 - 代理模式)
+        const filesResult = await env.D1_DB.prepare(
+          'INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(`tg/${fileId}`, proxyUrl, fileNameWithPrefix, file.size, 'photo', file.type, groupId, fileId, String(messageId), groupId, 'completed', now).run();
+        
+        const dbId = filesResult.meta.last_row_id;
         
         // Insert into user_uploads table
-        const r = await env.D1_DB.prepare(
+        const userUploadResult = await env.D1_DB.prepare(
           'INSERT INTO user_uploads (user_id, url, file_name, file_size, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(user.id, url, file.name, file.size, file.type, now).run();
+        ).bind(user.id, `/file/tg/${dbId}`, file.name, file.size, 'photo', now).run();
         
-        // Insert into files table with group_ref so it appears in admin panel
+        // Insert into random_pool table
         await env.D1_DB.prepare(
-          'INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, group_ref, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).bind(key, url, fileNameWithPrefix, file.size, file.type, file.type, groupId, 'completed', now).run();
-        
-        // Also insert into random_pool so it shows in admin panel's pool list
-        await env.D1_DB.prepare(
-          'INSERT INTO random_pool (url, thumb_url, title, file_type, file_size, source, enabled, created_at, level) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)'
-        ).bind(url, url, fileNameWithPrefix, file.type === 'image/' ? 'photo' : file.type, file.size, 'user_upload', now, user.level || 'pt').run();
+          'INSERT INTO random_pool (url, thumb_url, title, file_type, file_size, source, enabled, created_at, level, group_ref) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)'
+        ).bind(`/file/tg/${dbId}`, `/file/tg/${dbId}`, fileNameWithPrefix, 'photo', file.size, 'user_upload', now, user.level || 'pt', groupId).run();
         
         // Update quota
         await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used + 1, storage_used = storage_used + ? WHERE id = ?')
@@ -2388,7 +2413,16 @@ export async function handleUserUpload(request, env) {
         user.upload_used++;
         user.storage_used += file.size;
         
-        results.push({ id: r.meta.last_row_id, name: file.name, url, size: file.size, group_id: groupId });
+        results.push({ 
+          id: userUploadResult.meta.last_row_id, 
+          file_id: dbId,
+          name: file.name, 
+          url: `/file/tg/${dbId}`, 
+          size: file.size, 
+          group_id: groupId,
+          telegram_file_id: fileId,
+          message_id: messageId
+        });
       } catch (e) {
         results.push({ name: file.name, error: e.message });
       }
