@@ -60,7 +60,7 @@ jobs:
 
       # secrets 写入后再次部署，确保机密随最新版本一起上线
       - name: Redeploy with secrets
-        run: npx --yes wrangler@4.128.0 deploy
+        run: npm exec --yes --package=wrangler@4.128.0 -- wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
