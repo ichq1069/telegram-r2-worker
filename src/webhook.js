@@ -3,7 +3,7 @@
 import { json, fmtSize, genHash, log, invalidateStatsCache } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
 import { notifyAdmin, genThumb } from "./notify.js";
-import { cnTodayStr, guessExt, fileExtOf, extractTags } from "./core.js";
+import { cnTodayStr, cnNowISO, guessExt, fileExtOf, extractTags } from "./core.js";
 import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
@@ -17,7 +17,7 @@ export async function recordWebhookLog(env, ok, error, source) {
   if (!env.D1_DB) return;
   try {
     await env.D1_DB.prepare('INSERT INTO webhook_logs (status,ok,source,error,created_at) VALUES (?,?,?,?,?)')
-      .bind(ok ? 200 : 500, ok ? 1 : 0, source || 'webhook', String(error || '').slice(0, 300), new Date().toISOString()).run();
+      .bind(ok ? 200 : 500, ok ? 1 : 0, source || 'webhook', String(error || '').slice(0, 300), cnNowISO()).run();
   } catch (e) { log.error('recordWebhookLog:', e.message); }
 }
 
@@ -498,7 +498,7 @@ export async function handleXStatusAsync(link, chatId, msgId, date, env) {
     }
     if (!media.length) { await xreply('❌ 该 X 推文没有可下载的媒体（可能已删除或受限）'); return; }
     var saved = [];
-    var ts = new Date().toISOString();
+    var ts = cnNowISO();
     var dp = ts.slice(0, 7).replace('-', '/');
     for (var m = 0; m < media.length; m++) {
       var item = media[m];

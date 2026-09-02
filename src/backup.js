@@ -1,9 +1,10 @@
 // D1 数据备份（导出全部表为 JSON 存到 R2 backups/）
 import { json } from './util.js';
+import { cnNowISO } from './core.js';
 
 export async function dumpAllTables(env) {
   const tables = await env.D1_DB.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all();
-  const dump = { exported_at: new Date().toISOString(), version: 'v6', tables: {} };
+  const dump = { exported_at: cnNowISO(), version: 'v6', tables: {} };
   for (const t of tables.results || []) {
     try {
       const rows = await env.D1_DB.prepare('SELECT * FROM "' + t.name + '"').all();

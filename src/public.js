@@ -2,7 +2,7 @@
 // 幻灯片页（/show）、Show groups（节目单）、画廊瀑布流、公开 JSON API、公开上传、Random pool。
 // 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
 import { json, log, invalidateStatsCache } from "./util.js";
-import { cnShift, cnTodayStr, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode, splitTags } from "./core.js";
+import { cnShift, cnTodayStr, cnNowISO, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode, splitTags } from "./core.js";
 import { lastUploadError, putR2, putR2Stream } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
@@ -59,7 +59,7 @@ export async function handleShowGroupsSave(request, env) {
         await env.D1_DB.prepare('UPDATE show_groups SET name=?, images=? WHERE id=?').bind(name, images, id).run();
       }
     } else {
-      await env.D1_DB.prepare('INSERT INTO show_groups (name, images, mode, daily_count, created_at) VALUES (?,?,?,?,?)').bind(name, images, mode, daily_count, new Date().toISOString()).run();
+      await env.D1_DB.prepare('INSERT INTO show_groups (name, images, mode, daily_count, created_at) VALUES (?,?,?,?,?)').bind(name, images, mode, daily_count, cnNowISO()).run();
     }
     _showCfg = null; // schedules may reference groups
     return json({ ok: true });
@@ -89,7 +89,7 @@ export async function handleShowGroupRoll(request, env) {
     const picked = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE enabled=1 AND level=\'pt\' AND is_private=0 ORDER BY RANDOM() LIMIT ?').bind(n).all();
     const ids = (picked.results || []).map(function(r) { return r.id; });
     if (!ids.length) return json({ ok: false, error: '共享库为空，无法换图（请先在共享库添加图片）' }, 400);
-    await env.D1_DB.prepare('UPDATE show_groups SET images=?, updated_at=? WHERE id=?').bind(ids.join(','), new Date().toISOString(), id).run();
+    await env.D1_DB.prepare('UPDATE show_groups SET images=?, updated_at=? WHERE id=?').bind(ids.join(','), cnNowISO(), id).run();
     _showCfg = null;
     return json({ ok: true, data: { image_count: ids.length } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -719,7 +719,7 @@ export async function checkApiKey(request, env) {
     log.debug('checkApiKey result:', rec ? 'FOUND id=' + rec.id : 'NULL', 'key_prefix=' + k.slice(0,8));
     if (!rec) return null;
     // usage bump (fire and forget) — D1 降级期跳过写，不影响鉴权主流程
-    env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec.id).run().catch(function(){});
+    env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(cnNowISO(), rec.id).run().catch(function(){});
     // 限流：settings.api_rate_limit = {enabled, limit_per_min}
     const limited = await applyRateLimit(env, k);
     // 记录调用日志（fire and forget；路径/方法/IP 供后台查看与统计）
@@ -737,7 +737,7 @@ export async function logApiCall(env, rec, request) {
     const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || '';
     const path = (u.pathname + u.search).replace(/([?&]api_key=)[^&]*/gi, '$1***');
     await env.D1_DB.prepare('INSERT INTO api_call_logs (key_id, api_key, path, method, ip, status, created_at) VALUES (?,?,?,?,?,?,?)')
-      .bind(rec.id, rec.key, path, request.method || 'GET', String(ip).slice(0, 45), 200, new Date().toISOString()).run();
+      .bind(rec.id, rec.key, path, request.method || 'GET', String(ip).slice(0, 45), 200, cnNowISO()).run();
   } catch (e) { log.error('logApiCall:', e.message); }
 }
 
@@ -783,7 +783,7 @@ export async function handleDiagnoseKey(request, env) {
         step.rec2_found = !!rec2;
         step.rec2_id = rec2 && rec2.id;
         if (rec2) {
-          const usage = await env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(new Date().toISOString(), rec2.id).run();
+          const usage = await env.D1_DB.prepare('UPDATE api_keys SET usage_count=usage_count+1, last_used_at=? WHERE id=?').bind(cnNowISO(), rec2.id).run();
           step.usage_ok = !!usage;
           const lim = await applyRateLimit(env, rk);
           step.limited = lim;
@@ -1092,7 +1092,7 @@ export async function handleAdminTagList(env) {
       });
     });
     // 将未入库的标签自动插入 tags 表
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     for (const name of Object.keys(cnt)) {
       try {
         await env.D1_DB.prepare("INSERT OR IGNORE INTO tags (name, created_at) VALUES (?, ?)").bind(name, now).run();
@@ -1114,7 +1114,7 @@ export async function handleAdminTagCreate(request, env) {
     const color = String(b.color || '').trim();
     const category = String(b.category || '').trim();
     const sort_order = parseInt(b.sort_order) || 0;
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     // 支持批量创建（逗号分隔）
     const names = name.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
     const created = [];
@@ -1272,7 +1272,7 @@ export async function handleAdminKeysCreate(request, env) {
     const short_key = genShortKey();
     const key_pass = String(b.key_pass || '').slice(0, 64);
     const passHash = key_pass ? await hashKeyPass(key_pass, key) : '';
-    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username,short_key) VALUES (?,?,?,?,1,?,0,?,?,?,?)').bind(key, name, scopes, level, new Date().toISOString(), expires_at, passHash, '', short_key).run();
+    const r = await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username,short_key) VALUES (?,?,?,?,1,?,0,?,?,?,?)').bind(key, name, scopes, level, cnNowISO(), expires_at, passHash, '', short_key).run();
     return json({ ok: true, data: { id: r.meta?.last_row_id, key: key, short_key: short_key, name: name, scopes: scopes, level: level, expires_at: expires_at, has_pass: !!passHash } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -1388,7 +1388,7 @@ export async function handleAdminRedeemCreate(request, env) {
       d.setDate(d.getDate() + days);
       expires_at = d.toISOString().slice(0, 10);
     }
-    const codes = [], now = new Date().toISOString();
+    const codes = [], now = cnNowISO();
     for (let i = 0; i < count; i++) {
       const code = genRedeemCode();
       await env.D1_DB.prepare('INSERT INTO redeem_codes (code,level,quota,used_count,note,enabled,created_at,expires_at,type,extend_days) VALUES (?,?,?,0,?,1,?,?,?,?)').bind(code, level, quota, note, now, expires_at, type, extendDays).run();
@@ -1506,7 +1506,7 @@ export async function handleUserRegister(request, env) {
     const key = genApiKey();
     const short_key = genShortKey();
     const passHash = await hashKeyPass(pass, key);
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     await env.D1_DB.prepare('INSERT INTO api_keys (key,name,scopes,level,enabled,created_at,usage_count,expires_at,key_pass,username,short_key) VALUES (?,?,?,?,1,?,0,\'\',?,?,?)')
       .bind(key, username, 'files:read', rc.level, now, passHash, username, short_key).run();
     await env.D1_DB.prepare('UPDATE redeem_codes SET used_count = used_count + 1 WHERE id = ?').bind(rc.id).run();
@@ -1653,7 +1653,7 @@ export async function recordKnownChat(update, env) {
     if (!chat || !chat.id) return;
     const cid = String(chat.id);
     if (!cid) return;
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     await env.D1_DB.prepare(
       "INSERT INTO known_chats (chat_id, chat_type, chat_title, chat_username, last_active_at) VALUES (?,?,?,?,?) " +
       "ON CONFLICT(chat_id) DO UPDATE SET chat_type=excluded.chat_type, chat_title=excluded.chat_title, chat_username=excluded.chat_username, last_active_at=excluded.last_active_at"
@@ -1682,7 +1682,7 @@ export async function recordUserInteraction(update, env) {
     if (!user || !user.id || !type) return;
     const uid = parseInt(user.id, 10);
     if (!uid) return;
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     const uname = String(user.username || '').slice(0, 64);
     const fname = String(user.first_name || user.last_name || '').slice(0, 128);
     const col = type === 'messages' ? 'messages' : type === 'commands' ? 'commands' : type === 'files' ? 'files' : type === 'inline_queries' ? 'inline_queries' : 'callback_clicks';
@@ -1757,7 +1757,7 @@ export async function handleAdminPoolCreate(request, env) {
     const isPrivate = b.is_private ? 1 : 0;
     // 私密内容等同 vvip 最高级，级别固定
     const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     let added = 0;
     const urls = b.urls.map(function(x){ return String(x).trim(); }).filter(function(x){ return /^https?:\/\//i.test(x); });
     if (!urls.length) return json({ ok: true, data: { added: 0 } });
@@ -1823,7 +1823,7 @@ export async function handleAdminPoolImportPage(request, env) {
     const isPrivate = b.is_private ? 1 : 0;
     // 私密内容等同 vvip 最高级，级别固定
     const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     const foundMap = {};
     let fetched = 0;
     for (const pu of pageUrls) {
@@ -1971,7 +1971,7 @@ export async function handleAdminFilesImport(request, env) {
     const title = String(b.title || '').slice(0, 200);
     const level = sanitizeLevel(b.level);
     const isPrivate = b.is_private ? 1 : 0;
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     const urls = b.urls.map(function(x){ return String(x).trim(); }).filter(function(x){ return /^https?:\/\//i.test(x); });
     if (!urls.length) return json({ ok: true, data: { added: 0 } });
     const exSet = new Set();
@@ -2050,7 +2050,7 @@ export async function handleAdminPoolUploadPostimages(request, env) {
     const isPrivate = b.is_private ? 1 : 0;
     // 私密内容等同 vvip 最高级，级别固定
     const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     const ex = await env.D1_DB.prepare('SELECT id FROM random_pool WHERE url = ? LIMIT 1').bind(direct).first();
     if (ex) return json({ ok: true, data: { url: direct, added: 0, duplicate: true } });
     const fsize = b64Size(b.data);
@@ -2152,7 +2152,7 @@ export async function handleAdminFoldersCreate(request, env) {
     if (!b || !b.name) return json({ ok: false, error: 'name required' }, 400);
     const name = String(b.name).trim().slice(0, 100);
     const parentId = b.parent_id ? parseInt(b.parent_id, 10) : null;
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     
     // Check if folder with same name already exists in the same parent
     const existing = await env.D1_DB.prepare(
@@ -2188,7 +2188,7 @@ export async function handleAdminFoldersRename(request, env) {
     ).bind(name, folderId, folderId).first();
     if (existing) return json({ ok: false, error: 'Folder with same name already exists' }, 400);
     
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     await env.D1_DB.prepare('UPDATE folders SET name = ?, updated_at = ? WHERE id = ?').bind(name, now, folderId).run();
     return json({ ok: true, data: { id: folderId, name } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -2262,7 +2262,7 @@ export async function handleUserUpload(request, env) {
     if (!files.length) return json({ ok: false, error: 'No files provided' }, 400);
     
     const results = [];
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     
     for (const file of files) {
       if (!file.type.startsWith('image/')) {
@@ -2366,7 +2366,7 @@ export async function handleUserFileDelete(request, env) {
     const file = await env.D1_DB.prepare('SELECT * FROM user_uploads WHERE id = ? AND user_id = ? AND deleted_at IS NULL').bind(fileId, user.id).first();
     if (!file) return json({ ok: false, error: 'File not found' }, 404);
     
-    const now = new Date().toISOString();
+    const now = cnNowISO();
     await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE id = ?').bind(now, fileId).run();
     
     // Update quota

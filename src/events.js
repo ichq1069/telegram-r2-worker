@@ -1,7 +1,7 @@
 // ==================== 事件 Webhook 通知 ====================
 // fireWebhook 事件派发、Webhook 配置管理、Random pool 管理、按条件查询/搜索/流/删除/回收站/R2 检查/机器人管理/配置管理。
 import { json, invalidateStatsCache } from "./util.js";
-import { sanitizeLevel, clampInt, splitTags, cnDayIso } from "./core.js";
+import { sanitizeLevel, clampInt, splitTags, cnDayIso, cnNowISO } from "./core.js";
 import { bumpR2Usage } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
 // ==================== 事件 Webhook 通知 ====================
@@ -25,7 +25,7 @@ export async function fireWebhook(env, event, payload) {
     const c = await getWebhookCfg(env);
     if (!c.enabled || !c.url || !/^https?:\/\//i.test(c.url)) return;
     if (c.events.length && c.events.indexOf(event) === -1) return;
-    const body = JSON.stringify({ event: event, ts: new Date().toISOString(), data: payload || {} });
+    const body = JSON.stringify({ event: event, ts: cnNowISO(), data: payload || {} });
     await fetch(c.url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body }).catch(function(e) { console.log('webhook send fail:', e.message); });
   } catch (e) { console.log('fireWebhook error:', e.message); }
 }
@@ -53,7 +53,7 @@ export async function handleAdminWebhookTest(request, env) {
     const b = await request.json().catch(() => null);
     const url = b && b.url ? String(b.url).trim().slice(0, 500) : '';
     if (!url || !/^https?:\/\//i.test(url)) return json({ ok: false, error: '请输入有效的 http(s) URL' }, 400);
-    const body = JSON.stringify({ event: 'webhook_test', ts: new Date().toISOString(), data: { message: 'webhook 通知测试（来自 telegram-r2-bot）', ok: true } });
+    const body = JSON.stringify({ event: 'webhook_test', ts: cnNowISO(), data: { message: 'webhook 通知测试（来自 telegram-r2-bot）', ok: true } });
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body });
     return json({ ok: r.ok, status: r.status, error: r.ok ? '' : ('HTTP ' + r.status + ' ' + r.statusText) });
   } catch (e) { return json({ ok: false, error: e.message }, 400); }
@@ -201,7 +201,7 @@ export async function importFileToPool(f, opts, env) {
   const isPrivate = (opts && opts.isPrivate) ? 1 : 0;
   const useTags = (opts && opts.tags) || f.tags || '';
   await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, width, height, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
-    .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, level, isPrivate, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, f.id, new Date().toISOString()).run();
+    .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, level, isPrivate, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, f.id, cnNowISO()).run();
   return true;
 }
 
@@ -341,7 +341,7 @@ export async function handleDeleteFile(request, env) {
   const purge = u.searchParams.get('purge') === '1';
   const purgeAll = purge && u.searchParams.get('all') === '1';
   if (!id && !ids && !purgeAll) return json({ ok: false, error: 'id required' });
-  const now = new Date().toISOString();
+  const now = cnNowISO();
   let deleted = 0;
   if (purgeAll) {
     // Empty the whole trash: delete objects (last reference only) then the rows

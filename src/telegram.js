@@ -1,7 +1,7 @@
 // ==================== TELEGRAM 通信层 ====================
 // Bot API 文件下载（绕过 20MB 限制）、R2 上传、回复消息、快捷键盘、Bot API 代理
 import { json, fmtSize } from './util.js';
-import { cnTodayStr } from './core.js';
+import { cnTodayStr, cnNowISO } from './core.js';
 
 export var OFFICIAL_API = 'https://api.telegram.org'; // official cloud Bot API
 
@@ -187,7 +187,7 @@ export function bumpR2Usage(env, key) {
 export function bumpWorkerStat(env) {
   if (!env || !env.D1_DB) return;
   const day = cnTodayStr();
-  env.D1_DB.prepare("INSERT INTO worker_stats (day, requests, updated_at) VALUES (?, 1, ?) ON CONFLICT(day) DO UPDATE SET requests = requests + 1, updated_at = excluded.updated_at").bind(day, new Date().toISOString()).run().catch(function(){});
+  env.D1_DB.prepare("INSERT INTO worker_stats (day, requests, updated_at) VALUES (?, 1, ?) ON CONFLICT(day) DO UPDATE SET requests = requests + 1, updated_at = excluded.updated_at").bind(day, cnNowISO()).run().catch(function(){});
 }
 
 export async function putR2(key, buf, ct, env, storageClass) {

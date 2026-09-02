@@ -2,7 +2,7 @@
 // 重试/未入库列表/去重/压缩/日报/定时维护/命令管理。
 import { json, fmtSize } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
-import { cnShift, cnTodayStr, cnDayIso, clampInt, fileExtOf } from "./core.js";
+import { cnShift, cnTodayStr, cnDayIso, cnNowISO, clampInt, fileExtOf } from "./core.js";
 import { computeMd5, fileTok } from "./telegram.js";
 import { processFileAsync } from "./webhook.js";
 // ==================== ADMIN API ====================
@@ -264,7 +264,7 @@ export async function handleDedupRows(request, env) {
 
 // 批量软删/硬删（含 R2 对象，最后引用才删），返回实际清理数
 export async function purgeFileRows(env, targets, purge) {
-  const now = new Date().toISOString();
+  const now = cnNowISO();
   let cleaned = 0;
   for (const f of targets) {
     try {
@@ -460,7 +460,7 @@ export async function runDedupBatch(env, computeN, cleanGroups, timeLimitMs, pur
   // 2) 清理 G 个重复组（每组 1 个查询 + poolRefs + 逐行软删/硬删）
   let cleaned = 0, groups = 0;
   const dups = await env.D1_DB.prepare('SELECT md5_hash FROM files WHERE deleted_at IS NULL AND md5_hash!="" GROUP BY md5_hash HAVING COUNT(*)>1 LIMIT ?').bind(cleanGroups).all();
-  const now = new Date().toISOString();
+  const now = cnNowISO();
   for (const d of (dups.results || [])) {
     if (timedOut()) break;
     groups++;

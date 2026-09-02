@@ -5,6 +5,7 @@
 // startManualBatch/finalizeManualBatch：用户通过 #开始 #结束 手动控制批次边界。
 import { countCompleted } from "./telegram.js";
 import { log } from "./util.js";
+import { cnNowISO } from "./core.js";
 
 // ==================== 群资源编号（批次-序号，如 440-001） ====================
 // 每条入库消息分配唯一编号 group_ref：批内第 1 条以「下一条预计 id」为批次基准，
@@ -159,7 +160,7 @@ export async function handleDeletedMsg(msg, env) {
     const cutoff = new Date(Date.now() - 86400000).toISOString();
     const row = await env.D1_DB.prepare('SELECT id, media_group_id, receipt_msg_id FROM files WHERE chat_id=? AND message_id=? AND deleted_at IS NULL AND created_at>=? ORDER BY id DESC LIMIT 1').bind(chatId, messageId, cutoff).first();
     if (!row || !row.id) return { ok: true, skip: true };
-    await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=?').bind(new Date().toISOString(), row.id).run();
+    await env.D1_DB.prepare('UPDATE files SET deleted_at=? WHERE id=?').bind(cnNowISO(), row.id).run();
     if (row.receipt_msg_id && env.TG_BOT_TOKEN) {
       if (row.media_group_id) {
         const alive = await env.D1_DB.prepare('SELECT COUNT(*) as c FROM files WHERE chat_id=? AND media_group_id=? AND deleted_at IS NULL').bind(chatId, row.media_group_id).first();

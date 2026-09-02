@@ -1,7 +1,7 @@
 // ==================== API HANDLERS ====================
 // /file/tg/<id> 302 重定向/代理、文件列表/详情/统计、代理模式与代理直链开关。
 import { json, fmtSize, genHash, cacheGet, cacheSet } from "./util.js";
-import { clampInt, cnDayIso, cnTodayStr, guessExt, fileExtOf } from "./core.js";
+import { clampInt, cnDayIso, cnTodayStr, cnNowISO, guessExt, fileExtOf } from "./core.js";
 import { fileTok, putR2 } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
 

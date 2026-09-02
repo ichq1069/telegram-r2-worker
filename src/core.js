@@ -6,6 +6,9 @@ export function cnShift(d) { return new Date(d.getTime() + CN_OFFSET_MS); }
 export function cnTodayStr() { return cnShift(new Date()).toISOString().slice(0, 10); }
 export function cnDayIso(dayStr) { return new Date(dayStr + 'T00:00:00+08:00').toISOString(); }
 
+// 返回当前东八区时间的 ISO 字符串（格式：2026-09-02T12:34:56.789Z）
+export function cnNowISO() { return cnShift(new Date()).toISOString(); }
+
 // 内容分级：pt < vip < svip < vvip。密钥级别决定可访问内容级别（级别对等）
 export const LEVEL_RANK = { pt: 0, vip: 1, svip: 2, vvip: 3 };
 export const LEVEL_ORDER = ['pt', 'vip', 'svip', 'vvip'];

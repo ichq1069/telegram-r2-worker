@@ -3,7 +3,7 @@
 // 依赖 telegram.js（回复/键盘/文件签名）与 admin.js（handleUnsavedRetry，循环 import，运行时调用安全）。
 import { json, fmtSize } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
-import { cnShift, cnTodayStr, cnDayIso, fileExtOf, CN_OFFSET_MS, splitTags } from "./core.js";
+import { cnShift, cnTodayStr, cnDayIso, cnNowISO, fileExtOf, CN_OFFSET_MS, splitTags } from "./core.js";
 import { replyText, replyTextPlain, MAIN_BUTTONS, sendQuickReplyKeyboard, replyTextWithKeyboard, fileTok } from "./telegram.js";
 import { handleUnsavedRetry } from "./admin.js";
 
@@ -143,7 +143,7 @@ export async function cfR2Usage(env) {
   };
   const acct = String(env.CF_ACCOUNT_ID).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   try {
-    const endDate = new Date().toISOString();
+    const endDate = cnNowISO();
     const startDate = new Date(Date.now() - 86400000).toISOString();
     // 存储用量（最近 24h 最新一条，payloadSize = 真实存储字节数，与 R2 Dashboard 同源）
     const q1 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { r2StorageAdaptiveGroups(limit:1, filter:{datetime_geq:"' + startDate + '", datetime_leq:"' + endDate + '", bucketName:"bot-telegram"}) { max { objectCount payloadSize metadataSize uploadCount } } } } }';
@@ -234,7 +234,7 @@ export async function cfWorkerUsage(env) {
     const cnNow = cnShift(new Date());
     const dayStr = cnNow.toISOString().slice(0, 10);
     const todayStart = cnDayIso(dayStr);
-    const nowIso = new Date().toISOString();
+    const nowIso = cnNowISO();
     const monthStart = cnDayIso(dayStr.slice(0, 8) + '01');
     const q1 = 'query { viewer { accounts(filter:{accountTag:"' + acct + '"}) { workersInvocationsAdaptiveGroups(limit:1, filter:{datetime_geq:"' + todayStart + '", datetime_leq:"' + nowIso + '"}) { sum { requests errors } quantiles { cpuTime p50 cpuTime p90 } } } } }';
     const j1 = await gql(q1);
