@@ -3572,10 +3572,14 @@ function addProgRow(p) {
   line2 += '<input class="inp prog-tags" placeholder="标签过滤(逗号分隔)" style="width:150px" value="' + ((p.tags||"").replace(/"/g,'&quot;')) + '">';
   line2 += '<select class="inp prog-type" style="width:90px"><option value="">全部类型</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select>';
   line2 += '</div>';
-  // 第三行：图片列表（手动指定 / 预览）
+  // 第三行：图片列表（可视化选择共享库图片 / 保留手动 URL）
+  var escImg = ((p.images||"").replace(/"/g,'&quot;'));
   var line3 = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
-  line3 += '<input class="inp prog-images" placeholder="指定图片(pool ID 或 URL，逗号分隔，优先于上方过滤规则)" style="flex:1;min-width:300px" value="' + ((p.images||"").replace(/"/g,'&quot;')) + '">';
+  line3 += '<input type="hidden" class="prog-images" value="' + escImg + '">';
+  line3 += '<button type="button" class="btn btn-ghost btn-sm prog-pick-btn">选择共享库图片</button>';
+  line3 += '<span class="prog-pick-hint" style="font-size:11px;color:var(--text-secondary)">未选择</span>';
   line3 += '</div>';
+  line3 += '<div class="prog-images-preview" style="display:flex;flex-wrap:wrap;gap:8px"></div>';
   row.innerHTML = line1 + line2 + line3;
   // 设置下拉值
   var modeSel = row.querySelector(".prog-mode"); if (p.mode) modeSel.value = p.mode;
@@ -3593,15 +3597,217 @@ function addProgRow(p) {
       lbl.style.background = this.checked ? '#dbeafe' : '#f1f5f9';
     });
   }
-  // 模式切换：daily_random 时高亮相关字段
+  // 模式切换：daily_random 时高亮相关字段；固定图片模式才显示手动选图
   function toggleModeFields() {
     var isRnd = modeSel.value === 'daily_random';
     rcSel.style.opacity = isRnd ? '1' : '0.5';
     rtSel.style.opacity = isRnd ? '1' : '0.5';
+    var pk = row.querySelector(".prog-pick-btn");
+    var pv = row.querySelector(".prog-images-preview");
+    var ph = row.querySelector(".prog-pick-hint");
+    var disp = isRnd ? 'none' : '';
+    if (pk) pk.style.display = disp;
+    if (pv) pv.style.display = disp;
+    if (ph) ph.style.display = disp;
   }
   modeSel.addEventListener("change", toggleModeFields);
   toggleModeFields();
+  // 可视化选图：打开共享库图片选择弹窗
+  var pickBtn = row.querySelector(".prog-pick-btn");
+  if (pickBtn) pickBtn.addEventListener("click", function() { openProgImagePicker(row); });
+  refreshProgPreview(row);
   box.appendChild(row);
+}
+
+// 把 .prog-images 值拆成 pool ID 与手动 URL 两类
+function parseProgImages(v) {
+  var ids = [], urls = [];
+  String(v || "").split(",").forEach(function(x) {
+    x = x.trim();
+    if (!x) return;
+    if (/^\d+$/.test(x)) ids.push(parseInt(x, 10)); else urls.push(x);
+  });
+  return { ids: ids, urls: urls };
+}
+
+// 读该节目行的已选图片（.prog-images hidden 值），并回填预览小图
+function getProgImagesValue(row) {
+  var inp = row.querySelector(".prog-images");
+  return inp ? inp.value : "";
+}
+function setProgImagesValue(row, val) {
+  var inp = row.querySelector(".prog-images");
+  if (inp) inp.value = val || "";
+}
+// 根据 .prog-images 当前值刷新缩略图预览
+async function refreshProgPreview(row) {
+  var box = row.querySelector(".prog-images-preview");
+  if (!box) return;
+  var parts = parseProgImages(getProgImagesValue(row));
+  var hint = row.querySelector(".prog-pick-hint");
+  if (hint) hint.textContent = (parts.ids.length + parts.urls.length) ? ("已选 " + (parts.ids.length + parts.urls.length) + " 张") : "未选择";
+  // 手动 URL 直接用原图占位（不查询）
+  var idsOnly = parts.ids;
+  var items = [];
+  parts.urls.forEach(function(u) { items.push({ isUrl: true, url: u }); });
+  if (!idsOnly.length) { renderProgPreviewBox(box, items); return; }
+  try {
+    var r = await api("GET", "/admin/api/pool?ids=" + idsOnly.join(",") + "&limit=500");
+    if (r.ok && Array.isArray(r.data)) {
+      var map = {};
+      r.data.forEach(function(f) { map[String(f.id)] = f; });
+      idsOnly.forEach(function(id) {
+        var f = map[String(id)];
+        items.push({ isUrl: false, id: id, url: (f && (f.thumb_url || f.url)) || ('#id' + id), miss: !f });
+      });
+    }
+  } catch (e) {}
+  renderProgPreviewBox(box, items);
+}
+function renderProgPreviewBox(box, items) {
+  if (!box) return;
+  if (!items.length) { box.innerHTML = ""; return; }
+  var h = "";
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var tt = it.isUrl ? "手动 URL" : ("ID " + it.id + (it.miss ? "（已不存在）" : ""));
+    var st = it.isUrl ? 'background:#fff1f2;color:#be123c' : (it.miss ? 'background:#fee2e2;color:#991b1b' : 'background:#d1fae5;color:#065f46');
+    h += '<div style="position:relative;width:86px;flex:0 0 86px">';
+    h += '<div style="width:86px;height:60px;border-radius:8px;overflow:hidden;border:1px solid var(--border);background:#f1f5f9;display:flex;align-items:center;justify-content:center">';
+    h += '<img src="' + escStr(it.url) + '" loading="lazy" style="max-width:100%;max-height:100%" onerror="this.style.display=\'none\'">';
+    h += '</div>';
+    h += '<div style="font-size:9px;color:var(--text-secondary);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (it.isUrl ? "URL" : ("#" + it.id)) + '</div>';
+    h += '<div style="display:flex;gap:3px;margin-top:2px">';
+    h += '<span style="font-size:9px;padding:0 5px;border-radius:10px;' + st + '">' + tt + '</span>';
+    h += '</div>';
+    h += '<button type="button" class="prog-preview-rm" data-i="' + i + '" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;border:none;background:#ef4444;color:#fff;font-size:11px;line-height:18px;cursor:pointer">✕</button>';
+    h += '</div>';
+  }
+  box.innerHTML = h;
+  var btns = box.querySelectorAll(".prog-preview-rm");
+  for (var b = 0; b < btns.length; b++) {
+    btns[b].addEventListener("click", function() {
+      var rowEl = this.closest(".prog-row");
+      var idx = parseInt(this.getAttribute("data-i"), 10);
+      removeProgImageAt(rowEl, idx);
+    });
+  }
+}
+function removeProgImageAt(row, idx) {
+  var parts = parseProgImages(getProgImagesValue(row));
+  var all = parts.ids.concat(parts.urls);
+  if (idx >= 0 && idx < all.length) all.splice(idx, 1);
+  // 重新按类型归类：数字当 id，其余当 url（保持顺序稳定）
+  var merged = [];
+  for (var i = 0; i < all.length; i++) merged.push(String(all[i]));
+  setProgImagesValue(row, merged.join(","));
+  refreshProgPreview(row);
+}
+
+// 可视化选择共享库图片（弹窗：缩略图网格多选 + 搜索/来源过滤），确认后回写 .prog-images
+// 保存格式向后兼容：pool ID（数字）+ 手动 URL 混排；手动 URL 自动保留在末尾。
+function openProgImagePicker(row) {
+  var imgInp = row.querySelector(".prog-images");
+  var parts = parseProgImages(getProgImagesValue(row));
+  var sel = new Set();
+  parts.ids.forEach(function(id) { sel.add(String(id)); });
+  var extraUrls = parts.urls.slice(); // 手动 URL 保留，不可在网格中取消（仅可从预览删除）
+  var kw = "", source = "";
+  var loading = false;
+  var q = { kw: "", source: "" };
+  var all = []; // 当前弹窗已加载的 pool 行（{id,url,thumb_url,title,tags,file_type,source}）
+
+  var bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.style.zIndex = "400";
+  var w = document.createElement("div");
+  w.className = "modal";
+  w.style.maxWidth = "980px";
+  w.style.width = "94%";
+  w.style.maxHeight = "86vh";
+  w.style.display = "flex";
+  w.style.flexDirection = "column";
+  w.innerHTML =
+    '<h3 style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">选择共享库图片' +
+    '<span style="font-size:12px;color:var(--text-secondary)">已选 <b id="pkCount">' + sel.size + '</b> 张</span></h3>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
+    '<input class="inp pk-kw" placeholder="搜索标题/URL" style="flex:1;min-width:200px">' +
+    '<select class="inp pk-source" style="width:120px"><option value="">全部来源</option><option value="tg">TG导入</option><option value="manual">外链</option></select>' +
+    '<button class="btn btn-ghost btn-sm pk-search">搜索</button>' +
+    '</div>' +
+    '<div id="pkGrid" style="flex:1;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:10px;background:#f8fafc;min-height:280px">' +
+    skImgs(8) + '</div>' +
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:8px">点击图片勾选/取消（多选）。手动 URL（预览中的红色项）会保留在本节目末尾，如需移除请先在下方预览里删除再打开。</div>' +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-ghost pk-cancel">取消</button>' +
+    '<button class="btn btn-primary pk-ok">确定添加</button>' +
+    '</div>';
+  bg.appendChild(w);
+  document.body.appendChild(bg);
+  bg.addEventListener("click", function(e) { if (e.target === bg) close(); });
+
+  var gridEl = w.querySelector("#pkGrid");
+  var kwEl = w.querySelector(".pk-kw");
+  var srcEl = w.querySelector(".pk-source");
+  var countEl = w.querySelector("#pkCount");
+
+  function close() { if (bg.parentNode) bg.parentNode.removeChild(bg); }
+  function updCount() { if (countEl) countEl.textContent = sel.size; }
+
+  async function load() {
+    if (loading) return;
+    loading = true;
+    gridEl.innerHTML = skImgs(8);
+    var u = "/admin/api/pool?enabled=1&level=pt&limit=500";
+    if (q.kw) u += "&keyword=" + encodeURIComponent(q.kw);
+    if (q.source) u += "&source=" + encodeURIComponent(q.source);
+    var r = await api("GET", u);
+    loading = false;
+    if (!r.ok || !Array.isArray(r.data)) { gridEl.innerHTML = '<div class="empty">' + ((r && r.error) || "加载失败") + '</div>'; return; }
+    all = r.data;
+    if (!all.length) { gridEl.innerHTML = '<div class="empty">没有符合筛选条件的图片（先在上方搜索或清空条件）</div>'; return; }
+    renderGrid();
+  }
+  function renderGrid() {
+    var h = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px">';
+    for (var i = 0; i < all.length; i++) {
+      var f = all[i];
+      var idStr = String(f.id);
+      var isOn = sel.has(idStr);
+      var pv = f.thumb_url || f.url || "";
+      h += '<div data-pk="' + idStr + '" style="cursor:pointer;border:2px solid ' + (isOn ? '#10b981' : '#e2e8f0') + ';border-radius:10px;overflow:hidden;background:#fff;position:relative">';
+      h += '<div style="height:90px;display:flex;align-items:center;justify-content:center;background:#f1f5f9;overflow:hidden"><img src="' + escStr(pv) + '" loading="lazy" style="max-width:100%;max-height:100%;display:block" onerror="this.parentElement.innerHTML=\'<div style=font-size:28px;opacity:.35>?</div>\'"></div>';
+      h += '<div style="position:absolute;top:5px;right:5px;width:18px;height:18px;border-radius:50%;background:' + (isOn ? '#10b981' : '#fff') + ';border:1px solid #cbd5e1;color:#fff;font-size:11px;line-height:18px;text-align:center">' + (isOn ? '✓' : '') + '</div>';
+      h += '<div style="padding:5px 7px;font-size:10px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escStr(f.title || '') + '">#' + idStr + (f.source === 'tg' ? ' TG' : '') + '</div>';
+      h += '</div>';
+    }
+    h += '</div>';
+    gridEl.innerHTML = h;
+    var cards = gridEl.querySelectorAll("[data-pk]");
+    for (var c = 0; c < cards.length; c++) {
+      cards[c].addEventListener("click", function() {
+        var idStr = this.getAttribute("data-pk");
+        if (sel.has(idStr)) sel.delete(idStr); else sel.add(idStr);
+        updCount();
+        renderGrid();
+      });
+    }
+  }
+  kwEl.addEventListener("keydown", function(e) { if (e.key === "Enter") { q.kw = kwEl.value.trim(); load(); } });
+  w.querySelector(".pk-search").addEventListener("click", function() { q.kw = kwEl.value.trim(); q.source = srcEl.value; load(); });
+  w.querySelector(".pk-cancel").addEventListener("click", close);
+  w.querySelector(".pk-ok").addEventListener("click", function() {
+    // 合并：勾选的 pool ID + 保留手动 URL
+    var ids = [];
+    sel.forEach(function(x) { ids.push(x); });
+    ids.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+    var merged = ids.concat(extraUrls);
+    setProgImagesValue(row, merged.join(","));
+    close();
+    refreshProgPreview(row);
+    toast("已更新节目图片", 1);
+  });
+  load();
 }
 function renderSchedule(rows) {
   var box = document.getElementById("scheduleRows");
