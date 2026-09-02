@@ -226,7 +226,7 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
         <div class="fr"><label>文件类型</label><select class="inp" id="genType"><option value="">全部</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select></div>
         <div class="fr"><label>数量 (1-100)</label><input class="inp" type="number" id="genLimit" value="10" min="1" max="100"></div>
-        <div class="fr"><label>模式</label><select class="inp" id="genMode"><option value="files">共享库列表</option><option value="random">随机取一张/多张</option><option value="upload">上传文件</option></select></div>
+        <div class="fr"><label>模式</label><select class="inp" id="genMode"><option value="files">共享库列表</option><option value="user_files">用户上传库</option><option value="random">随机取一张/多张</option><option value="user_random">用户上传随机</option><option value="upload">上传文件</option></select></div>
         <div class="fr"><label>关键词 (可选)</label><input class="inp" id="genKw" placeholder="文件名/描述包含..."></div>
       </div>
       <div class="fr" style="margin-top:10px"><label>标签筛选 (点击切换，多选=命中任意一个即可)</label><div id="genTags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px"></div></div>
@@ -556,7 +556,7 @@ function genUrl() {
   var type = document.getElementById("genType").value;
   var limit = document.getElementById("genLimit").value || "10";
   var mode = document.getElementById("genMode").value;
-  if (mode === "random") limit = String(Math.min(parseInt(limit) || 1, 10));
+  if (mode === "random" || mode === "user_random") limit = String(Math.min(parseInt(limit) || 1, 10));
   var kw = document.getElementById("genKw").value.trim();
   var tags = genSelTags.join(",");
   if (mode === "upload") {
@@ -567,12 +567,20 @@ function genUrl() {
     renderGenExamples(url1, mode);
     return;
   }
-  var u = mode === "random" ? "/api/v1/random" : "/api/v1/files?pool=1";
-  u += (mode === "random" ? "?" : "&") + authP;
+  var u;
+  if (mode === "user_files") {
+    u = "/api/v1/user/files?" + authP;
+  } else if (mode === "user_random") {
+    u = "/api/v1/user/random?" + authP;
+  } else if (mode === "random") {
+    u = "/api/v1/random?" + authP;
+  } else {
+    u = "/api/v1/files?pool=1&" + authP;
+  }
   if (type) u += "&type=" + type;
   if (tags) u += "&tags=" + encodeURIComponent(tags);
   if (kw) u += "&keyword=" + encodeURIComponent(kw);
-  u += mode === "random" ? "&count=" + limit : "&limit=" + limit;
+  u += (mode === "random" || mode === "user_random") ? "&count=" + limit : "&limit=" + limit;
   var url = OR + u;
   document.getElementById("genUrl").value = url;
   document.getElementById("genUrlHint").textContent = "鉴权：" + authName + "（" + (SK ? "随机短别名，后端按 short_key 匹配密钥" : "密钥直传") + "）";
@@ -601,16 +609,21 @@ function renderGenExamples(url, mode) {
   var curl = "curl \"" + url + "\"";
   var fetchJs = "fetch('" + url + "').then(r=>r.json()).then(d=>console.log(d));";
   var imgUrl = url + (url.indexOf("mode=") >= 0 ? "" : (url.indexOf("?") >= 0 ? "&mode=img" : "?mode=img"));
-  var img = mode === "random"
-    ? '<img src="' + imgUrl + '">   <!-- mode=img: 302 跳转到随机一张图片 -->'
-    : '接口只从「共享库」取数据 (pool=1)，item 里的 url 即图片直链';
+  var source = "";
+  if (mode === "user_files" || mode === "user_random") {
+    source = '接口从「用户上传库」取数据，item 里的 url 即图片直链';
+  } else if (mode === "random") {
+    source = '<img src="' + imgUrl + '">   <!-- mode=img: 302 跳转到随机一张图片 -->';
+  } else {
+    source = '接口只从「共享库」取数据 (pool=1)，item 里的 url 即图片直链';
+  }
   document.getElementById("genExamples").innerHTML =
     '<div style="color:#94a3b8;font-size:12px;margin-bottom:6px">① curl 命令行</div>' +
     '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#86efac">' + escStr(curl) + '</div>' +
     '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">② JavaScript fetch</div>' +
     '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#93c5fd">' + escStr(fetchJs) + '</div>' +
     '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">③ 说明</div>' +
-    '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#fbbf24">' + escStr(img) + '</div>';
+    '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#fbbf24">' + source + '</div>';
 }
 
 // ==================== Image Library ====================

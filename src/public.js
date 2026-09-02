@@ -2101,6 +2101,81 @@ export async function handleAdminGetKnownGroups(env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// 用户配额管理
+export async function handleAdminGetUserQuotas(env) {
+  try {
+    const users = await env.D1_DB.prepare("SELECT id, key, name, username, level, upload_quota, upload_used, storage_used FROM api_keys ORDER BY id DESC").all();
+    return json({ ok: true, data: users.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminUpdateUserQuota(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.id) return json({ ok: false, error: 'User ID required' }, 400);
+    
+    const userId = parseInt(b.id, 10);
+    if (!userId) return json({ ok: false, error: 'Invalid user ID' }, 400);
+    
+    // Build update query dynamically
+    const updates = [];
+    const params = [];
+    
+    if (b.upload_quota !== undefined) {
+      updates.push('upload_quota = ?');
+      params.push(parseInt(b.upload_quota, 10) || 100);
+    }
+    if (b.level !== undefined) {
+      updates.push('level = ?');
+      params.push(String(b.level).trim() || 'pt');
+    }
+    
+    if (updates.length === 0) return json({ ok: false, error: 'No fields to update' }, 400);
+    
+    params.push(userId);
+    await env.D1_DB.prepare(`UPDATE api_keys SET ${updates.join(', ')} WHERE id = ?`).bind(...params).run();
+    
+    return json({ ok: true, data: { updated: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户上传文件列表（管理后台用）
+export async function handleAdminUserFiles(request, env) {
+  try {
+    const u = new URL(request.url);
+    const page = parseInt(u.searchParams.get('page') || '1', 10);
+    const pageSize = Math.min(parseInt(u.searchParams.get('page_size') || '20', 10), 100);
+    const offset = (page - 1) * pageSize;
+    
+    const files = await env.D1_DB.prepare(
+      'SELECT * FROM user_uploads WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ? OFFSET ?'
+    ).bind(pageSize, offset).all();
+    
+    const total = await env.D1_DB.prepare(
+      'SELECT COUNT(*) as total FROM user_uploads WHERE deleted_at IS NULL'
+    ).first();
+    
+    return json({ ok: true, data: files.results || [], total: total?.total || 0, page, page_size: pageSize });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 共享库备用设置
+export async function handleAdminGetPoolFallback(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'pool_fallback_enabled'").first();
+    return json({ ok: true, data: { enabled: s && s.value === '1' ? 1 : 0 } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminSavePoolFallback(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const enabled = b && b.enabled ? '1' : '0';
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('pool_fallback_enabled', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(enabled).run();
+    return json({ ok: true, data: { enabled: enabled === '1' } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 // 预设标签库（后台自定义，上传时点选，保证标签统一）
 export async function handleAdminGetPoolTags(env) {
   try {
@@ -2296,10 +2371,15 @@ export async function handleUserUpload(request, env) {
           'INSERT INTO user_uploads (user_id, url, file_name, file_size, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?)'
         ).bind(user.id, url, file.name, file.size, file.type, now).run();
         
-        // Also insert into files table with group_ref so it appears in admin panel
+        // Insert into files table with group_ref so it appears in admin panel
         await env.D1_DB.prepare(
           'INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, group_ref, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         ).bind(key, url, fileNameWithPrefix, file.size, file.type, file.type, groupId, 'completed', now).run();
+        
+        // Also insert into random_pool so it shows in admin panel's pool list
+        await env.D1_DB.prepare(
+          'INSERT INTO random_pool (url, thumb_url, title, file_type, file_size, source, enabled, created_at, level) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)'
+        ).bind(url, url, fileNameWithPrefix, file.type === 'image/' ? 'photo' : file.type, file.size, 'user_upload', now, user.level || 'pt').run();
         
         // Update quota
         await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used + 1, storage_used = storage_used + ? WHERE id = ?')
@@ -2438,8 +2518,39 @@ export async function handleUserRandom(request, env) {
     if (tags) { w = appendTagFilter(tags, w, p); }
     
     const files = await env.D1_DB.prepare('SELECT * FROM user_uploads ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, count).all();
+    let results = files.results || [];
     
-    return json({ ok: true, data: files.results || [] });
+    // 如果启用共享库备用且用户文件不足，从共享库补充
+    if (results.length < count) {
+      const fallbackSetting = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'pool_fallback_enabled'").first();
+      if (fallbackSetting && fallbackSetting.value === '1') {
+        const need = count - results.length;
+        let fallbackW = 'WHERE pool = 1 AND deleted_at IS NULL';
+        const fallbackP = [];
+        if (tags) { fallbackW = appendTagFilter(tags, fallbackW, fallbackP); }
+        
+        const fallbackFiles = await env.D1_DB.prepare('SELECT * FROM random_pool ' + fallbackW + ' ORDER BY RANDOM() LIMIT ?').bind(...fallbackP, need).all();
+        if (fallbackFiles.results && fallbackFiles.results.length > 0) {
+          // 转换共享库文件格式以匹配用户上传格式
+          const converted = fallbackFiles.results.map(f => ({
+            id: f.id,
+            file_id: f.file_id,
+            file_type: f.file_type,
+            file_name: f.file_name,
+            title: f.title || f.file_name,
+            tags: f.tags,
+            url: f.url,
+            thumb_url: f.thumb_url,
+            pool: 1,
+            created_at: f.created_at,
+            _source: 'shared_pool'
+          }));
+          results = results.concat(converted);
+        }
+      }
+    }
+    
+    return json({ ok: true, data: results });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

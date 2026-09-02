@@ -1159,6 +1159,18 @@ https://example.com/b.jpg"></textarea></div>
         <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">用户上传的图片会自动绑定到此群组，文件名会添加用户 ID 前缀（格式：{user_id}_{原文件名}）。</div>
       </div>
       <div class="card">
+        <div class="card-title"><span class="dot"></span>共享库备用 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">开启后，用户上传库不足时自动从共享库补充</span></div>
+        <div class="fb">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="poolFallbackChk"> 启用共享库作为备用库</label>
+          <button class="btn btn-primary" id="poolFallbackSaveBtn">保存</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">当用户调用随机接口时，如果用户上传库中没有足够的文件，会自动从共享库（pool=1）中补充。此设置仅影响用户上传库的随机接口。</div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>用户配额管理 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">管理用户的上传配额和级别</span></div>
+        <div id="userQuotaList" style="max-height:400px;overflow:auto"></div>
+      </div>
+      <div class="card">
         <div class="card-title"><span class="dot"></span>AI 管理助手 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">开启后，群里普通文本消息（非命令、非文件）交给大模型处理，可问统计、搜索文件、触发重试转存</span></div>
         <div class="fb">
           <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="aiEnabledChk"> 启用 AI 管理</label>
@@ -3374,6 +3386,78 @@ async function loadOpsPage() {
       }
     }
   } catch (e) {}
+  
+  // Load user quotas
+  loadUserQuotas();
+  
+  // Load pool fallback setting
+  loadPoolFallback();
+}
+
+function loadPoolFallback() {
+  api("GET", "/admin/api/settings/pool-fallback").then(function(r) {
+    if (r && r.ok && r.data) {
+      var chk = document.getElementById("poolFallbackChk");
+      if (chk) chk.checked = r.data.enabled === 1;
+    }
+  });
+}
+
+document.getElementById("poolFallbackSaveBtn").addEventListener("click", function() {
+  var enabled = document.getElementById("poolFallbackChk").checked ? 1 : 0;
+  api("POST", "/admin/api/settings/pool-fallback", { enabled: enabled }).then(function(r) {
+    if (r && r.ok) toast("共享库备用设置已保存", 1);
+    else toast((r && r.error) || "保存失败", 0);
+  });
+});
+
+function loadUserQuotas() {
+  api("GET", "/admin/api/user-quotas").then(function(r) {
+    if (!r || !r.ok || !r.data) return;
+    var users = r.data;
+    var h = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    h += '<thead><tr style="background:#f8fafc">';
+    h += '<th style="padding:8px;text-align:left">用户名</th>';
+    h += '<th style="padding:8px;text-align:left">级别</th>';
+    h += '<th style="padding:8px;text-align:left">上传配额</th>';
+    h += '<th style="padding:8px;text-align:left">已用</th>';
+    h += '<th style="padding:8px;text-align:left">存储</th>';
+    h += '<th style="padding:8px;text-align:left">操作</th>';
+    h += '</tr></thead><tbody>';
+    
+    users.forEach(function(u) {
+      h += '<tr style="border-bottom:1px solid var(--border)">';
+      h += '<td style="padding:8px">' + escStr(u.username || u.name || u.key) + '</td>';
+      h += '<td style="padding:8px"><select class="inp" style="width:80px" onchange="updateUserQuota(' + u.id + ',\'level\',this.value)">';
+      ['pt','vip','svip','vvip'].forEach(function(lv) {
+        h += '<option value="' + lv + '"' + (u.level === lv ? ' selected' : '') + '>' + lv + '</option>';
+      });
+      h += '</select></td>';
+      h += '<td style="padding:8px"><input class="inp" type="number" value="' + (u.upload_quota || 100) + '" style="width:80px" onchange="updateUserQuota(' + u.id + ',\'upload_quota\',this.value)"></td>';
+      h += '<td style="padding:8px">' + (u.upload_used || 0) + '</td>';
+      h += '<td style="padding:8px">' + fmtSize(u.storage_used || 0) + '</td>';
+      h += '<td style="padding:8px"><button class="btn btn-ghost btn-sm" onclick="resetUserQuota(' + u.id + ')">重置</button></td>';
+      h += '</tr>';
+    });
+    
+    h += '</tbody></table>';
+    document.getElementById("userQuotaList").innerHTML = h;
+  });
+}
+
+function updateUserQuota(id, field, value) {
+  var body = { id: id };
+  body[field] = value;
+  api("POST", "/admin/api/user-quotas", body).then(function(r) {
+    if (r && r.ok) toast("已更新", 1); else toast((r && r.error) || "更新失败", 0);
+  });
+}
+
+function resetUserQuota(id) {
+  if (!confirm("确定要重置该用户的上传计数吗？")) return;
+  api("POST", "/admin/api/user-quotas", { id: id, upload_used: 0, storage_used: 0 }).then(function(r) {
+    if (r && r.ok) { toast("已重置", 1); loadUserQuotas(); } else toast((r && r.error) || "重置失败", 0);
+  });
 }
 
 document.getElementById("aiSaveBtn").addEventListener("click", function() {
