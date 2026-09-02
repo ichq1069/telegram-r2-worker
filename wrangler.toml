@@ -31,7 +31,7 @@ database_id = "daaf94cd-ff23-4273-843d-caba8a3453ca"
 #   postgresql://telequnphoto:telequnphoto@84.247.129.220:3306/telequnphoto
 [[hyperdrive]]
 binding = "telequnphoto"
-id = "PLACEHOLDER_HYPERDRIVE_ID"
+id = "6bb259268fc2464ea4fd30b63e75d3ac"
 
 # Cron 触发器：scheduled() 兜底轮询 + 未转存自动补齐 + 查重后台化 + webhook 自愈
 # "0 1 * * *" = UTC 01:00（北京时间 09:00）日报推送
