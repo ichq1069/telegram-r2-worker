@@ -260,6 +260,22 @@ var genSelTags = [];
 try { savedKey = localStorage.getItem("up_key") || ""; } catch (e) {}
 try { if (savedKey) { document.getElementById("loginKey").value = savedKey; } } catch (e) {}
 
+// Auto-login with saved key on page load
+(function autoLogin() {
+  if (!savedKey) return;
+  // Try to restore session using saved key
+  fetch(OR + "/api/user/stats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key: savedKey })
+  }).then(function(r) { return r.json(); }).then(function(j) {
+    if (j.ok && j.data) {
+      AK = savedKey;
+      showApp(j.data);
+    }
+  }).catch(function() {});
+})();
+
 function toast(msg, ok) {
   var d = document.createElement("div");
   d.className = "toast " + (ok ? "ok" : "er");

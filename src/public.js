@@ -2093,6 +2093,14 @@ export async function handleAdminSaveUploadGroup(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// 获取已知群组列表（从 known_chats 表）
+export async function handleAdminGetKnownGroups(env) {
+  try {
+    const groups = await env.D1_DB.prepare("SELECT chat_id, chat_title, chat_username FROM known_chats WHERE chat_type IN ('group', 'supergroup') ORDER BY last_active_at DESC").all();
+    return json({ ok: true, data: groups.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 // 预设标签库（后台自定义，上传时点选，保证标签统一）
 export async function handleAdminGetPoolTags(env) {
   try {
