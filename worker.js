@@ -535,7 +535,16 @@ async function handleDbModeGet(env) {
       ping = { ok: true, one: r && r[0] && r[0].one };
     } catch (e) { ping = { ok: false, error: String(e && e.message || e), name: e && e.name }; }
     const hd = env.telequnphoto;
-    return json({ ok: true, data: { current: m.mode, source: m.source, manual: fs, hd: !!hd, hdFields: hd ? { host: hd.host, port: hd.port, user: hd.user, database: hd.database } : null, ping: ping } });
+    // 探测 nodejs_compat 是否生效（process/globalThis 特征）
+    let runtime = {};
+    try { runtime = { hasProcess: typeof process !== 'undefined', nodeVer: typeof process !== 'undefined' && process.versions ? process.versions.node : null }; } catch (e) {}
+    // 动态探测 node:net 是否提供真实 connect
+    try {
+      const nm = await import('node:net');
+      runtime.hasNet = !!nm && typeof nm.connect === 'function';
+      runtime.netKeys = nm ? Object.keys(nm).slice(0, 20) : [];
+    } catch (e) { runtime.netErr = String(e && e.message || e); }
+    return json({ ok: true, data: { current: m.mode, source: m.source, manual: fs, hd: !!hd, hdFields: hd ? { host: hd.host, port: hd.port, user: hd.user, database: hd.database } : null, runtime: runtime, ping: ping } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
