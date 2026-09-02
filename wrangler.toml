@@ -7,7 +7,7 @@
 name = "telegram-r2-bot"
 main = "worker.js"
 compatibility_date = "2026-08-31"   # >=2026-08-04 默认启用完整 nodejs_compat(v1+v2)，mysql2 net.connect 才可用
-compatibility_flags = ["nodejs_compat"]   # mysql2 依赖 Node 内建模块（net/tls/stream）
+compatibility_flags = ["nodejs_compat", "nodejs_compat_v2"]   # 显式声明 v2：真实 TCP socket（node:net connect），旧 wrangler 需此 flag 才启用
 
 # 公开变量（非密钥）
 [vars]
