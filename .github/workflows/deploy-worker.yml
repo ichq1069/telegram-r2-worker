@@ -28,6 +28,10 @@ jobs:
           node --check worker.js
           for f in src/*.js; do node --check "$f"; done
 
+      # 安装依赖（mysql2 等外部包），wrangler deploy 打包时需要
+      - name: Install dependencies
+        run: npm ci
+
       # Cloudflare 版本管理限制：最新版本未部署时不允许 wrangler secret put。
       # 所以顺序必须：先 deploy 部署版本，再 secret put 写入机密。
       - name: Deploy Worker to Cloudflare
