@@ -534,7 +534,8 @@ async function handleDbModeGet(env) {
       const r = await mysqlRows(env, 'SELECT 1 AS one', []);
       ping = { ok: true, one: r && r[0] && r[0].one };
     } catch (e) { ping = { ok: false, error: String(e && e.message || e), name: e && e.name }; }
-    return json({ ok: true, data: { current: m.mode, source: m.source, manual: fs, hd: !!env.telequnphoto, ping: ping } });
+    const hd = env.telequnphoto;
+    return json({ ok: true, data: { current: m.mode, source: m.source, manual: fs, hd: !!hd, hdFields: hd ? { host: hd.host, port: hd.port, user: hd.user, database: hd.database } : null, ping: ping } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
