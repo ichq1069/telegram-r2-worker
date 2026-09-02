@@ -2391,18 +2391,19 @@ export async function handleUserUpload(request, env) {
         const fileId = photo[photo.length - 1].file_id;
         const messageId = tgResult.result.message_id;
         
-        // Generate proxy URL
-        const proxyUrl = `/file/tg/${fileId}`;
-        
         // Add user_id prefix to filename
         const fileNameWithPrefix = `${user.id}_${file.name}`;
         
         // Insert into files table (Tele库 - 代理模式)
         const filesResult = await env.D1_DB.prepare(
           'INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).bind(`tg/${fileId}`, proxyUrl, fileNameWithPrefix, file.size, 'photo', file.type, groupId, fileId, String(messageId), groupId, 'completed', now).run();
+        ).bind(`tg/${fileId}`, '/file/tg/placeholder', fileNameWithPrefix, file.size, 'photo', file.type, groupId, fileId, String(messageId), groupId, 'completed', now).run();
         
         const dbId = filesResult.meta.last_row_id;
+        
+        // Update with correct proxy URL
+        const proxyUrl = `/file/tg/${dbId}`;
+        await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind(proxyUrl, dbId).run();
         
         // Insert into user_uploads table
         const userUploadResult = await env.D1_DB.prepare(
