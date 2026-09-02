@@ -146,10 +146,6 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
           <label style="font-size:12px;color:var(--text-secondary)">标签（逗号分隔）</label>
           <input class="inp" id="uploadTags" placeholder="风景,美女" style="width:100%">
         </div>
-        <div style="flex:1;min-width:160px">
-          <label style="font-size:12px;color:var(--text-secondary)">绑定群组 ID（可选）</label>
-          <input class="inp" id="uploadGroupId" placeholder="-1001234567890" style="width:100%">
-        </div>
         <button class="btn btn-primary" id="uploadBtn">上传</button>
       </div>
       <div id="uploadStatus" style="font-size:12px;color:var(--text-secondary);margin-top:8px"></div>
@@ -205,11 +201,11 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
         </ul>
         <p style="margin-bottom:6px"><b>参数说明：</b></p>
         <ul style="margin-left:20px;margin-bottom:10px">
-          <li><code>group_id</code> - 群组 ID，自动绑定图片到指定群组</li>
           <li><code>tags</code> - 标签，逗号分隔</li>
           <li><code>title</code> - 标题</li>
         </ul>
         <p style="margin-bottom:6px"><b>文件名规则：</b>上传时自动添加用户 ID 前缀，格式为 <code>{user_id}_{原文件名}</code></p>
+        <p style="margin-bottom:6px"><b>群组绑定：</b>上传的图片会自动绑定到管理员配置的默认群组 ID</p>
         <div id="apiExamples" style="margin-top:12px;padding:12px;background:#f8fafc;border-radius:8px;font-family:monospace;font-size:12px;white-space:pre-wrap"></div>
       </div>
     </div>
@@ -388,11 +384,9 @@ async function uploadFiles(files) {
   }
   
   var tags = document.getElementById('uploadTags').value.trim();
-  var groupId = document.getElementById('uploadGroupId').value.trim();
   
   var url = '/api/v1/upload?api_key=' + encodeURIComponent(AK);
   if (tags) url += '&tags=' + encodeURIComponent(tags);
-  if (groupId) url += '&group_id=' + encodeURIComponent(groupId);
   
   try {
     var r = await fetch(OR + url, { method: 'POST', body: formData });

@@ -1151,6 +1151,14 @@ https://example.com/b.jpg"></textarea></div>
         </div>
       </div>
       <div class="card">
+        <div class="card-title"><span class="dot"></span>用户上传配置 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">用户通过 API 上传的图片自动绑定到指定群组</span></div>
+        <div class="fb">
+          <div class="fr" style="flex:1;margin:0"><label>默认绑定群组 ID</label><input class="inp" id="uploadGroupId" placeholder="例如 -1001234567890"></div>
+          <button class="btn btn-primary" id="uploadGroupSaveBtn">保存</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">用户上传的图片会自动绑定到此群组 ID，文件名会添加用户 ID 前缀（格式：{user_id}_{原文件名}）。</div>
+      </div>
+      <div class="card">
         <div class="card-title"><span class="dot"></span>AI 管理助手 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">开启后，群里普通文本消息（非命令、非文件）交给大模型处理，可问统计、搜索文件、触发重试转存</span></div>
         <div class="fb">
           <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="aiEnabledChk"> 启用 AI 管理</label>
@@ -3344,6 +3352,13 @@ async function loadOpsPage() {
       if (rad) rad.checked = true;
     }
   } catch (e) {}
+  // 用户上传群组
+  try {
+    const rug = await api("GET", "/admin/api/settings/upload-group");
+    if (rug && rug.ok && rug.data) {
+      document.getElementById("uploadGroupId").value = rug.data.group_id || "";
+    }
+  } catch (e) {}
 }
 
 document.getElementById("aiSaveBtn").addEventListener("click", function() {
@@ -3470,6 +3485,12 @@ document.getElementById("proxyModeSaveBtn").addEventListener("click", function()
       toast("已保存" + (val === 1 ? "，新文件走代理" : "") + (poVal === 1 ? "，前端仅代理链接" : ""), 1);
     }
     else toast((rs[0] && rs[0].error) || "保存失败", 0);
+  });
+});
+document.getElementById("uploadGroupSaveBtn").addEventListener("click", function() {
+  var v = document.getElementById("uploadGroupId").value.trim();
+  api("POST", "/admin/api/settings/upload-group", { group_id: v }).then(function(r) {
+    if (r && r.ok) toast("上传群组设置已保存", 1); else toast((r && r.error) || "保存失败", 0);
   });
 });
 

@@ -963,7 +963,16 @@ export async function handlePublicUpload(request, env, keyLevel) {
     const pool = u.searchParams.get('pool') === '1' || u.searchParams.get('pool') === 'true';
     const tagsParam = u.searchParams.get('tags') || '';
     const title = String(u.searchParams.get('title') || '').slice(0, 200);
-    const groupId = u.searchParams.get('group_id') || '';
+    let groupId = u.searchParams.get('group_id') || '';
+    
+    // If no group_id in request, get default from admin settings
+    if (!groupId) {
+      try {
+        const setting = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'upload_group_id'").first();
+        if (setting && setting.value) groupId = setting.value;
+      } catch (e) { /* ignore */ }
+    }
+    
     // 请求级别不得超过密钥级别（级别对等）；未传 level 时默认 = 密钥级别
     const reqLvRaw = u.searchParams.get('level');
     let reqLevel = reqLvRaw ? sanitizeLevel(reqLvRaw) : keyLevel;
@@ -2064,6 +2073,23 @@ export async function handleAdminSavePiKey(request, env) {
     const key = b && b.key ? String(b.key).trim().slice(0, 200) : '';
     await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('postimages_key', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key).run();
     return json({ ok: true, data: { saved: !!key } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 用户上传默认群组 ID（后台配置，上传时自动绑定）
+export async function handleAdminGetUploadGroup(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'upload_group_id'").first();
+    return json({ ok: true, data: { group_id: s && s.value ? s.value : '' } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleAdminSaveUploadGroup(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const groupId = b && b.group_id ? String(b.group_id).trim().slice(0, 50) : '';
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('upload_group_id', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(groupId).run();
+    return json({ ok: true, data: { saved: !!groupId, group_id: groupId } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
