@@ -91,19 +91,3 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: r2 object put bot-telegram/user.html --file=user.html --content-type text/html --cache-control "public, max-age=300"
-
-      # 群抓取执行脚本（VPS 一键部署时由 worker /deploy/userbot_pull.py 下发）
-      - name: Upload userbot_pull.py to R2 (bot-telegram bucket)
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put bot-telegram/deploy/userbot_pull.py --file=scripts/userbot_pull.py --content-type text/x-python --cache-control "public, max-age=300"
-
-      # 群抓取 StringSession 生成脚本（一键运行时由 worker /deploy/userbot_gen.py 下发）
-      - name: Upload userbot_gen.py to R2 (bot-telegram bucket)
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put bot-telegram/deploy/userbot_gen.py --file=scripts/userbot_gen.py --content-type text/x-python --cache-control "public, max-age=300"

@@ -38,9 +38,6 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - 部署链路已验证:push 到 `main` 分支触发 GitHub Actions 自动部署;线上 worker 域名 `https://telegram-r2-bot.wo58.cn`,R2 admin.html 地址 `https://telegramup.wo58.cn/admin.html`
   - 部署成功标志:线上 admin.html 的 `APP_VERSION` 变成 `v1.0.<run#>`(本地位 v1.0.0 占位),且页面含新面板标记;worker 路由无 token 返回 401 无法区分新旧,以 admin.html 版本为准
-  - 群抓取设计:worker 当控制面(全局配置存 settings 表键 `ub_api_id/ub_api_hash/ub_session/ub_token/ub_api_key`,任务存 `userbot_tasks` 表),Telethon 脚本在本地/VPS 跑,参数全从后台拉(`/api/ubot/task/<id>/config?token=<ub_token>`),换机无感
-  - `userbot_tasks` 表 `limit` 列名是 SQLite 保留字,建表/INSERT/UPDATE 必须写成 `"limit"`(双引号),否则报 `near "limit": syntax error`
-  - 脚本侧鉴权用专用 `ub_token`(admin 可重置),不把 admin API_KEY 交给脚本;上传走 `/api/v1/upload` 用 `api_key` query 参数,脚本从后台拉 `ub_api_key`
 
 [Project Knowledge Summary]
 - Date: 2026-08-31
@@ -70,8 +67,5 @@ Entries discovered by the Agent during task execution should follow this format:
   - 可用备用 IP 绕过:git 推送用 `git -c http.curloptResolve="github.com:443:140.82.113.3" push`,并已持久化到 git config(`http.https://github.com/.curloptResolve`);api.github.com 用 `140.82.112.6`(--resolve 覆盖),其它 140.82.x 节点会把 api 虚拟主机 301 到 github.com 网页端,不可用
   - GitHub API 查询私有仓库需认证:用 `printf "protocol=https\nhost=github.com\n" | git credential fill` 取 token 加 `Authorization: Bearer`,勿输出 token 明文
   - 部署成功标志:push 后查 `api.github.com/repos/ichq1069/telegram-r2-worker/actions/runs`,最新 commit 的 `Deploy Worker` run conclusion=success,线上 `telegram-r2-bot.wo58.cn` 返回 401 即 worker 已生效
-  - VPS 节点(群抓取执行机):主机 `84.247.129.220`(vmi2925908),SSH 端口 3356,root 登录(密码凭据存于会话,勿入库);沙箱出口 IP `39.106.200.193` 需在该机宝塔放行才能 SSH
-  - 部署目录 `/opt/ubot`,脚本 `userbot_pull.py`(与仓库 scripts/ 同步),配置 `/opt/ubot/config.env` 字段 `UBOT_SERVER/UBOT_TOKEN/UBOT_SRV_TOKEN/UBOT_TASKS`;systemd 服务 `ubot-agent.service`
   - Debian 12 pip 是 PEP 668 externally-managed,装依赖必须加 `--break-system-packages`(telethon/httpx 已装,telethon 1.44.0)
   - systemd ExecStart 引用 EnvironmentFile 变量写成 `${VAR}`,写成 `\$VAR` 会按字面 `$VAR` 传入导致 "Request URL is missing an http:// or https:// protocol"
-  - 故障排查:journalctl -u ubot-agent 看崩溃循环(NRestarts),/var/log/ubot-agent.log 看脚本日志;token 为空不崩溃但心跳鉴权失败,需在 worker 后台「群抓取/服务器」面板生成 ub_token 与 srv_token 填入 config.env

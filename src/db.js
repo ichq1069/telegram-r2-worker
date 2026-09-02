@@ -58,13 +58,6 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS api_call_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER, api_key TEXT, path TEXT, method TEXT, ip TEXT, status INTEGER DEFAULT 200, created_at TEXT);" +
     "CREATE INDEX IF NOT EXISTS idx_calls_key ON api_call_logs(key_id);" +
     "CREATE INDEX IF NOT EXISTS idx_calls_created ON api_call_logs(created_at);" +
-    "CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', mode TEXT DEFAULT 'normal', selected_msg_ids TEXT DEFAULT '', scan_limit INTEGER DEFAULT 2000, album_cursor INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);" +
-    "CREATE INDEX IF NOT EXISTS idx_ubot_chat ON userbot_tasks(chat_id);" +
-    "CREATE TABLE IF NOT EXISTS ubot_albums (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, grouped_id TEXT NOT NULL, msg_ids TEXT NOT NULL, count INTEGER DEFAULT 0, sizes TEXT DEFAULT '[]', cover_url TEXT DEFAULT '', first_ts INTEGER DEFAULT 0, has_oversize INTEGER DEFAULT 0, created_at TEXT, UNIQUE(task_id, grouped_id));" +
-    "CREATE INDEX IF NOT EXISTS idx_ubot_albums_task ON ubot_albums(task_id);" +
-    "CREATE TABLE IF NOT EXISTS ub_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT '', token TEXT DEFAULT '', note TEXT DEFAULT '', status TEXT DEFAULT 'offline', last_seen_at TEXT, last_ip TEXT, last_info TEXT DEFAULT '', task_ids TEXT DEFAULT '', created_at TEXT, updated_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS ub_task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, server_id INTEGER DEFAULT 0, server_name TEXT DEFAULT '', status TEXT DEFAULT 'running', done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, error TEXT DEFAULT '', started_at TEXT, finished_at TEXT);" +
-    "CREATE TABLE IF NOT EXISTS ubot_chats (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL UNIQUE, title TEXT DEFAULT '', chat_type TEXT DEFAULT 'group', username TEXT DEFAULT '', participants INTEGER DEFAULT 0, updated_at TEXT);" +
     "CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, color TEXT DEFAULT '', category TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at TEXT);" +
     "CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);"
   );
@@ -205,40 +198,6 @@ export async function ensureTables(db) {
     try {
       await db.exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, status INTEGER DEFAULT 200, ok INTEGER DEFAULT 1, source TEXT DEFAULT 'webhook', error TEXT DEFAULT '', created_at TEXT)");
     } catch (e11) { console.error('webhook_logs table:', e11.message); }
-    // userbot_tasks：MTProto 群历史抓取任务（每群一条，脚本从后台拉配置执行，断点 last_id 回写）
-    try {
-      await db.exec("CREATE TABLE IF NOT EXISTS userbot_tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL, title TEXT DEFAULT '', tags TEXT DEFAULT '', pool INTEGER DEFAULT 0, level TEXT DEFAULT 'pt', max_size INTEGER DEFAULT 0, \"limit\" INTEGER DEFAULT 0, enabled INTEGER DEFAULT 1, last_id INTEGER DEFAULT 0, done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, note TEXT DEFAULT '', mode TEXT DEFAULT 'normal', selected_msg_ids TEXT DEFAULT '', scan_limit INTEGER DEFAULT 2000, album_cursor INTEGER DEFAULT 0, scan_progress TEXT DEFAULT '', created_at TEXT, updated_at TEXT)");
-    } catch (e12) { console.error('userbot_tasks table:', e12.message); }
-    // ub_servers：群抓取执行服务器节点（VPS/Containers），脚本定时心跳上报在线状态
-    try {
-      await db.exec("CREATE TABLE IF NOT EXISTS ub_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT DEFAULT '', token TEXT DEFAULT '', note TEXT DEFAULT '', status TEXT DEFAULT 'offline', last_seen_at TEXT, last_ip TEXT, last_info TEXT DEFAULT '', task_ids TEXT DEFAULT '', created_at TEXT, updated_at TEXT)");
-    } catch (e13) { console.error('ub_servers table:', e13.message); }
-    // ub_task_runs：任务执行日志（脚本每次执行前后上报状态）
-    try {
-      await db.exec("CREATE TABLE IF NOT EXISTS ub_task_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, server_id INTEGER DEFAULT 0, server_name TEXT DEFAULT '', status TEXT DEFAULT 'running', done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0, error TEXT DEFAULT '', started_at TEXT, finished_at TEXT)");
-    } catch (e14) { console.error('ub_task_runs table:', e14.message); }
-    // userbot_tasks：相册模式/选择集合/扫描上限（旧库无此列则补加；max_size 上限收紧到 90MB 由 CRUD 层约束）
-    try {
-      const ut = await db.prepare("PRAGMA table_info(userbot_tasks)").all();
-      const utn = (ut.results || []).map(function(c) { return c.name; });
-      if (utn.indexOf('mode') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN mode TEXT DEFAULT 'normal'");
-      if (utn.indexOf('selected_msg_ids') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN selected_msg_ids TEXT DEFAULT ''");
-      if (utn.indexOf('scan_limit') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN scan_limit INTEGER DEFAULT 2000");
-      if (utn.indexOf('album_cursor') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN album_cursor INTEGER DEFAULT 0");
-      if (utn.indexOf('scan_progress') === -1) await db.exec("ALTER TABLE userbot_tasks ADD COLUMN scan_progress TEXT DEFAULT ''");
-      if (utn.indexOf('mode') === -1 || utn.indexOf('selected_msg_ids') === -1 || utn.indexOf('scan_limit') === -1 || utn.indexOf('album_cursor') === -1 || utn.indexOf('scan_progress') === -1) {
-        console.log('migrated: userbot_tasks mode/selected_msg_ids/scan_limit/album_cursor/scan_progress columns');
-      }
-    } catch (e12b) { console.error('userbot_tasks migration:', e12b.message); }
-    // ubot_albums：群相册元数据缓存（列表模式结果，任务隔离，重建时先删后插）
-    try {
-      await db.exec("CREATE TABLE IF NOT EXISTS ubot_albums (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id INTEGER NOT NULL, grouped_id TEXT NOT NULL, msg_ids TEXT NOT NULL, count INTEGER DEFAULT 0, sizes TEXT DEFAULT '[]', cover_url TEXT DEFAULT '', first_ts INTEGER DEFAULT 0, has_oversize INTEGER DEFAULT 0, created_at TEXT, UNIQUE(task_id, grouped_id))");
-      await db.exec("CREATE INDEX IF NOT EXISTS idx_ubot_albums_task ON ubot_albums(task_id)");
-    } catch (e12c) { console.error('ubot_albums table:', e12c.message); }
-    // ubot_chats：userbot 账号所在群/频道列表（get_dialogs 结果，供后台选群建任务）
-    try {
-      await db.exec("CREATE TABLE IF NOT EXISTS ubot_chats (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id TEXT NOT NULL UNIQUE, title TEXT DEFAULT '', chat_type TEXT DEFAULT 'group', username TEXT DEFAULT '', participants INTEGER DEFAULT 0, updated_at TEXT)");
-    } catch (e12d) { console.error('ubot_chats table:', e12d.message); }
     // api_keys 表索引：加速 key/username 查询
     try {
       await db.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)");

@@ -275,33 +275,3 @@ export async function handleStats(env) {
     return json({ ok: true, data });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
-
-// Telegram file_id 代理：相册浏览直接显示图片（不需要先导入到 files 表）
-export async function handleTgFileProxy(request, env, ctx) {
-  const u = new URL(request.url);
-  const fileId = u.searchParams.get('file_id') || '';
-  if (!fileId) return json({ ok: false, error: 'missing file_id' }, 400);
-  try {
-    // 用 Bot API getFile 获取文件路径
-    const gf = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/getFile?file_id=' + encodeURIComponent(fileId));
-    const gj = await gf.json();
-    if (!gj.ok || !gj.result || !gj.result.file_path) {
-      return json({ ok: false, error: 'getFile failed: ' + (gj.description || 'unknown') }, 502);
-    }
-    const dlUrl = 'https://api.telegram.org/file/bot' + env.TG_BOT_TOKEN + '/' + gj.result.file_path;
-    // 代理下载
-    const resp = await fetch(dlUrl);
-    if (!resp.ok) return json({ ok: false, error: 'download failed: ' + resp.status }, 502);
-    // 懒转存：异步存到 R2（可选，减少后续请求）
-    // 直接返回图片
-    return new Response(resp.body, {
-      headers: {
-        'Content-Type': resp.headers.get('content-type') || 'application/octet-stream',
-        'Cache-Control': 'public, max-age=3600',
-        'Access-Control-Allow-Origin': '*'
-      }
-    });
-  } catch (e) {
-    return json({ ok: false, error: e.message }, 500);
-  }
-}

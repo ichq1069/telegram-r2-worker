@@ -14,7 +14,7 @@ import { DEFAULT_COMMANDS, parseMenu, menuButtons, menuText, setMenuCtx, getMenu
 import { handleShowConfigGet, handleShowGroupsList, handleShowGroupsSave, handleShowGroupsDelete, handleShowGroupRoll, rotateProgramImages, handleShowConfigSet, handleShowPage, handleShowData, handleGalleryPage, handleGalleryData, checkApiKey, appendTagFilter, handlePublicFiles, handlePublicRandom, handlePublicUpload, handleDiagnoseKey, handleAdminTags, handleAdminTagList, handleAdminTagCreate, handleAdminTagUpdate, handleAdminTagDelete, handleSetFileTags, checkUserPortal, handleAdminKeys, handleAdminKeysCreate, handleAdminKeysUpdate, handleAdminKeysToggle, handleAdminKeysDelete, handleAdminKeyUsers, handleAdminUsernameCheck, handleAdminRedeemList, handleAdminRedeemCreate, handleAdminRedeemUpdate, handleAdminRedeemDelete, handleAdminCallLogs, handleAdminCallStats, handleUserRegister, handleUserRedeem, handleUserCallLogs, handleUserCallStats, handleUserResetPassword, handleUserGetKeyInfo, recordKnownChat, recordUserInteraction, handleAdminUsers, handleAdminUsersInteractions, handleAdminPoolList, handleAdminPoolCreate, handleAdminPoolImportPage, handleAdminPoolUpload, handleAdminFilesUpload, handleAdminFilesImport, handleAdminPoolUploadPostimages, handleAdminGetPiKey, handleAdminSavePiKey, handleAdminGetPoolTags, handleAdminSavePoolTags, handleAdminPoolToggle } from './src/public.js';
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg } from './src/batch.js';
 
-import { handleTgFileRedirect, handleTgFileProxy, handleFiles, handleFile, getProxyMode, getBotUsername, handleAdminGetProxyMode, handleAdminSaveProxyMode, handleAdminGetProxyOnly, handleAdminSaveProxyOnly, handleStats } from './src/api.js';
+import { handleTgFileRedirect, handleFiles, handleFile, getProxyMode, getBotUsername, handleAdminGetProxyMode, handleAdminSaveProxyMode, handleAdminGetProxyOnly, handleAdminSaveProxyOnly, handleStats } from './src/api.js';
 import { handleAdminGetNotify, handleAdminSaveNotify, handleAdminNotifyTest, handleAdminGetRateLimit, handleAdminSaveRateLimit } from './src/notify.js';
 
 import { fireWebhook, handleAdminGetWebhook, handleAdminSaveWebhook, handleAdminWebhookTest, handleAdminPoolTags, handleAdminPoolBatch, handleAdminPoolBatchDelete, handleSetFilePoolStatus, handleAdminGetAutoPoolTags, handleAdminSaveAutoPoolTags, handleAdminPoolFromTg, handleAdminPoolDelete, handleAdminPrivatePoolList, handleAdminPrivatePoolFromTg, handleByChat, handleByUser, handleByDate, handleSearch, handleLatest, handleStream, handleDeleteFile, handleTrashList, handleTrashRestore, handleR2Inspect, handleR2Cleanup, handleListBots, handleAddBot, handleRemoveBot, handleGetConfig, handleSetConfig, handleBotGetMeApi } from './src/events.js';
@@ -26,8 +26,6 @@ import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebh
 
 import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
 
-import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUserbotTasks, handleAdminUserbotTaskCreate, handleAdminUserbotTaskUpdate, handleAdminUserbotTaskDelete, handleUserbotTaskConfig, handleUserbotTaskProgress, handleAdminUbotAlbumListAction, handleAdminUbotAlbumsGet, handleAdminUbotAlbumsSelect, handleAdminUbotAlbumsTrigger, handleUbotAlbumsReport, handleUbotTaskFileIdMap, handleUbotAlbumsExisting } from './src/userbot.js';
-import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript, handleDeployGenScript, handleTaskRunReport, handleServerTasksPoll, handleAdminTaskRuns, handleAdminUbotChats, handleAdminUbotChatsRefresh, handleUbotDialogsReport, handleUbotGlobal } from './src/servers.js';
 import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
 import { mysqlFailoverGet, mysqlRows, mysqlGet } from './src/mysql.js';
@@ -116,13 +114,6 @@ export default {
         return json({ ok: false, error: 'Rate limit exceeded' }, 429);
       }
       return handleTgFileRedirect(request, env, ctx);
-    }
-    // Telegram file_id 代理：相册浏览直接显示图片（不需要先导入到 files 表）
-    if (m === 'GET' && p === '/api/tg-proxy') {
-      if (await applyIPRateLimit(env, request)) {
-        return json({ ok: false, error: 'Rate limit exceeded' }, 429);
-      }
-      return handleTgFileProxy(request, env, ctx);
     }
     // Admin API (auth via query param or header)
     const adminKey = url.searchParams.get('api_key') || request.headers.get('X-API-Key');
@@ -270,45 +261,6 @@ export default {
     if (m === 'GET' && p === '/admin/api/settings/main-menu') return isAdmin ? handleAdminGetMainMenu(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/main-menu') return isAdmin ? handleAdminSaveMainMenu(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/main-menu/broadcast') return isAdmin ? handleAdminMainMenuBroadcast(request, env) : json({ok:false,error:'Unauthorized'},401);
-    // MTProto 群历史抓取：全局配置 + 每群任务（admin）
-    if (m === 'GET' && p === '/admin/api/settings/userbot') return isAdmin ? handleAdminUserbotConfig(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/settings/userbot') return isAdmin ? handleAdminUserbotConfigSave(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'GET' && p === '/admin/api/userbot-tasks') return isAdmin ? handleAdminUserbotTasks(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/userbot-tasks') return isAdmin ? handleAdminUserbotTaskCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'PATCH' && p.indexOf('/admin/api/userbot-tasks/') === 0) return isAdmin ? handleAdminUserbotTaskUpdate(request, env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'DELETE' && p.indexOf('/admin/api/userbot-tasks/') === 0) return isAdmin ? handleAdminUserbotTaskDelete(env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    // 群抓取相册管理（管理侧：浏览/读缓存/保存勾选/触发选择抓取）
-    if (m === 'POST' && p.indexOf('/admin/api/userbot-tasks/') === 0 && p.endsWith('/albums/list')) return isAdmin ? handleAdminUbotAlbumListAction(request, env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'GET' && p.indexOf('/admin/api/userbot-tasks/') === 0 && p.endsWith('/albums')) return isAdmin ? handleAdminUbotAlbumsGet(env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p.indexOf('/admin/api/userbot-tasks/') === 0 && p.endsWith('/albums/select')) return isAdmin ? handleAdminUbotAlbumsSelect(request, env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p.indexOf('/admin/api/userbot-tasks/') === 0 && p.endsWith('/albums/trigger')) return isAdmin ? handleAdminUbotAlbumsTrigger(request, env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    // 脚本侧获取选中消息的 file_id 映射（用于 selected 模式直接下载，ub_token 鉴权）
-    if (m === 'GET' && p.indexOf('/api/ubot/task/') === 0 && p.endsWith('/file-id-map')) return handleUbotTaskFileIdMap(request, env, p.split('/')[4]);
-    // 脚本侧：获取已有相册 grouped_id（去重用，避免重复写入 D1 浪费额度）
-    if (m === 'GET' && p.indexOf('/api/ubot/task/') === 0 && p.endsWith('/albums/existing')) return handleUbotAlbumsExisting(request, env, p.split('/')[4]);
-    // 脚本侧（Telethon userbot）拉配置/回写断点，用 ub_token 鉴权，不走 isAdmin
-    if (m === 'GET' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/config') > 0) return handleUserbotTaskConfig(request, env, p.split('/')[4]);
-    if (m === 'POST' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/progress') > 0) return handleUserbotTaskProgress(request, env, p.split('/')[4]);
-    if (m === 'POST' && p.indexOf('/api/ubot/task/') === 0 && p.endsWith('/albums')) return handleUbotAlbumsReport(request, env, p.split('/')[4]);
-    // 群抓取执行服务器节点：admin 管理 + 脚本侧心跳/任务拉取（server_token 鉴权）
-    if (m === 'GET' && p === '/admin/api/ub-servers') return isAdmin ? handleAdminServers(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/ub-servers') return isAdmin ? handleAdminServerCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'PATCH' && p.indexOf('/admin/api/ub-servers/') === 0) return isAdmin ? handleAdminServerUpdate(request, env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'DELETE' && p.indexOf('/admin/api/ub-servers/') === 0) return isAdmin ? handleAdminServerDelete(env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/api/ubot/heartbeat') return handleServerHeartbeat(request, env);
-    if (m === 'GET' && p === '/api/ubot/server/tasks') return handleServerTasks(request, env);
-    if (m === 'GET' && p === '/api/ubot/server/tasks-poll') return handleServerTasksPoll(request, env);
-    if (m === 'POST' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/run-report') > 0) return handleTaskRunReport(request, env, p.split('/')[4]);
-    if (m === 'GET' && p === '/admin/api/ub-task-runs') return isAdmin ? handleAdminTaskRuns(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'GET' && p === '/admin/api/ubot-chats') return isAdmin ? handleAdminUbotChats(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/ubot-chats/refresh') return isAdmin ? handleAdminUbotChatsRefresh(env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/api/ubot/dialogs') return handleUbotDialogsReport(request, env);
-    if (m === 'GET' && p === '/api/ubot/global') return handleUbotGlobal(request, env);
-    // VPS 一键部署脚本下发（无需鉴权，脚本本身不含密钥，参数由后台生成的 URL 携带）
-    if (m === 'GET' && p === '/deploy/ubot.sh') return handleDeployScript(request, env);
-    if (m === 'GET' && p === '/deploy/userbot_pull.py') return handleDeployPullScript(request, env);
-    if (m === 'GET' && p === '/deploy/userbot_gen.py') return handleDeployGenScript();
-
     // Bot API routes (no auth needed, verified by Telegram)
     if (m === 'POST' && p === '/bot/sendMessage') return handleBotSendMessage(request, env);
     if (m === 'POST' && p === '/bot/sendPhoto') return handleBotSendPhoto(request, env);

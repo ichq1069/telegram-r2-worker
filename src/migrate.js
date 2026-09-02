@@ -5,7 +5,7 @@
 import { json } from './util.js';
 import { mysqlExec, mysqlGet } from './mysql.js';
 
-const PK_ID = ['files', 'userbot_tasks', 'ubot_albums', 'api_keys', 'redeem_codes', 'random_pool', 'tags', 'show_groups', 'bot_commands'];
+const PK_ID = ['files', 'api_keys', 'redeem_codes', 'random_pool', 'tags', 'show_groups', 'bot_commands'];
 const PK_KEY = ['settings', 'bot_config'];
 
 const MIGRATE_TABLES = PK_ID.concat(PK_KEY);
@@ -75,26 +75,6 @@ async function migrateTable(env, table, wantBatch, out) {
 }
 
 async function insertBatchMysql(env, table, rows) {
-  if (table === 'userbot_tasks') {
-    // D1 用 "limit" 列，MySQL 镜像用 blimit
-    const mapped = rows.map(function(r) {
-      const o = Object.assign({}, r);
-      o.blimit = r.limit;
-      delete o.limit;
-      return o;
-    });
-    return insertRowsGeneric(env, table, mapped);
-  }
-  if (table === 'ubot_albums') {
-    // D1 用 count 列，MySQL 镜像用 mcount
-    const mapped = rows.map(function(r) {
-      const o = Object.assign({}, r);
-      o.mcount = r.count;
-      delete o.count;
-      return o;
-    });
-    return insertRowsGeneric(env, table, mapped);
-  }
   return insertRowsGeneric(env, table, rows);
 }
 
