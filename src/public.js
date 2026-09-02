@@ -2257,6 +2257,13 @@ export async function handleUserUpload(request, env) {
       return json({ ok: false, error: 'Upload quota exceeded' }, 403);
     }
     
+    // Get default group_id from admin settings
+    let groupId = '';
+    try {
+      const setting = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'upload_group_id'").first();
+      if (setting && setting.value) groupId = setting.value;
+    } catch (e) { /* ignore */ }
+    
     const formData = await request.formData();
     const files = formData.getAll('files');
     if (!files.length) return json({ ok: false, error: 'No files provided' }, 400);
@@ -2277,13 +2284,22 @@ export async function handleUserUpload(request, env) {
       }
       
       try {
+        // Add user_id prefix to filename
+        const fileNameWithPrefix = `${user.id}_${file.name}`;
         const key = `user/${user.id}/${Date.now()}_${file.name}`;
         await env.R2_BUCKET.put(key, file);
         
         const url = `https://telegramup.wo58.cn/file/${key}`;
+        
+        // Insert into user_uploads table
         const r = await env.D1_DB.prepare(
           'INSERT INTO user_uploads (user_id, url, file_name, file_size, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?)'
         ).bind(user.id, url, file.name, file.size, file.type, now).run();
+        
+        // Also insert into files table with group_ref so it appears in admin panel
+        await env.D1_DB.prepare(
+          'INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, group_ref, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(key, url, fileNameWithPrefix, file.size, file.type, file.type, groupId, 'completed', now).run();
         
         // Update quota
         await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used + 1, storage_used = storage_used + ? WHERE id = ?')
@@ -2292,7 +2308,7 @@ export async function handleUserUpload(request, env) {
         user.upload_used++;
         user.storage_used += file.size;
         
-        results.push({ id: r.meta.last_row_id, name: file.name, url, size: file.size });
+        results.push({ id: r.meta.last_row_id, name: file.name, url, size: file.size, group_id: groupId });
       } catch (e) {
         results.push({ name: file.name, error: e.message });
       }
