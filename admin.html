@@ -3569,7 +3569,8 @@ function addProgRow(p) {
   line2 += '<input class="inp prog-daily-count" type="number" min="1" max="100" placeholder="张数" style="width:70px" value="' + (p.daily_count || 10) + '">';
   line2 += '<input type="time" class="inp prog-roll-time" style="width:105px" value="' + ((p.roll_time||"00:00").replace(/"/g,'&quot;')) + '" title="换图时间（每天此时自动抽新图）">';
   line2 += '<select class="inp prog-source" style="width:90px"><option value="">全部来源</option><option value="tg">TG导入</option><option value="manual">外链</option></select>';
-  line2 += '<input class="inp prog-tags" placeholder="标签过滤(逗号分隔)" style="width:150px" value="' + ((p.tags||"").replace(/"/g,'&quot;')) + '">';
+  line2 += '<input class="inp prog-tags" placeholder="标签过滤(逗号分隔)" style="width:140px" value="' + ((p.tags||"").replace(/"/g,'&quot;')) + '">';
+  line2 += '<button type="button" class="btn btn-ghost btn-sm prog-tagpick-btn">选标签</button>';
   line2 += '<select class="inp prog-type" style="width:90px"><option value="">全部类型</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select>';
   line2 += '</div>';
   // 第三行：图片列表（可视化选择共享库图片 / 保留手动 URL）
@@ -3615,6 +3616,9 @@ function addProgRow(p) {
   // 可视化选图：打开共享库图片选择弹窗
   var pickBtn = row.querySelector(".prog-pick-btn");
   if (pickBtn) pickBtn.addEventListener("click", function() { openProgImagePicker(row); });
+  // 选择标签：打开标签选择弹窗
+  var tagBtn = row.querySelector(".prog-tagpick-btn");
+  if (tagBtn) tagBtn.addEventListener("click", function() { openProgTagPicker(row); });
   refreshProgPreview(row);
   box.appendChild(row);
 }
@@ -3704,6 +3708,110 @@ function removeProgImageAt(row, idx) {
   refreshProgPreview(row);
 }
 
+// 可视化选择标签（弹窗：标签 chips 多选 + 搜索过滤），确定后回写 .prog-tags
+function openProgTagPicker(row) {
+  var tagsInp = row.querySelector(".prog-tags");
+  var curTags = String(tagsInp.value || '').split(/[,，]/).map(function(s){ return s.trim(); }).filter(Boolean);
+  var sel = new Set(curTags);
+  var allTags = [];
+  var loading = false;
+
+  var bg = document.createElement("div");
+  bg.className = "modal-bg";
+  bg.style.zIndex = "400";
+  var w = document.createElement("div");
+  w.className = "modal";
+  w.style.maxWidth = "620px";
+  w.style.width = "90%";
+  w.style.maxHeight = "78vh";
+  w.style.display = "flex";
+  w.style.flexDirection = "column";
+  w.innerHTML =
+    '<h3 style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">选择标签' +
+    '<span style="font-size:12px;color:var(--text-secondary)">已选 <b id="tpCount">' + sel.size + '</b> 个</span></h3>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
+    '<input class="inp tp-kw" placeholder="搜索标签" style="flex:1;min-width:160px">' +
+    '<button class="btn btn-ghost btn-sm tp-clear">清空</button>' +
+    '</div>' +
+    '<div id="tpGrid" style="flex:1;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:10px;background:#f8fafc;min-height:240px"></div>' +
+    '<div style="font-size:11px;color:var(--text-secondary);margin-top:8px">点击标签切换选中（多选），确定后写入过滤条件。</div>' +
+    '<div class="modal-actions">' +
+    '<button class="btn btn-ghost tp-cancel">取消</button>' +
+    '<button class="btn btn-primary tp-ok">确定</button>' +
+    '</div>';
+  bg.appendChild(w);
+  document.body.appendChild(bg);
+  bg.addEventListener("click", function(e) { if (e.target === bg) close(); });
+
+  var gridEl = w.querySelector("#tpGrid");
+  var kwEl = w.querySelector(".tp-kw");
+  var countEl = w.querySelector("#tpCount");
+
+  function close() { if (bg.parentNode) bg.parentNode.removeChild(bg); }
+  function updCount() { if (countEl) countEl.textContent = sel.size; }
+
+  async function load() {
+    if (loading) return;
+    loading = true;
+    gridEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary)">加载中...</div>';
+    var seen = {};
+    var arr = [];
+    var rs = await Promise.all([
+      api("GET", "/admin/api/settings/pool-tags").catch(function(){ return null; }),
+      api("GET", "/admin/api/settings/auto-pool-tags").catch(function(){ return null; }),
+      api("GET", "/admin/api/tags").catch(function(){ return null; }),
+    ]);
+    // preset > auto > tag cloud
+    [rs[0], rs[1], rs[2]].forEach(function(r) {
+      if (!r || !r.ok) return;
+      var tags = r.data && r.data.tags ? r.data.tags : (Array.isArray(r.data) ? r.data.map(function(x){ return x.tag || x; }) : []);
+      tags.forEach(function(t) {
+        t = String(t).trim();
+        if (t && !seen[t]) { seen[t] = 1; arr.push({ tag: t }); }
+      });
+    });
+    allTags = arr;
+    loading = false;
+    renderGrid();
+  }
+
+  function renderGrid() {
+    var kw = kwEl.value.trim().toLowerCase();
+    var filtered = kw ? allTags.filter(function(t) { return t.tag.toLowerCase().indexOf(kw) !== -1; }) : allTags;
+    if (!filtered.length) {
+      gridEl.innerHTML = '<div class="empty">' + (allTags.length ? '没有匹配的标签' : '暂无标签，请先在标签库或预设中添加') + '</div>';
+      return;
+    }
+    var h = '<div style="display:flex;flex-wrap:wrap;gap:6px">';
+    for (var i = 0; i < filtered.length; i++) {
+      var t = filtered[i].tag;
+      var on = sel.has(t);
+      var c = tagColor(t);
+      h += '<span class="tp-chip" data-tag="' + escStr(t) + '" style="display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border:1px solid ' + (on ? c : 'var(--border)') + ';border-radius:20px;cursor:pointer;font-size:12px;background:' + (on ? c + '15' : 'var(--card)') + ';color:' + (on ? c : 'var(--text-secondary)') + '">#' + escStr(t) + '</span>';
+    }
+    h += '</div>';
+    gridEl.innerHTML = h;
+    var chips = gridEl.querySelectorAll(".tp-chip");
+    for (var ci = 0; ci < chips.length; ci++) {
+      chips[ci].addEventListener("click", function() {
+        var tag = this.getAttribute("data-tag");
+        if (sel.has(tag)) sel.delete(tag); else sel.add(tag);
+        updCount();
+        renderGrid();
+      });
+    }
+  }
+
+  kwEl.addEventListener("input", function() { renderGrid(); });
+  w.querySelector(".tp-clear").addEventListener("click", function() { sel.clear(); updCount(); renderGrid(); });
+  w.querySelector(".tp-cancel").addEventListener("click", close);
+  w.querySelector(".tp-ok").addEventListener("click", function() {
+    tagsInp.value = Array.from(sel).join(", ");
+    close();
+  });
+  load();
+}
+
 // 可视化选择共享库图片（弹窗：缩略图网格多选 + 搜索/来源过滤），确认后回写 .prog-images
 // 保存格式向后兼容：pool ID（数字）+ 手动 URL 混排；手动 URL 自动保留在末尾。
 function openProgImagePicker(row) {
@@ -3734,6 +3842,8 @@ function openProgImagePicker(row) {
     '<input class="inp pk-kw" placeholder="搜索标题/URL" style="flex:1;min-width:200px">' +
     '<select class="inp pk-source" style="width:120px"><option value="">全部来源</option><option value="tg">TG导入</option><option value="manual">外链</option></select>' +
     '<button class="btn btn-ghost btn-sm pk-search">搜索</button>' +
+    '<input type="number" class="inp pk-random-n" value="' + (parseInt(row.querySelector('.prog-daily-count').value) || 10) + '" min="1" max="500" style="width:65px" title="随机选取张数">' +
+    '<button class="btn btn-ghost btn-sm pk-random">随机选取</button>' +
     '</div>' +
     '<div id="pkGrid" style="flex:1;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:10px;background:#f8fafc;min-height:280px">' +
     skImgs(8) + '</div>' +
@@ -3795,6 +3905,21 @@ function openProgImagePicker(row) {
   }
   kwEl.addEventListener("keydown", function(e) { if (e.key === "Enter") { q.kw = kwEl.value.trim(); load(); } });
   w.querySelector(".pk-search").addEventListener("click", function() { q.kw = kwEl.value.trim(); q.source = srcEl.value; load(); });
+  w.querySelector(".pk-random").addEventListener("click", function() {
+    var n = parseInt(w.querySelector(".pk-random-n").value) || 10;
+    var pool = all.filter(function(f) { return !sel.has(String(f.id)); });
+    // Fisher-Yates shuffle
+    for (var i = pool.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+    }
+    var pick = pool.slice(0, Math.min(n, pool.length));
+    pick.forEach(function(f) { sel.add(String(f.id)); });
+    updCount();
+    renderGrid();
+    if (pick.length) toast("随机选取了 " + pick.length + " 张图片", 1);
+    else toast("当前筛选结果中无更多可选图片", 0);
+  });
   w.querySelector(".pk-cancel").addEventListener("click", close);
   w.querySelector(".pk-ok").addEventListener("click", function() {
     // 合并：勾选的 pool ID + 保留手动 URL
