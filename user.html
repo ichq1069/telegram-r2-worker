@@ -263,14 +263,19 @@ try { if (savedKey) { document.getElementById("loginKey").value = savedKey; } } 
 // Auto-login with saved key on page load
 (function autoLogin() {
   if (!savedKey) return;
-  // Try to restore session using saved key
+  var savedPass = "";
+  try { savedPass = localStorage.getItem("up_pass") || ""; } catch (e) {}
+  if (!savedPass) return;
+  
+  // Try to restore session using saved key and password
   fetch(OR + "/api/user/stats", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: savedKey })
+    body: JSON.stringify({ key: savedKey, key_pass: savedPass })
   }).then(function(r) { return r.json(); }).then(function(j) {
     if (j.ok && j.data) {
       AK = savedKey;
+      KP = savedPass;
       showApp(j.data);
     }
   }).catch(function() {});
@@ -379,7 +384,10 @@ function doLogin() {
     document.getElementById("loginBtn").disabled = false;
     if (!j.ok || !j.data) { errEl.textContent = j.error || "登录失败，请检查用户名/密钥与密码"; return; }
     AK = j.data.key; KP = p; SK = j.data.short_key || "";
-    try { localStorage.setItem("up_key", j.data.key); } catch (e) {}
+    try {
+      localStorage.setItem("up_key", j.data.key);
+      localStorage.setItem("up_pass", p);
+    } catch (e) {}
     showApp(j.data);
   }).catch(function() {
     document.getElementById("loginBtn").disabled = false;
@@ -474,7 +482,10 @@ document.getElementById("regBtn").addEventListener("click", doRegister);
 });
 document.getElementById("logoutBtn").addEventListener("click", function() {
   AK = ""; KP = ""; SK = "";
-  try { localStorage.removeItem("up_key"); } catch (e) {}
+  try {
+    localStorage.removeItem("up_key");
+    localStorage.removeItem("up_pass");
+  } catch (e) {}
   document.getElementById("loginScreen").style.display = "flex";
   document.getElementById("appMain").style.display = "none";
   document.getElementById("loginKey").value = "";
