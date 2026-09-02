@@ -875,7 +875,26 @@ https://example.com/b.jpg"></textarea></div>
               <option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option>
             </select>
             <input class="inp" style="width:180px" id="keyPass" type="password" placeholder="登录密码 key-pass（可选）" title="用户门户 /user 登录密码，可选；设置后用户可用密钥+此密码登录查看统计与生成接口">
-            <input class="inp" style="width:200px" id="keyScopes" value="files:read" title="权限 scopes，逗号分隔。上传需含 upload 或 files:write；填 * 表示全部权限" placeholder="scopes，如 files:read,upload">
+            <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;max-width:280px" id="keyScopesGroup">
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="files:read" checked> files:read
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="files:write"> files:write
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="files:delete"> files:delete
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="random"> random
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="user_files"> user_files
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)" title="全部权限">
+                <input type="checkbox" id="keyScopeAll" value="*"> * 全部
+              </label>
+            </div>
             <button class="btn btn-primary" id="createKeyBtn">+ 生成密钥</button>
           </div>
         </div>
@@ -4861,6 +4880,17 @@ function levelBadge(lv) {
   var color = LEVEL_STYLES[lv];
   return '<span style="font-size:11px;font-weight:700;color:#fff;background:' + color + ';border-radius:4px;padding:1px 6px;letter-spacing:.3px">' + lv.toUpperCase() + '</span>';
 }
+function formatScopes(scopes) {
+  if (!scopes || scopes === "*") return '<span class="badge badge-blue" title="全部权限">ALL</span>';
+  var list = scopes.split(",").map(function(s) { return s.trim(); });
+  var colors = { "files:read": "#22c55e", "files:write": "#3b82f6", "files:delete": "#ef4444", "random": "#a855f7", "user_files": "#f59e0b" };
+  var h = "";
+  list.forEach(function(s) {
+    var c = colors[s] || "#6b7280";
+    h += '<span style="display:inline-block;font-size:10px;font-weight:600;color:#fff;background:' + c + ';border-radius:3px;padding:1px 5px;margin:1px">' + escStr(s) + '</span> ';
+  });
+  return h;
+}
 async function loadKeys() {
   var el = document.getElementById("keyList");
   if (!el) return;
@@ -4882,7 +4912,7 @@ async function loadKeys() {
     h += '<td><code style="font-size:11px">' + escStr(k.key) + '</code> <button class="btn btn-ghost btn-sm" data-action="copy-key" data-key="' + escStr(k.key) + '">复制</button></td>';
     h += '<td>' + (k.short_key ? '<code style="font-size:11px">' + escStr(k.short_key) + '</code> <button class="btn btn-ghost btn-sm" data-action="copy-key" data-key="' + escStr(k.short_key) + '">复制</button>' : '<span style="font-size:11px;color:var(--text-secondary)">-</span>') + '</td>';
     h += '<td>' + levelBadge(k.level) + '</td>';
-    h += '<td>' + escStr(k.scopes || "files:read") + '</td>';
+    h += '<td style="max-width:200px">' + formatScopes(k.scopes) + '</td>';
     h += '<td>' + (k.has_pass ? '<span class="badge badge-green" title="已设置登录密码，用户可在 /user 用密钥+密码登录">已设置</span>' : '<span style="font-size:11px;color:var(--text-secondary)">未设置</span>') + '</td>';
     h += '<td>' + (k.enabled ? '<span class="badge badge-green">启用</span>' : '<span class="badge badge-red">停用</span>') + '</td>';
     h += '<td>' + expTxt + '</td>';
@@ -5101,12 +5131,20 @@ document.getElementById("clKw").addEventListener("keydown", function(e) { if (e.
 document.getElementById("clKeySel").addEventListener("change", function() { clKeyId = this.value; loadCallLogs(1); });
 document.getElementById("clPrev").addEventListener("click", function() { if (clPage > 1) loadCallLogs(clPage - 1); });
 document.getElementById("clNext").addEventListener("click", function() { loadCallLogs(clPage + 1); });
+function getSelectedScopes() {
+  var allChecked = document.getElementById("keyScopeAll") && document.getElementById("keyScopeAll").checked;
+  if (allChecked) return "*";
+  var checks = document.querySelectorAll('input[name="keyScope"]:checked');
+  var scopes = [];
+  checks.forEach(function(c) { scopes.push(c.value); });
+  return scopes.length > 0 ? scopes.join(",") : "files:read";
+}
 function createKey() {
   var name = document.getElementById("keyName").value.trim();
   var expires_at = document.getElementById("keyExpires") ? document.getElementById("keyExpires").value : "";
   var level = document.getElementById("keyLevel") ? document.getElementById("keyLevel").value : "pt";
   var key_pass = document.getElementById("keyPass") ? document.getElementById("keyPass").value.trim() : "";
-  var key_scopes = document.getElementById("keyScopes") ? document.getElementById("keyScopes").value.trim() : "files:read";
+  var key_scopes = getSelectedScopes();
   api("POST", "/admin/api/keys", { name: name, expires_at: expires_at, level: level, key_pass: key_pass, scopes: key_scopes }).then(function(r) {
     if (r.ok) {
       toast("密钥已生成" + (expires_at ? "，到期 " + expires_at : "（永久有效）") + " · 级别 " + level.toUpperCase() + (key_pass ? " · 已设登录密码" : ""), 1);
@@ -5114,7 +5152,9 @@ function createKey() {
       if (document.getElementById("keyExpires")) document.getElementById("keyExpires").value = "";
       if (document.getElementById("keyLevel")) document.getElementById("keyLevel").value = "pt";
       if (document.getElementById("keyPass")) document.getElementById("keyPass").value = "";
-      if (document.getElementById("keyScopes")) document.getElementById("keyScopes").value = "files:read";
+      // Reset checkboxes
+      document.querySelectorAll('input[name="keyScope"]').forEach(function(c) { c.checked = c.value === "files:read"; });
+      if (document.getElementById("keyScopeAll")) document.getElementById("keyScopeAll").checked = false;
       loadKeys();
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(r.data.key);
     } else toast(r.error || "生成失败", 0);
@@ -5128,14 +5168,28 @@ function editKeyModal(id, name, expires, level, scopes, hasPass) {
   for (var li = 0; li < lvs.length; li++) {
     lvOpts += '<option value="' + lvs[li] + '"' + ((level || "pt") === lvs[li] ? " selected" : "") + '>' + lvs[li] + '</option>';
   }
+  // Parse scopes for checkboxes
+  var scopeList = (scopes || "files:read").split(",").map(function(s) { return s.trim(); });
+  var isAll = scopeList.includes("*");
+  var allScopes = ["files:read", "files:write", "files:delete", "random", "user_files"];
+  var scopeHtml = '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">';
+  allScopes.forEach(function(s) {
+    scopeHtml += '<label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">';
+    scopeHtml += '<input type="checkbox" name="ekScope" value="' + s + '"' + (isAll || scopeList.includes(s) ? " checked" : "") + '> ' + s;
+    scopeHtml += '</label>';
+  });
+  scopeHtml += '<label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)" title="全部权限">';
+  scopeHtml += '<input type="checkbox" id="ekScopeAll" value="*"' + (isAll ? " checked" : "") + '> * 全部';
+  scopeHtml += '</label></div>';
+  
   document.getElementById("modalArea").innerHTML =
     '<div class="modal-bg"><div class="modal"><h3>编辑密钥</h3>' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">用途名称</label>' +
     '<input class="inp" id="ekName" value="' + escStr(name) + '" placeholder="用途说明">' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">级别（决定可获取内容级别，级别对等）</label>' +
     '<select class="inp" id="ekLevel">' + lvOpts + '</select>' +
-    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">权限 scopes（逗号分隔；上传需含 upload 或 files:write，填 * = 全部权限）</label>' +
-    '<input class="inp" id="ekScopes" value="' + escStr(scopes || "files:read") + '" placeholder="files:read,upload">' +
+    '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">权限 scopes</label>' +
+    scopeHtml +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">到期日期（留空 = 永久有效）</label>' +
     '<input class="inp" type="date" id="ekExpires" value="' + escStr(expires) + '" min="' + today + '">' +
     '<label style="display:block;font-size:12px;color:var(--text-secondary);margin:10px 0 4px">登录密码 key-pass（用户 /user 登录用）</label>' +
@@ -5144,11 +5198,36 @@ function editKeyModal(id, name, expires, level, scopes, hasPass) {
     '<div class="modal-actions"><button class="btn btn-ghost" id="ekCancel">取消</button><button class="btn btn-primary" id="ekSave">保存</button></div>' +
     '</div></div>';
   document.getElementById("ekCancel").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  document.getElementById("ekScopeAll").onchange = function() {
+    var checked = this.checked;
+    document.querySelectorAll('input[name="ekScope"]').forEach(function(c) { c.checked = checked; });
+  };
+  document.querySelectorAll('input[name="ekScope"]').forEach(function(c) {
+    c.onchange = function() {
+      if (!this.checked) document.getElementById("ekScopeAll").checked = false;
+      else {
+        var all = document.querySelectorAll('input[name="ekScope"]');
+        var allChecked = true;
+        all.forEach(function(x) { if (!x.checked) allChecked = false; });
+        document.getElementById("ekScopeAll").checked = allChecked;
+      }
+    };
+  });
   document.getElementById("ekSave").onclick = function() {
     var nm = document.getElementById("ekName").value.trim();
     var ex = document.getElementById("ekExpires").value;
     var lv = document.getElementById("ekLevel").value;
-    var sc = document.getElementById("ekScopes").value.trim();
+    // Get selected scopes
+    var allChecked = document.getElementById("ekScopeAll") && document.getElementById("ekScopeAll").checked;
+    var sc;
+    if (allChecked) {
+      sc = "*";
+    } else {
+      var checks = document.querySelectorAll('input[name="ekScope"]:checked');
+      var scopesArr = [];
+      checks.forEach(function(x) { scopesArr.push(x.value); });
+      sc = scopesArr.length > 0 ? scopesArr.join(",") : "files:read";
+    }
     var body = { name: nm, expires_at: ex, level: lv, scopes: sc };
     if (document.getElementById("ekPassClear").checked) {
       body.key_pass = "";
