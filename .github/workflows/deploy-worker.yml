@@ -78,18 +78,19 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put bot-telegram/admin.html --file=admin.html --content-type text/html --cache-control "public, max-age=300"
+          # wrangler 4 起 r2 object put 默认走本地存储，必须加 --remote 才写入云端 R2（缺了会假成功）
+          command: r2 object put bot-telegram/admin.html --file=admin.html --content-type text/html --cache-control "public, max-age=300" --remote
 
       - name: Upload admin-guide.html to R2 (bot-telegram bucket)
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put bot-telegram/admin-guide.html --file=admin-guide.html --content-type text/html --cache-control "public, max-age=300"
+          command: r2 object put bot-telegram/admin-guide.html --file=admin-guide.html --content-type text/html --cache-control "public, max-age=300" --remote
 
       - name: Upload user.html to R2 (bot-telegram bucket)
         uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: r2 object put bot-telegram/user.html --file=user.html --content-type text/html --cache-control "public, max-age=300"
+          command: r2 object put bot-telegram/user.html --file=user.html --content-type text/html --cache-control "public, max-age=300" --remote
