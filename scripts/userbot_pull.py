@@ -509,7 +509,7 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
     """列表模式：枚举消息，只统计媒体（图片+视频），聚合相册，传封面缩略图。
     cursor>0 时从该 msg id 之前继续向更早枚举（翻页）；无 grouped_id 的单媒体也纳入（gid=solo_<id>）。
     通过 progress 接口实时上报扫描进度，前端可轮询显示。
-    每 500 个新条目批量写入一次 D1（边扫描边写入）。"""
+    每 100 个新条目批量写入一次 D1（边扫描边写入）。"""
     albums = {}  # grouped_id -> {msg_ids, sizes, first_ts}
     reported_gids = set()  # 已上报的 grouped_id
     scanned = 0   # 媒体计数（只计 photo/video）
@@ -519,6 +519,17 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
     video_count = 0
     t0 = time.time()
     BATCH_REPORT_SIZE = 100  # 每 100 个新条目上报一次（减少 JSON 大小）
+
+    # 加载已有的 grouped_ids（跳过已上报的，避免重复写入 D1 浪费额度）
+    try:
+        r = await hc.get(f"{server}/api/ubot/task/{task_id}/albums/existing?token={args.token}", timeout=30)
+        if r.status_code == 200:
+            j = r.json()
+            existing = j.get("data", {}).get("grouped_ids", [])
+            reported_gids.update(existing)
+            print(f"  已有 {len(reported_gids)} 个相册条目，跳过重复写入", file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
     async def report_scan_progress(phase):
         """向 worker 上报列表扫描实时进度（不阻塞主循环，失败静默）"""
@@ -664,11 +675,15 @@ async def run_list_albums(hc, client, chat, task_id, scan_limit, max_size, uploa
             # 提取 file_id 用于后续导入（避免重新扫描消息）
             fid = ''
             try:
-                if is_photo:
+                if is_photo and msg.media.photo:
                     fid = pack_bot_file_id(msg.media.photo) or ''
-                elif is_video:
+                elif is_video and msg.media.document:
                     fid = pack_bot_file_id(msg.media.document) or ''
-            except Exception:
+                if not fid and scanned <= 5:
+                    print(f"  [debug] #{msg.id} type={media_type} photo={bool(getattr(msg.media,'photo',None))} doc={bool(getattr(msg.media,'document',None))} fid_empty=True", file=sys.stderr, flush=True)
+            except Exception as e:
+                if scanned <= 5:
+                    print(f"  [debug] #{msg.id} pack_bot_file_id failed: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
                 fid = ''
             a["sizes"].append({"id": msg.id, "size": sz, "w": w, "h": h, "type": media_type, "duration": dur, "file_id": fid})
             if msg.date:

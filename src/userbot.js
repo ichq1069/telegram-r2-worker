@@ -190,6 +190,10 @@ export async function handleAdminUbotAlbumListAction(request, env, id) {
     const scan = b.scan_limit ? clampInt(b.scan_limit, 100, 100000) : (t.scan_limit || ALBUM_SCAN_LIMIT);
     // before_id = 翻页游标：从此 msg id 之前继续向更早枚举；缺省 0 = 从头扫描
     const before_id = parseInt(b.before_id || '0', 10);
+    // clear = 1 时清空已有相册数据（用于修复脏数据后重新扫描）
+    if (b.clear) {
+      await env.D1_DB.prepare('DELETE FROM ubot_albums WHERE task_id=?').bind(id).run();
+    }
     if (!isNaN(before_id) && before_id > 0) {
       await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=?, scan_progress='', updated_at=? WHERE id=?")
         .bind(scan, before_id, new Date().toISOString(), id).run();
@@ -197,7 +201,7 @@ export async function handleAdminUbotAlbumListAction(request, env, id) {
       await env.D1_DB.prepare("UPDATE userbot_tasks SET mode='list', scan_limit=?, album_cursor=0, scan_progress='', updated_at=? WHERE id=?")
         .bind(scan, new Date().toISOString(), id).run();
     }
-    return json({ ok: true, data: { triggered: true, scan_limit: scan, before_id: before_id || 0 } });
+    return json({ ok: true, data: { triggered: true, scan_limit: scan, before_id: before_id || 0, cleared: !!b.clear } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -213,6 +217,19 @@ export async function handleAdminUbotAlbumsGet(env, id) {
       return { id: a.id, grouped_id: a.grouped_id, msg_ids: (a.msg_ids || '').split(',').filter(Boolean), count: a.count, sizes: sizes.map(function(s) { return { id: Number(s.id) || 0, size: Number(s.size) || 0, w: Number(s.w) || 0, h: Number(s.h) || 0, thumb_url: s.thumb_url || (s.file_id ? '/api/tg-proxy?file_id=' + s.file_id : ''), sel: selected.has(String(s.id)), type: s.type || 'photo', duration: Number(s.duration) || 0, file_id: s.file_id || '' }; }), cover_url: a.cover_url || (sizes[0] && sizes[0].file_id ? '/api/tg-proxy?file_id=' + sizes[0].file_id : ''), first_ts: a.first_ts, has_oversize: a.has_oversize, selected: sizes.filter(function(s){ return selected.has(String(s.id)); }).length > 0 };
     });
     return json({ ok: true, data: { task: taskToOut(t), albums: albums } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 脚本侧：获取已有相册的 grouped_id 列表（用于去重，避免重复写入 D1 浪费额度）
+export async function handleUbotAlbumsExisting(request, env, id) {
+  try {
+    const u = new URL(request.url);
+    const tok = u.searchParams.get('token') || '';
+    const cfg = await env.D1_DB.prepare('SELECT value FROM settings WHERE key=?').bind('ub_token').first();
+    if (!tok || !cfg || !cfg.value || tok !== cfg.value) return json({ ok: false, error: 'Unauthorized' }, 401);
+    const d = await env.D1_DB.prepare('SELECT grouped_id FROM ubot_albums WHERE task_id=? LIMIT 50000').bind(id).all();
+    const gids = (d.results || []).map(function(r) { return r.grouped_id; });
+    return json({ ok: true, data: { grouped_ids: gids, total: gids.length } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -267,7 +284,7 @@ export async function handleUbotAlbumsReport(request, env, id) {
     if (albums.length) {
       const now = new Date().toISOString();
       const stmtText = append
-        ? 'INSERT OR REPLACE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+        ? 'INSERT OR IGNORE INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
         : 'INSERT INTO ubot_albums (task_id, grouped_id, msg_ids, count, sizes, cover_url, first_ts, has_oversize, created_at) VALUES (?,?,?,?,?,?,?,?,?)';
       const batch = [];
       for (const a of albums) {

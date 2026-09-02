@@ -26,7 +26,7 @@ import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebh
 
 import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
 
-import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUserbotTasks, handleAdminUserbotTaskCreate, handleAdminUserbotTaskUpdate, handleAdminUserbotTaskDelete, handleUserbotTaskConfig, handleUserbotTaskProgress, handleAdminUbotAlbumListAction, handleAdminUbotAlbumsGet, handleAdminUbotAlbumsSelect, handleAdminUbotAlbumsTrigger, handleUbotAlbumsReport, handleUbotTaskFileIdMap } from './src/userbot.js';
+import { handleAdminUserbotConfig, handleAdminUserbotConfigSave, handleAdminUserbotTasks, handleAdminUserbotTaskCreate, handleAdminUserbotTaskUpdate, handleAdminUserbotTaskDelete, handleUserbotTaskConfig, handleUserbotTaskProgress, handleAdminUbotAlbumListAction, handleAdminUbotAlbumsGet, handleAdminUbotAlbumsSelect, handleAdminUbotAlbumsTrigger, handleUbotAlbumsReport, handleUbotTaskFileIdMap, handleUbotAlbumsExisting } from './src/userbot.js';
 import { handleAdminServers, handleAdminServerCreate, handleAdminServerUpdate, handleAdminServerDelete, handleServerHeartbeat, handleServerTasks, handleDeployScript, handleDeployPullScript, handleDeployGenScript, handleTaskRunReport, handleServerTasksPoll, handleAdminTaskRuns, handleAdminUbotChats, handleAdminUbotChatsRefresh, handleUbotDialogsReport, handleUbotGlobal } from './src/servers.js';
 
 
@@ -276,6 +276,8 @@ export default {
     if (m === 'POST' && p.indexOf('/admin/api/userbot-tasks/') === 0 && p.endsWith('/albums/trigger')) return isAdmin ? handleAdminUbotAlbumsTrigger(request, env, p.split('/')[4]) : json({ok:false,error:'Unauthorized'},401);
     // 脚本侧获取选中消息的 file_id 映射（用于 selected 模式直接下载，ub_token 鉴权）
     if (m === 'GET' && p.indexOf('/api/ubot/task/') === 0 && p.endsWith('/file-id-map')) return handleUbotTaskFileIdMap(request, env, p.split('/')[4]);
+    // 脚本侧：获取已有相册 grouped_id（去重用，避免重复写入 D1 浪费额度）
+    if (m === 'GET' && p.indexOf('/api/ubot/task/') === 0 && p.endsWith('/albums/existing')) return handleUbotAlbumsExisting(request, env, p.split('/')[4]);
     // 脚本侧（Telethon userbot）拉配置/回写断点，用 ub_token 鉴权，不走 isAdmin
     if (m === 'GET' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/config') > 0) return handleUserbotTaskConfig(request, env, p.split('/')[4]);
     if (m === 'POST' && p.indexOf('/api/ubot/task/') === 0 && p.indexOf('/progress') > 0) return handleUserbotTaskProgress(request, env, p.split('/')[4]);
