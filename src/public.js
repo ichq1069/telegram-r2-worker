@@ -2195,3 +2195,204 @@ export async function handleAdminPoolMoveToFolder(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ==================== User Upload API ====================
+export async function handleUserUpload(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    if (!user.enabled) return json({ ok: false, error: 'API key disabled' }, 403);
+    
+    // Check upload quota
+    if (user.upload_used >= user.upload_quota) {
+      return json({ ok: false, error: 'Upload quota exceeded' }, 403);
+    }
+    
+    const formData = await request.formData();
+    const files = formData.getAll('files');
+    if (!files.length) return json({ ok: false, error: 'No files provided' }, 400);
+    
+    const results = [];
+    const now = new Date().toISOString();
+    
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) {
+        results.push({ name: file.name, error: 'Not an image file' });
+        continue;
+      }
+      
+      // Check quota again for each file
+      if (user.upload_used >= user.upload_quota) {
+        results.push({ name: file.name, error: 'Upload quota exceeded' });
+        continue;
+      }
+      
+      try {
+        const key = `user/${user.id}/${Date.now()}_${file.name}`;
+        await env.R2_BUCKET.put(key, file);
+        
+        const url = `https://telegramup.wo58.cn/file/${key}`;
+        const r = await env.D1_DB.prepare(
+          'INSERT INTO user_uploads (user_id, url, file_name, file_size, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        ).bind(user.id, url, file.name, file.size, file.type, now).run();
+        
+        // Update quota
+        await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used + 1, storage_used = storage_used + ? WHERE id = ?')
+          .bind(file.size, user.id).run();
+        
+        user.upload_used++;
+        user.storage_used += file.size;
+        
+        results.push({ id: r.meta.last_row_id, name: file.name, url, size: file.size });
+      } catch (e) {
+        results.push({ name: file.name, error: e.message });
+      }
+    }
+    
+    return json({ ok: true, data: { results, quota: { used: user.upload_used, total: user.upload_quota } } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleUserFiles(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    
+    const u = new URL(request.url);
+    const page = clampInt(u.searchParams.get('page') || '1', 1, 1, 1000);
+    const pageSize = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100);
+    const offset = (page - 1) * pageSize;
+    const kw = u.searchParams.get('keyword') || '';
+    const tags = u.searchParams.get('tags') || '';
+    
+    let w = 'WHERE user_id = ? AND deleted_at IS NULL';
+    const p = [user.id];
+    
+    if (kw) { w += ' AND (file_name LIKE ? OR tags LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
+    if (tags) { w = appendTagFilter(tags, w, p); }
+    
+    const total = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM user_uploads ' + w).bind(...p).first();
+    const files = await env.D1_DB.prepare('SELECT * FROM user_uploads ' + w + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').bind(...p, pageSize, offset).all();
+    
+    return json({ ok: true, data: files.results || [], total: total?.total || 0, page, pageSize });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleUserFileDetail(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    
+    const u = new URL(request.url);
+    const pathParts = u.pathname.split('/');
+    const fileId = parseInt(pathParts[pathParts.length - 1], 10);
+    if (!fileId) return json({ ok: false, error: 'File ID required' }, 400);
+    
+    const file = await env.D1_DB.prepare('SELECT * FROM user_uploads WHERE id = ? AND user_id = ? AND deleted_at IS NULL').bind(fileId, user.id).first();
+    if (!file) return json({ ok: false, error: 'File not found' }, 404);
+    
+    return json({ ok: true, data: file });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleUserFileDelete(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    
+    const u = new URL(request.url);
+    const pathParts = u.pathname.split('/');
+    const fileId = parseInt(pathParts[pathParts.length - 2], 10);
+    if (!fileId) return json({ ok: false, error: 'File ID required' }, 400);
+    
+    const file = await env.D1_DB.prepare('SELECT * FROM user_uploads WHERE id = ? AND user_id = ? AND deleted_at IS NULL').bind(fileId, user.id).first();
+    if (!file) return json({ ok: false, error: 'File not found' }, 404);
+    
+    const now = new Date().toISOString();
+    await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE id = ?').bind(now, fileId).run();
+    
+    // Update quota
+    await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used - 1, storage_used = storage_used - ? WHERE id = ?')
+      .bind(file.file_size || 0, user.id).run();
+    
+    return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleUserFileTags(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    
+    const u = new URL(request.url);
+    const pathParts = u.pathname.split('/');
+    const fileId = parseInt(pathParts[pathParts.length - 2], 10);
+    if (!fileId) return json({ ok: false, error: 'File ID required' }, 400);
+    
+    const b = await request.json().catch(() => null);
+    if (!b || !b.tags) return json({ ok: false, error: 'Tags required' }, 400);
+    
+    const tags = Array.isArray(b.tags) ? b.tags.join(',') : String(b.tags);
+    
+    const file = await env.D1_DB.prepare('SELECT * FROM user_uploads WHERE id = ? AND user_id = ? AND deleted_at IS NULL').bind(fileId, user.id).first();
+    if (!file) return json({ ok: false, error: 'File not found' }, 404);
+    
+    await env.D1_DB.prepare('UPDATE user_uploads SET tags = ? WHERE id = ?').bind(tags, fileId).run();
+    
+    return json({ ok: true, data: { id: fileId, tags } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleUserRandom(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    
+    const u = new URL(request.url);
+    const count = clampInt(u.searchParams.get('count') || '1', 1, 1, 10);
+    const tags = u.searchParams.get('tags') || '';
+    
+    let w = 'WHERE user_id = ? AND deleted_at IS NULL';
+    const p = [user.id];
+    
+    if (tags) { w = appendTagFilter(tags, w, p); }
+    
+    const files = await env.D1_DB.prepare('SELECT * FROM user_uploads ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, count).all();
+    
+    return json({ ok: true, data: files.results || [] });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleUserQuota(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    
+    return json({ ok: true, data: { 
+      upload_quota: user.upload_quota, 
+      upload_used: user.upload_used, 
+      storage_used: user.storage_used 
+    }});
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+

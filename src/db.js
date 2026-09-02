@@ -5,7 +5,7 @@ let _tablesEnsured = false;
 // 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
 // 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
 // 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
-const SCHEMA_VERSION = '10';
+const SCHEMA_VERSION = '11';
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
@@ -61,7 +61,10 @@ export async function ensureTables(db) {
     "CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, color TEXT DEFAULT '', category TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at TEXT);" +
     "CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);" +
     "CREATE TABLE IF NOT EXISTS folders (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, parent_id INTEGER DEFAULT NULL, created_at TEXT, updated_at TEXT);" +
-    "CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);"
+    "CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);" +
+    "CREATE TABLE IF NOT EXISTS user_uploads (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, url TEXT NOT NULL, thumb_url TEXT, file_name TEXT, file_size INTEGER, file_type TEXT, width INTEGER, height INTEGER, tags TEXT DEFAULT '', created_at TEXT, deleted_at TEXT);" +
+    "CREATE INDEX IF NOT EXISTS idx_user_uploads_user ON user_uploads(user_id);" +
+    "CREATE INDEX IF NOT EXISTS idx_user_uploads_created ON user_uploads(created_at);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -140,6 +143,18 @@ export async function ensureTables(db) {
       if (akn.indexOf('short_key') === -1) {
         await db.exec("ALTER TABLE api_keys ADD COLUMN short_key TEXT");
         console.log('migrated: api_keys.short_key column');
+      }
+      if (akn.indexOf('upload_quota') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN upload_quota INTEGER DEFAULT 100");
+        console.log('migrated: api_keys.upload_quota column');
+      }
+      if (akn.indexOf('upload_used') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN upload_used INTEGER DEFAULT 0");
+        console.log('migrated: api_keys.upload_used column');
+      }
+      if (akn.indexOf('storage_used') === -1) {
+        await db.exec("ALTER TABLE api_keys ADD COLUMN storage_used INTEGER DEFAULT 0");
+        console.log('migrated: api_keys.storage_used column');
       }
       const missing = await db.prepare("SELECT id FROM api_keys WHERE short_key IS NULL OR short_key=''").all();
       for (const row of (missing.results || [])) {

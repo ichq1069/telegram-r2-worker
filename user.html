@@ -177,6 +177,48 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
       </div>
     </div>
 
+    <!-- 图片库 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>我的图片库 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">上传图片并通过 API 访问</span></div>
+      <div class="stats-grid" style="margin-bottom:14px">
+        <div class="stat-card"><div class="value" id="stUploadUsed">-</div><div class="label">已上传</div></div>
+        <div class="stat-card"><div class="value" id="stUploadQuota">-</div><div class="label">上传配额</div></div>
+        <div class="stat-card"><div class="value" id="stStorageUsed">-</div><div class="label">存储用量</div></div>
+      </div>
+      <div style="margin-bottom:14px">
+        <button class="btn btn-primary" id="uploadBtn">上传图片</button>
+        <input type="file" id="uploadInput" accept="image/*" multiple style="display:none">
+        <span id="uploadStatus" style="font-size:12px;color:var(--text-secondary);margin-left:10px"></span>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:14px">
+        <input class="inp" id="fileKw" placeholder="搜索文件名/标签" style="max-width:200px">
+        <input class="inp" id="fileTags" placeholder="按标签筛选" style="max-width:160px">
+        <button class="btn btn-ghost" id="fileSearchBtn">搜索</button>
+      </div>
+      <div id="fileGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px"></div>
+      <div id="filePagination" style="display:flex;justify-content:center;gap:8px;margin-top:14px"></div>
+    </div>
+
+    <!-- API 文档 -->
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>API 文档 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">使用 API Key 访问你的图片库</span></div>
+      <div style="font-size:13px;line-height:1.8">
+        <p style="margin-bottom:10px"><b>认证方式：</b>所有 API 请求需要携带 <code>X-API-Key</code> 头或 <code>?api_key=</code> 参数。</p>
+        <p style="margin-bottom:6px"><b>可用端点：</b></p>
+        <ul style="margin-left:20px;margin-bottom:10px">
+          <li><code>POST /api/v1/user/upload</code> - 上传图片（multipart/form-data，字段名 files）</li>
+          <li><code>GET /api/v1/user/files</code> - 获取图片列表（支持 page/page_size/keyword/tags）</li>
+          <li><code>GET /api/v1/user/files/:id</code> - 获取图片详情</li>
+          <li><code>DELETE /api/v1/user/files/:id</code> - 删除图片</li>
+          <li><code>POST /api/v1/user/files/:id/tags</code> - 设置图片标签（JSON body: {tags: "tag1,tag2"}）</li>
+          <li><code>GET /api/v1/user/random</code> - 随机获取图片（支持 count/tags）</li>
+          <li><code>GET /api/v1/user/quota</code> - 获取配额信息</li>
+        </ul>
+        <p style="margin-bottom:6px"><b>调用示例：</b></p>
+        <div class="api-result" id="apiExamples" style="margin-top:8px"></div>
+      </div>
+    </div>
+
     <!-- 接口生成器 -->
     <div class="card">
       <div class="card-title"><span class="dot"></span>公开接口生成器 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">点选条件，自动生成可复制的接口 URL</span></div>
@@ -535,6 +577,155 @@ function renderGenExamples(url, mode) {
     '<div style="color:#94a3b8;font-size:12px;margin:14px 0 6px">③ 说明</div>' +
     '<div style="white-space:pre-wrap;font-family:monospace;font-size:12px;color:#fbbf24">' + escStr(img) + '</div>';
 }
+
+// ==================== Image Library ====================
+var currentPage = 1;
+var totalPages = 1;
+
+async function loadUserFiles(page) {
+  page = page || 1;
+  var kw = document.getElementById("fileKw") ? document.getElementById("fileKw").value.trim() : "";
+  var tags = document.getElementById("fileTags") ? document.getElementById("fileTags").value.trim() : "";
+  
+  var url = "/api/v1/user/files?page=" + page + "&page_size=12";
+  if (kw) url += "&keyword=" + encodeURIComponent(kw);
+  if (tags) url += "&tags=" + encodeURIComponent(tags);
+  
+  var r = await api("GET", url);
+  if (!r.ok) { document.getElementById("fileGrid").innerHTML = '<div class="empty">' + (r.error || "加载失败") + '</div>'; return; }
+  
+  var files = r.data || [];
+  totalPages = Math.ceil((r.total || 0) / 12);
+  currentPage = page;
+  
+  var grid = document.getElementById("fileGrid");
+  if (!files.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1">暂无图片，点击上方"上传图片"按钮添加</div>'; return; }
+  
+  var h = "";
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    h += '<div class="file-card" data-id="' + f.id + '">';
+    h += '<img src="' + escStr(f.url) + '" style="width:100%;height:120px;object-fit:cover;cursor:pointer" loading="lazy" onclick="previewFile(' + f.id + ')">';
+    h += '<div style="padding:8px">';
+    h += '<div style="font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escStr(f.file_name) + '">' + escStr(f.file_name || "未命名") + '</div>';
+    h += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">' + fmtSize(f.file_size) + ' · ' + fmtDT(f.created_at) + '</div>';
+    if (f.tags) h += '<div style="font-size:11px;color:var(--primary);margin-top:4px">' + escStr(f.tags) + '</div>';
+    h += '<div style="margin-top:6px;display:flex;gap:4px">';
+    h += '<button class="btn btn-ghost btn-sm" onclick="copyUrl(\'' + escStr(f.url) + '\')">复制链接</button>';
+    h += '<button class="btn btn-ghost btn-sm" onclick="deleteFile(' + f.id + ')">删除</button>';
+    h += '</div>';
+    h += '</div></div>';
+  }
+  grid.innerHTML = h;
+  
+  renderPagination();
+}
+
+function renderPagination() {
+  var el = document.getElementById("filePagination");
+  if (!el || totalPages <= 1) { if (el) el.innerHTML = ""; return; }
+  
+  var h = '';
+  if (currentPage > 1) h += '<button class="btn btn-ghost btn-sm" onclick="loadUserFiles(' + (currentPage - 1) + ')">上一页</button>';
+  h += '<span style="font-size:12px;color:var(--text-secondary);padding:6px 10px">' + currentPage + ' / ' + totalPages + '</span>';
+  if (currentPage < totalPages) h += '<button class="btn btn-ghost btn-sm" onclick="loadUserFiles(' + (currentPage + 1) + ')">下一页</button>';
+  el.innerHTML = h;
+}
+
+async function loadQuota() {
+  var r = await api("GET", "/api/v1/user/quota");
+  if (!r.ok) return;
+  document.getElementById("stUploadUsed").textContent = r.data.upload_used || 0;
+  document.getElementById("stUploadQuota").textContent = r.data.upload_quota || 0;
+  document.getElementById("stStorageUsed").textContent = fmtSize(r.data.storage_used || 0);
+}
+
+async function uploadFiles(files) {
+  var status = document.getElementById("uploadStatus");
+  status.textContent = "正在上传...";
+  
+  var formData = new FormData();
+  for (var i = 0; i < files.length; i++) {
+    formData.append("files", files[i]);
+  }
+  
+  try {
+    var r = await fetch("/api/v1/user/upload", {
+      method: "POST",
+      headers: { "X-API-Key": AK },
+      body: formData
+    });
+    var data = await r.json();
+    
+    if (data.ok) {
+      var successCount = data.data.results.filter(function(r) { return !r.error; }).length;
+      var failCount = data.data.results.filter(function(r) { return r.error; }).length;
+      status.textContent = "上传完成：" + successCount + " 成功" + (failCount ? "，" + failCount + " 失败" : "");
+      loadUserFiles(1);
+      loadQuota();
+    } else {
+      status.textContent = "上传失败：" + data.error;
+    }
+  } catch (e) {
+    status.textContent = "上传失败：" + e.message;
+  }
+}
+
+async function deleteFile(id) {
+  if (!confirm("确定要删除这张图片吗？")) return;
+  
+  var r = await api("DELETE", "/api/v1/user/files/" + id);
+  if (r.ok) {
+    toast("已删除", 1);
+    loadUserFiles(currentPage);
+    loadQuota();
+  } else {
+    toast(r.error || "删除失败", 0);
+  }
+}
+
+function copyUrl(url) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(function() { toast("已复制链接", 1); });
+  } else {
+    var ta = document.createElement("textarea");
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); toast("已复制链接", 1); } catch (e) { toast("复制失败", 0); }
+    ta.remove();
+  }
+}
+
+function previewFile(id) {
+  window.open("/api/v1/user/files/" + id + "?api_key=" + AK, "_blank");
+}
+
+function renderApiExamples() {
+  var examples = "# 获取图片列表\ncurl -H \"X-API-Key: YOUR_KEY\" \"" + OR + "/api/v1/user/files\"\n\n" +
+    "# 上传图片\ncurl -F \"files=@image.jpg\" -H \"X-API-Key: YOUR_KEY\" \"" + OR + "/api/v1/user/upload\"\n\n" +
+    "# 随机获取图片\ncurl -H \"X-API-Key: YOUR_KEY\" \"" + OR + "/api/v1/user/random?count=1\"\n\n" +
+    "# 获取配额\ncurl -H \"X-API-Key: YOUR_KEY\" \"" + OR + "/api/v1/user/quota\"";
+  document.getElementById("apiExamples").textContent = examples;
+}
+
+// 初始化图片库事件
+document.addEventListener("DOMContentLoaded", function() {
+  var uploadBtn = document.getElementById("uploadBtn");
+  var uploadInput = document.getElementById("uploadInput");
+  var fileSearchBtn = document.getElementById("fileSearchBtn");
+  
+  if (uploadBtn) uploadBtn.addEventListener("click", function() { uploadInput.click(); });
+  if (uploadInput) uploadInput.addEventListener("change", function() { if (this.files.length) uploadFiles(this.files); });
+  if (fileSearchBtn) fileSearchBtn.addEventListener("click", function() { loadUserFiles(1); });
+  
+  // Load data when logged in
+  if (AK) {
+    loadQuota();
+    loadUserFiles(1);
+    renderApiExamples();
+  }
+});
 </script>
 </body>
 </html>
