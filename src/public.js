@@ -2714,10 +2714,21 @@ export async function handleUserQuota(request, env) {
     const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
     if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
     
-    return json({ ok: true, data: { 
-      upload_quota: user.upload_quota, 
-      upload_used: user.upload_used, 
-      storage_used: user.storage_used 
+    // 统计以 user_uploads 活跃行实时聚合为准（api_keys.upload_used/storage_used
+    // 只是配额追踪器，历史软删/清理后可能与真实数据不一致）
+    const agg = await env.D1_DB.prepare(
+      "SELECT COUNT(*) AS files, COALESCE(SUM(CASE WHEN file_type='photo' THEN 1 ELSE 0 END),0) AS photos, COALESCE(SUM(CASE WHEN file_type='video' THEN 1 ELSE 0 END),0) AS videos, COALESCE(SUM(file_size),0) AS storage_used FROM user_uploads WHERE user_id = ? AND deleted_at IS NULL"
+    ).bind(user.id).first();
+    
+    const files = Number(agg?.files || 0);
+    return json({ ok: true, data: {
+      upload_quota: user.upload_quota,
+      upload_used: user.upload_used,
+      storage_used: Number(agg?.storage_used || 0),
+      files,
+      photos: Number(agg?.photos || 0),
+      videos: Number(agg?.videos || 0),
+      quota_left: Math.max((user.upload_quota || 0) - files, 0)
     }});
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }

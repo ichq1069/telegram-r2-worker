@@ -104,6 +104,21 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
 .sk { background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%); background-size:200% 100%; animation:sk 1.5s infinite; border-radius:8px; }
 @keyframes sk { 0% { background-position:200% 0; } 100% { background-position:-200% 0; } }
 
+/* + Upload Tiles */
+.up-grid { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+.up-tile { width:110px; height:110px; border:1.5px dashed var(--border); border-radius:12px; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; background:var(--card); transition:all .2s; overflow:hidden; position:relative; box-sizing:border-box; }
+.up-add:hover { border-color:var(--primary); color:var(--primary); background:var(--primary-light); }
+.up-add-icon { font-size:34px; line-height:1; color:var(--text-secondary); font-weight:300; }
+.up-add-text { font-size:12px; color:var(--text-secondary); margin-top:6px; }
+.up-item { cursor:default; border-style:solid; }
+.up-item img { width:100%; height:100%; object-fit:cover; }
+.up-item .up-mask { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:6px; background:rgba(15,23,42,.5); color:#fff; font-size:12px; }
+.up-item .up-badge { position:absolute; top:4px; right:4px; min-width:18px; height:18px; padding:0 4px; border-radius:9px; font-size:11px; line-height:18px; text-align:center; color:#fff; z-index:2; }
+.up-badge.ok { background:var(--success); }
+.up-badge.err { background:var(--danger); }
+.up-item .up-name { position:absolute; bottom:0; left:0; right:0; padding:2px 6px; font-size:10px; color:#fff; background:rgba(0,0,0,.55); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; z-index:2; }
+.up-item.err { border-color:var(--danger); }
+
 @media(max-width:768px) {
   .file-manager-layout { flex-direction:column; }
   .folder-sidebar { width:100%; min-width:0; }
@@ -115,6 +130,7 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
   <div class="topbar">
     <div class="topbar-title">图片管理</div>
     <div class="topbar-right">
+      <button class="btn btn-ghost btn-sm" id="backBtn">← 返回个人页</button>
       <button class="btn btn-ghost btn-sm" id="cleanupBtn" title="清除文件管理中已失效/残留的孤儿数据">清理孤儿数据</button>
       <button class="btn btn-ghost btn-sm" id="refreshBtn">刷新</button>
       <button class="btn btn-ghost btn-sm" id="logoutBtn">退出</button>
@@ -132,24 +148,15 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
 
     <!-- 上传区 -->
     <div class="card">
-      <div class="card-title"><span class="dot"></span>上传文件</div>
-      <div class="drop-zone" id="dropZone">
-        <div class="drop-zone-icon">📤</div>
-        <div class="drop-zone-text">拖拽文件到此处上传</div>
-        <div class="drop-zone-hint">支持图片、视频等文件，单文件最大 19MB</div>
-      </div>
-      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
-        <div style="flex:1;min-width:240px">
-          <label style="font-size:12px;color:var(--text-secondary)">选择文件</label>
-          <input class="inp" type="file" id="fileInput" accept="image/*,video/*" multiple style="width:100%">
+      <div class="card-title"><span class="dot"></span>上传文件 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">点击 ＋ 选择文件（可多选/拖拽），即选即传</span></div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="width:220px">
+          <label style="font-size:12px;color:var(--text-secondary)">标签（逗号分隔，可选）</label>
+          <input class="inp" id="uploadTags" placeholder="风景,测试" style="width:100%">
         </div>
-        <div style="flex:1;min-width:160px">
-          <label style="font-size:12px;color:var(--text-secondary)">标签（逗号分隔）</label>
-          <input class="inp" id="uploadTags" placeholder="风景,美女" style="width:100%">
-        </div>
-        <button class="btn btn-primary" id="uploadBtn">上传</button>
+        <div id="uploadStatus" style="flex:1;min-width:180px;font-size:12px;color:var(--text-secondary)"></div>
       </div>
-      <div id="uploadStatus" style="font-size:12px;color:var(--text-secondary);margin-top:8px"></div>
+      <div class="up-grid" id="upGrid"></div>
     </div>
 
     <!-- 文件管理 -->
@@ -275,9 +282,9 @@ async function api(method, path, body) {
 async function loadStats() {
   var r = await api('GET', '/api/v1/user/quota');
   if (r.ok) {
-    document.getElementById('stTotal').textContent = r.data.upload_used || 0;
-    document.getElementById('stImages').textContent = r.data.upload_used || 0;
-    document.getElementById('stVideos').textContent = '-';
+    document.getElementById('stTotal').textContent = r.data.files || 0;
+    document.getElementById('stImages').textContent = r.data.photos || 0;
+    document.getElementById('stVideos').textContent = r.data.videos || 0;
     document.getElementById('stSize').textContent = fmtSize(r.data.storage_used || 0);
   }
 }
@@ -374,41 +381,107 @@ function nextPreview() {
   if (previewIndex < currentFiles.length - 1) { previewIndex++; openPreview(previewIndex); }
 }
 
-// Upload
-async function uploadFiles(files) {
+// ---------- ＋ 上传宫格 ----------
+var upQueue = [];
+
+function currentTags() { return (document.getElementById('uploadTags').value || '').trim(); }
+
+function renderUpGrid() {
+  var grid = document.getElementById('upGrid');
+  var h = '';
+  h += '<label class="up-tile up-add" for="fileInput"><span class="up-add-icon">＋</span><span class="up-add-text">上传</span></label>';
+  h += '<input type="file" id="fileInput" accept="image/*,video/*" multiple style="display:none">';
+  for (var i = 0; i < upQueue.length; i++) {
+    var it = upQueue[i];
+    h += '<div class="up-tile up-item' + (it.status === 'err' ? ' err' : '') + '" data-i="' + i + '"' + (it.err ? ' title="' + escStr(it.err) + '"' : '') + '>';
+    h += '<img src="' + it.preview + '" alt="">';
+    if (it.status === 'wait') h += '<div class="up-mask">等待</div>';
+    else if (it.status === 'uploading') h += '<div class="up-mask">上传中...</div>';
+    else if (it.status === 'ok') h += '<span class="up-badge ok">✓</span>';
+    else h += '<span class="up-badge err">✗</span>';
+    h += '<div class="up-name">' + escStr(it.name) + '</div>';
+    h += '</div>';
+  }
+  grid.innerHTML = h;
+  
+  // 失败项点击重试
+  Array.prototype.forEach.call(grid.querySelectorAll('.up-item.err'), function(el) {
+    el.addEventListener('click', function() { uploadOne(upQueue[parseInt(this.dataset.i)]); });
+  });
+  // 拖拽到 ＋ 格
+  var addEl = grid.querySelector('.up-add');
+  if (addEl) {
+    addEl.addEventListener('dragover', function(e) { e.preventDefault(); this.style.borderColor = 'var(--primary)'; });
+    addEl.addEventListener('dragleave', function() { this.style.borderColor = ''; });
+    addEl.addEventListener('drop', function(e) {
+      e.preventDefault();
+      this.style.borderColor = '';
+      if (e.dataTransfer.files.length) pickUploads(e.dataTransfer.files);
+    });
+  }
+}
+
+function pickUploads(fileList) {
+  var files = Array.prototype.slice.call(fileList);
+  var tags = currentTags();
+  for (var i = 0; i < files.length; i++) {
+    upQueue.push({ file: files[i], name: files[i].name, preview: URL.createObjectURL(files[i]), status: 'wait', err: '' });
+  }
+  renderUpGrid();
+  document.getElementById('uploadStatus').textContent = '已选择 ' + files.length + ' 个文件，开始上传...';
+  uploadAll(tags);
+}
+
+function upUrl(tags) {
+  return OR + '/api/v1/user/upload' + (tags ? '?tags=' + encodeURIComponent(tags) : '');
+}
+
+async function uploadAll(tags) {
   var status = document.getElementById('uploadStatus');
   var okN = 0;
   var fails = [];
-  
-  for (var i = 0; i < files.length; i++) {
-    status.textContent = '正在上传 ' + (i + 1) + '/' + files.length + '：' + files[i].name + ' ...';
-    
-    var formData = new FormData();
-    formData.append('files', files[i]);
-    
+  for (var i = 0; i < upQueue.length; i++) {
+    var it = upQueue[i];
+    if (it.status === 'ok' || it.status === 'uploading') continue;
+    status.textContent = '正在上传 ' + (i + 1) + '/' + upQueue.length + '：' + it.name;
+    it.status = 'uploading';
+    renderUpGrid();
+    var fd = new FormData();
+    fd.append('files', it.file);
     try {
-      var r = await fetch(OR + '/api/v1/user/upload', {
-        method: 'POST',
-        headers: { 'X-API-Key': AK },
-        body: formData
-      });
+      var r = await fetch(upUrl(tags), { method: 'POST', headers: { 'X-API-Key': AK }, body: fd });
       var data = await r.json();
       var res = (data.ok && data.data && data.data.results) || [];
-      if (res[0] && !res[0].error) {
-        okN++;
-      } else {
-        fails.push(files[i].name + ': ' + ((res[0] && res[0].error) || data.error || '未知错误'));
-      }
-    } catch (e) {
-      fails.push(files[i].name + ': ' + e.message);
-    }
+      if (res[0] && !res[0].error) { it.status = 'ok'; okN++; }
+      else { it.status = 'err'; it.err = (res[0] && res[0].error) || data.error || '未知错误'; fails.push(it.name + ': ' + it.err); }
+    } catch (e) { it.status = 'err'; it.err = e.message; fails.push(it.name + ': ' + e.message); }
+    renderUpGrid();
   }
-  
   status.textContent = '上传完成：' + okN + ' 成功' + (fails.length ? '，' + fails.length + ' 失败（' + fails.join('；') + '）' : '');
   if (okN) {
     loadFiles(1);
     loadStats();
   }
+}
+
+// 单张（失败重试）上传
+async function uploadOne(it) {
+  var tags = currentTags();
+  var status = document.getElementById('uploadStatus');
+  it.status = 'uploading';
+  it.err = '';
+  renderUpGrid();
+  status.textContent = '重新上传：' + it.name + ' ...';
+  var fd = new FormData();
+  fd.append('files', it.file);
+  try {
+    var r = await fetch(upUrl(tags), { method: 'POST', headers: { 'X-API-Key': AK }, body: fd });
+    var data = await r.json();
+    var res = (data.ok && data.data && data.data.results) || [];
+    if (res[0] && !res[0].error) { it.status = 'ok'; status.textContent = '上传完成：' + it.name; loadFiles(1); loadStats(); }
+    else { it.status = 'err'; it.err = (res[0] && res[0].error) || data.error || '未知错误'; status.textContent = '上传失败：' + it.err; }
+  } catch (e) { it.status = 'err'; it.err = e.message; status.textContent = '上传失败：' + e.message; }
+  renderUpGrid();
 }
 
 // Delete
@@ -482,26 +555,8 @@ document.addEventListener('DOMContentLoaded', function() {
     '# 随机获取\ncurl -H "X-API-Key: YOUR_KEY" "' + OR + '/api/v1/random?count=1"';
   document.getElementById('apiExamples').textContent = examples;
   
-  // Upload button
-  document.getElementById('uploadBtn').addEventListener('click', function() {
-    var files = document.getElementById('fileInput').files;
-    if (files.length) uploadFiles(files);
-  });
-  
-  // File input
-  document.getElementById('fileInput').addEventListener('change', function() {
-    if (this.files.length) uploadFiles(this.files);
-  });
-  
-  // Drop zone
-  var dropZone = document.getElementById('dropZone');
-  dropZone.addEventListener('dragover', function(e) { e.preventDefault(); this.classList.add('dragover'); });
-  dropZone.addEventListener('dragleave', function() { this.classList.remove('dragover'); });
-  dropZone.addEventListener('drop', function(e) {
-    e.preventDefault();
-    this.classList.remove('dragover');
-    if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files);
-  });
+  // ＋ 上传宫格：初始渲染（选择/拖拽事件在 renderUpGrid 内绑定）
+  renderUpGrid();
   
   // Search
   document.getElementById('searchBtn').addEventListener('click', function() { loadFiles(1); });
@@ -569,6 +624,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
   
+  // Back to user page (keep login)
+  document.getElementById('backBtn').addEventListener('click', function() {
+    location.href = '/user.html';
+  });
+
   // Logout
   document.getElementById('logoutBtn').addEventListener('click', function() {
     localStorage.removeItem('user_api_key');

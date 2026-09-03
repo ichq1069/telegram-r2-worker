@@ -88,6 +88,20 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
   .wrap { padding: 12px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
 }
+/* ＋ Upload Tiles */
+.up-grid { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.up-tile { width: 96px; height: 96px; border: 1.5px dashed var(--border); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; background: var(--card); transition: all .2s; overflow: hidden; position: relative; }
+.up-add:hover { border-color: var(--primary); color: var(--primary); background: #eef2ff; }
+.up-add-icon { font-size: 32px; line-height: 1; color: var(--text-secondary); font-weight: 300; }
+.up-add-text { font-size: 12px; color: var(--text-secondary); margin-top: 5px; }
+.up-item { cursor: default; border-style: solid; }
+.up-item img { width: 100%; height: 100%; object-fit: cover; }
+.up-item .up-mask { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(15, 23, 42, .5); color: #fff; font-size: 12px; }
+.up-item .up-badge { position: absolute; top: 4px; right: 4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; font-size: 11px; line-height: 18px; text-align: center; color: #fff; z-index: 2; }
+.up-badge.ok { background: var(--success); }
+.up-badge.err { background: var(--danger); }
+.up-item .up-name { position: absolute; bottom: 0; left: 0; right: 0; padding: 2px 6px; font-size: 10px; color: #fff; background: rgba(0, 0, 0, .55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 2; }
+.up-item.err { border-color: var(--danger); }
 </style>
 </head>
 <body>
@@ -186,11 +200,10 @@ code { background: #f1f5f9; padding: 1px 6px; border-radius: 4px; font-size: 12p
         <div class="stat-card"><div class="value" id="stUploadQuota">-</div><div class="label">上传配额</div></div>
         <div class="stat-card"><div class="value" id="stStorageUsed">-</div><div class="label">存储用量</div></div>
       </div>
-      <div style="margin-bottom:14px">
-        <button class="btn btn-primary" id="uploadBtn">上传图片</button>
-        <input type="file" id="uploadInput" accept="image/*" multiple style="display:none">
-        <span id="uploadStatus" style="font-size:12px;color:var(--text-secondary);margin-left:10px"></span>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        <span id="uploadStatus" style="font-size:12px;color:var(--text-secondary);flex:1;min-width:160px"></span>
       </div>
+      <div class="up-grid" id="upGrid" style="margin-bottom:16px"></div>
       <div style="display:flex;gap:10px;margin-bottom:14px">
         <input class="inp" id="fileKw" placeholder="搜索文件名/标签" style="max-width:200px">
         <input class="inp" id="fileTags" placeholder="按标签筛选" style="max-width:160px">
@@ -712,40 +725,102 @@ function renderPagination() {
 async function loadQuota() {
   var r = await api("GET", "/api/v1/user/quota");
   if (!r.ok) return;
-  document.getElementById("stUploadUsed").textContent = r.data.upload_used || 0;
+  document.getElementById("stUploadUsed").textContent = (r.data.files != null ? r.data.files : r.data.upload_used) || 0;
   document.getElementById("stUploadQuota").textContent = r.data.upload_quota || 0;
   document.getElementById("stStorageUsed").textContent = fmtSize(r.data.storage_used || 0);
 }
 
-async function uploadFiles(files) {
-  var status = document.getElementById("uploadStatus");
-  status.textContent = "正在上传...";
-  
-  var formData = new FormData();
-  for (var i = 0; i < files.length; i++) {
-    formData.append("files", files[i]);
+// ＋ 上传宫格：选图即逐张上传
+var upQueue = [];
+var upEls = {};
+
+function renderUpGrid() {
+  var grid = document.getElementById("upGrid");
+  if (!grid) return;
+  var h = '<label class="up-tile up-add" for="uploadInput"><span class="up-add-icon">＋</span><span class="up-add-text">上传图片</span></label>';
+  h += '<input type="file" id="uploadInput" accept="image/*" multiple style="display:none">';
+  for (var i = 0; i < upQueue.length; i++) {
+    var it = upQueue[i];
+    h += '<div class="up-tile up-item' + (it.status === "err" ? " err" : "") + '" data-i="' + i + '"' + (it.err ? ' title="' + escStr(it.err) + '"' : "") + '>';
+    h += '<img src="' + it.preview + '" alt="">';
+    if (it.status === "wait") h += '<div class="up-mask">等待</div>';
+    else if (it.status === "uploading") h += '<div class="up-mask">上传中...</div>';
+    else if (it.status === "ok") h += '<span class="up-badge ok">✓</span>';
+    else h += '<span class="up-badge err">✗</span>';
+    h += '<div class="up-name">' + escStr(it.name) + '</div>';
+    h += '</div>';
   }
+  grid.innerHTML = h;
   
-  try {
-    var r = await fetch("/api/v1/user/upload", {
-      method: "POST",
-      headers: { "X-API-Key": AK },
-      body: formData
+  Array.prototype.forEach.call(grid.querySelectorAll(".up-item.err"), function(el) {
+    el.addEventListener("click", function() { upUploadOne(upQueue[parseInt(this.dataset.i)]); });
+  });
+  var addEl = grid.querySelector(".up-add");
+  if (addEl) {
+    addEl.addEventListener("dragover", function(e) { e.preventDefault(); this.style.borderColor = "var(--primary)"; });
+    addEl.addEventListener("dragleave", function() { this.style.borderColor = ""; });
+    addEl.addEventListener("drop", function(e) {
+      e.preventDefault();
+      this.style.borderColor = "";
+      if (e.dataTransfer.files.length) upPick(e.dataTransfer.files);
     });
-    var data = await r.json();
-    
-    if (data.ok) {
-      var successCount = data.data.results.filter(function(r) { return !r.error; }).length;
-      var failCount = data.data.results.filter(function(r) { return r.error; }).length;
-      status.textContent = "上传完成：" + successCount + " 成功" + (failCount ? "，" + failCount + " 失败" : "");
-      loadUserFiles(1);
-      loadQuota();
-    } else {
-      status.textContent = "上传失败：" + data.error;
-    }
-  } catch (e) {
-    status.textContent = "上传失败：" + e.message;
   }
+}
+
+function upPick(fileList) {
+  var files = Array.prototype.slice.call(fileList);
+  for (var i = 0; i < files.length; i++) {
+    upQueue.push({ file: files[i], name: files[i].name, preview: URL.createObjectURL(files[i]), status: "wait", err: "" });
+  }
+  renderUpGrid();
+  document.getElementById("uploadStatus").textContent = "已选择 " + files.length + " 个文件，开始上传...";
+  upUploadAll();
+}
+
+async function upUploadAll() {
+  var status = document.getElementById("uploadStatus");
+  var okN = 0;
+  var fails = [];
+  for (var i = 0; i < upQueue.length; i++) {
+    var it = upQueue[i];
+    if (it.status === "ok" || it.status === "uploading") continue;
+    status.textContent = "正在上传 " + (i + 1) + "/" + upQueue.length + "：" + it.name + " ...";
+    it.status = "uploading";
+    renderUpGrid();
+    var fd = new FormData();
+    fd.append("files", it.file);
+    try {
+      var r = await fetch("/api/v1/user/upload", { method: "POST", headers: { "X-API-Key": AK }, body: fd });
+      var data = await r.json();
+      var res = (data.ok && data.data && data.data.results) || [];
+      if (res[0] && !res[0].error) { it.status = "ok"; okN++; }
+      else { it.status = "err"; it.err = (res[0] && res[0].error) || data.error || "未知错误"; fails.push(it.name + ": " + it.err); }
+    } catch (e) { it.status = "err"; it.err = e.message; fails.push(it.name + ": " + e.message); }
+    renderUpGrid();
+  }
+  status.textContent = "上传完成：" + okN + " 成功" + (fails.length ? "，" + fails.length + " 失败（" + fails.join("；") + "）" : "");
+  if (okN) {
+    loadUserFiles(1);
+    loadQuota();
+  }
+}
+
+async function upUploadOne(it) {
+  var status = document.getElementById("uploadStatus");
+  it.status = "uploading";
+  it.err = "";
+  renderUpGrid();
+  status.textContent = "重新上传：" + it.name + " ...";
+  var fd = new FormData();
+  fd.append("files", it.file);
+  try {
+    var r = await fetch("/api/v1/user/upload", { method: "POST", headers: { "X-API-Key": AK }, body: fd });
+    var data = await r.json();
+    var res = (data.ok && data.data && data.data.results) || [];
+    if (res[0] && !res[0].error) { it.status = "ok"; status.textContent = "上传完成：" + it.name; loadUserFiles(1); loadQuota(); }
+    else { it.status = "err"; it.err = (res[0] && res[0].error) || data.error || "未知错误"; status.textContent = "上传失败：" + it.err; }
+  } catch (e) { it.status = "err"; it.err = e.message; status.textContent = "上传失败：" + e.message; }
+  renderUpGrid();
 }
 
 async function deleteFile(id) {
@@ -788,13 +863,12 @@ function renderApiExamples() {
 
 // 初始化图片库事件
 document.addEventListener("DOMContentLoaded", function() {
-  var uploadBtn = document.getElementById("uploadBtn");
-  var uploadInput = document.getElementById("uploadInput");
   var fileSearchBtn = document.getElementById("fileSearchBtn");
   
-  if (uploadBtn) uploadBtn.addEventListener("click", function() { uploadInput.click(); });
-  if (uploadInput) uploadInput.addEventListener("change", function() { if (this.files.length) uploadFiles(this.files); });
   if (fileSearchBtn) fileSearchBtn.addEventListener("click", function() { loadUserFiles(1); });
+  
+  // ＋ 上传宫格：input 选择事件在 renderUpGrid 中绑定
+  renderUpGrid();
   
   // Load data when logged in
   if (AK) {
