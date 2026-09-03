@@ -1070,6 +1070,7 @@ var AM = document.getElementById("appMain");
 // 多选删除状态（提前初始化，init→loadFiles 依赖这些变量）
 var selSet = new Set();
 var selFiles = {};
+var LEVEL_STYLES = { pt: "#9ca3af", vip: "#3b82f6", svip: "#8b5cf6", vvip: "#d97706" };
 var OR = location.origin;
 
 // 1. URL 参数
@@ -4682,7 +4683,6 @@ function genDoc() {
 }
 // 密钥管理
 // 级别 badge：pt 灰 / vip 蓝 / svip 紫 / vvip 金
-var LEVEL_STYLES = { pt: "#9ca3af", vip: "#3b82f6", svip: "#8b5cf6", vvip: "#d97706" };
 function levelBadge(lv) {
   if (!lv || lv === "*") return '<span class="badge badge-blue" title="全部级别">ALL</span>';
   // Handle comma-separated levels
