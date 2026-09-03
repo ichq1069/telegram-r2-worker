@@ -165,20 +165,13 @@ export async function parseAndStore(link, chatId, msgId, from, env, options = {}
   const date = options.date || new Date();
   const platform = options.platform || 'unknown';
   
-  // 对于 X/Twitter 链接，使用 syndication API（支持图片和视频）
-  if (platform === 'twitter') {
-    log('X/Twitter link detected, using syndication API:', link);
-    const result = await parseXWithSyndication(link, chatId, msgId, from, env, date, options);
-    return result;
-  }
-  
   // 对于 Instagram 图片，直接下载不经过 cobalt
   if (platform === 'instagram' && /instagram\.com\/p\//i.test(link)) {
     log('Instagram post detected, trying direct download:', link);
     // Instagram 帖子可能包含多张图片，先尝试 cobalt
   }
   
-  // 其他平台使用 cobalt API
+  // 所有平台使用 cobalt API（包括 X/Twitter）
   const result = await callCobaltApi(link, env);
   if (!result.ok) {
     return { ok: false, error: result.error, link };
@@ -351,6 +344,8 @@ export async function parseAndStoreBatch(links, chatId, msgId, from, env, option
   }
   return results;
 }
+  return results;
+}
 
 // 解析 API 端点（供 jx.html 调用）
 export async function handleParseLink(request, env) {
@@ -371,17 +366,7 @@ export async function handleParseLink(request, env) {
       chatTitle: '手动解析'
     });
     
-    // 展平结果（X/Twitter 可能返回嵌套数组）
-    const flatResults = [];
-    for (const r of results) {
-      if (r.ok && r.data && Array.isArray(r.data)) {
-        flatResults.push(...r.data);
-      } else {
-        flatResults.push(r);
-      }
-    }
-    
-    return json({ ok: true, data: flatResults });
+    return json({ ok: true, data: results });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
