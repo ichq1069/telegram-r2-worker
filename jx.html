@@ -91,7 +91,7 @@ if (!API_KEY) {
     localStorage.setItem('ak', API_KEY);
   }
 }
-var history = JSON.parse(localStorage.getItem('parse_history') || '[]');
+var parseHistory = JSON.parse(localStorage.getItem('parse_history') || '[]');
 
 // 加载配置
 fetch('/admin/api/settings/cobalt?api_key=' + encodeURIComponent(API_KEY))
@@ -105,11 +105,11 @@ fetch('/admin/api/settings/cobalt?api_key=' + encodeURIComponent(API_KEY))
 // 渲染历史
 function renderHistory() {
   var el = document.getElementById('historyList');
-  if (!history.length) {
+  if (!parseHistory.length) {
     el.innerHTML = '<div style="text-align:center;color:#666;padding:20px">暂无记录</div>';
     return;
   }
-  el.innerHTML = history.slice(0, 20).map(function(h) {
+  el.innerHTML = parseHistory.slice(0, 20).map(function(h) {
     var platformClass = 'platform-' + h.platform;
     var statusText = h.ok ? '✅ 成功' : '❌ 失败';
     var statusColor = h.ok ? '#00ff88' : '#ff4444';
@@ -163,7 +163,7 @@ function parseLink() {
             '</div>' +
           '</div>';
           // 添加到历史
-          history.unshift({
+           parseHistory.unshift({
             url: url,
             platform: item.platform,
             ok: true,
@@ -171,7 +171,7 @@ function parseLink() {
           });
         } else {
           html += '<div style="color:#ff4444;padding:8px">❌ ' + item.platform + ': ' + (item.error || '解析失败') + '</div>';
-          history.unshift({
+           parseHistory.unshift({
             url: url,
             platform: item.platform,
             ok: false,
@@ -182,7 +182,7 @@ function parseLink() {
       result.className = 'result show success';
       result.innerHTML = html;
       // 保存历史
-      localStorage.setItem('parse_history', JSON.stringify(history.slice(0, 50)));
+      localStorage.setItem('parse_history', JSON.stringify(parseHistory.slice(0, 50)));
       renderHistory();
     } else {
       result.className = 'result show error';
