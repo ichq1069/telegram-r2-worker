@@ -1067,6 +1067,9 @@ function skImgs(n) { var s = ''; for (var i = 0; i < n; i++) { s += '<div class=
 var AK = ""; // no longer injected by the server; key comes from ?api_key=, localStorage or the login form
 var LS = document.getElementById("loginScreen");
 var AM = document.getElementById("appMain");
+// 多选删除状态（提前初始化，init→loadFiles 依赖这些变量）
+var selSet = new Set();
+var selFiles = {};
 var OR = location.origin;
 
 // 1. URL 参数
@@ -5156,10 +5159,7 @@ async function loadUsers() {
   }
   el.innerHTML = h || '<tr><td colspan="6">暂无数据</td></tr>';
 }
-// 多选删除状态
-var selSet = new Set();
 // 已加载文件缓存 (id -> 文件对象)，用于复制链接
-var selFiles = {};
 function poolStateBadge(s) {
   if (s === "imported") return '<span class="badge badge-green">已导入</span>';
   if (s === "ignored") return '<span class="badge badge-red">已忽略</span>';

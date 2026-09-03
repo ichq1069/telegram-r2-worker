@@ -1,4 +1,5 @@
 // 转存失败告警 + 缩略图生成（低耦合独立功能）
+import { json } from './util.js';
 
 // 转存失败时通过 bot 发消息给管理员（settings.admin_chat_id 或 env.ADMIN_CHAT_ID，5 分钟节流防刷屏）
 export async function notifyAdmin(env, text) {
