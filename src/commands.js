@@ -608,8 +608,8 @@ export async function handleBotCommand(chatId, msgId, text, env, waitFn) {
   if (cmd === '/start' || cmd === '/help') {
     const helpText = cmd === '/start' ? DEFAULT_COMMANDS['/start'] : DEFAULT_COMMANDS['/help'];
     await replyTextWithKeyboard(chatId, helpText, MAIN_BUTTONS, env);
-    // /start 附带下发快捷回复键盘（纯文本按钮，点"查看图库/帮助"直接触发）
-    if (cmd === '/start') await sendQuickReplyKeyboard(chatId, env);
+    // /start 附带下发快捷回复键盘（纯文本按钮，点"查看图库/帮助"直接触发），群聊也下发
+    await sendQuickReplyKeyboard(chatId, env);
     return { ok: true };
   }
 

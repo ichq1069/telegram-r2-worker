@@ -4,7 +4,7 @@ import { json, fmtSize, genHash, log, invalidateStatsCache } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
 import { notifyAdmin, genThumb } from "./notify.js";
 import { cnTodayStr, cnNowISO, guessExt, fileExtOf, extractTags } from "./core.js";
-import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, getMainMenuCfg, replyTextWithKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
+import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, getMainMenuCfg, replyTextWithKeyboard, sendQuickReplyKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
 import { getBotUsername, getProxyMode } from "./api.js";
@@ -196,6 +196,15 @@ export async function processUpdateCore(update, env, waitFn) {
       const kind = src.type === 'channel' ? '抓取该频道，任务 chat_id 填：' : '抓取该群，任务 chat_id 填：';
       await replyTextPlain(String(msg.chat.id), parseInt(msg.message_id), '该消息来自' + srcType + (title ? '「' + title + '」' : '') + '\n' + kind + String(src.id), env);
     } catch (e) { console.log('forward chatid reply fail:', e.message); }
+  }
+  // 机器人加入群聊时发送快捷回复键盘
+  if (msg && msg.new_chat_members && Array.isArray(msg.new_chat_members)) {
+    const botUser = await getBotUsername(env);
+    const botJoined = msg.new_chat_members.some(function(m) { return m.is_bot && m.username === botUser; });
+    if (botJoined) {
+      const chatId = String(msg.chat.id);
+      await sendQuickReplyKeyboard(chatId, env);
+    }
   }
   if (msg && !msg.text?.startsWith('/')) {
     const fi = extractFileInfo(msg);
