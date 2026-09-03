@@ -181,6 +181,7 @@ export default {
     if (m === 'GET' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeGet(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeSet(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/db-stats') return isAdmin ? handleDbStats(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/db-test-mysql') return isAdmin ? handleDbTestMysql(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-sync') return isAdmin ? handleDbSync(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-full-sync') return isAdmin ? handleDbFullSync(env) : json({ok:false,error:'Unauthorized'},401);
     // API key management (for third-party programs)
@@ -535,6 +536,21 @@ async function handleDbModeSet(request, env) {
     const r = await setMode(env, b.mode, b.reason || '');
     return r.ok ? json({ ok: true, data: r }) : json(r, 400);
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleDbTestMysql(env) {
+  try {
+    const { withConn } = await import('./src/mysql.js');
+    const result = await withConn(env, async (c) => {
+      const [rows] = await c.query('SELECT 1 as ok');
+      const [ver] = await c.query('SELECT VERSION() as v');
+      const [tables] = await c.query('SHOW TABLES');
+      return { ok: rows[0]?.ok === 1, version: ver[0]?.v || 'unknown', tables: tables.map(r => Object.values(r)[0]) };
+    });
+    return json({ ok: true, data: result });
+  } catch (e) {
+    return json({ ok: false, error: e.message, hint: '检查 Hyperdrive 绑定和 MySQL 服务是否正常' });
+  }
 }
 
 async function handleDbStats(env) {

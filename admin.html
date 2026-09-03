@@ -1298,6 +1298,7 @@ https://example.com/b.jpg"></textarea></div>
         <div style="margin-bottom:12px">
           <div style="display:flex;gap:8px;margin-bottom:10px">
             <button class="btn btn-ghost" id="dbRefreshBtn">刷新状态</button>
+            <button class="btn btn-ghost" id="dbTestMysqlBtn">测试MySQL连接</button>
             <button class="btn btn-primary" id="dbSyncBtn">快速同步</button>
             <button class="btn btn-primary" id="dbFullSyncBtn" style="background:#8b5cf6">全量同步</button>
           </div>
@@ -3677,6 +3678,22 @@ async function loadDbStatus() {
 document.getElementById("dbRefreshBtn").addEventListener("click", function() {
   loadDbStatus();
   toast("已刷新数据库状态", 1);
+});
+
+document.getElementById("dbTestMysqlBtn").addEventListener("click", function() {
+  var btn = this;
+  btn.disabled = true; btn.textContent = "测试中...";
+  api("GET", "/admin/api/db-test-mysql").then(function(r) {
+    btn.disabled = false; btn.textContent = "测试MySQL连接";
+    if (r && r.ok && r.data) {
+      toast("MySQL连接成功！版本：" + r.data.version + "，表数量：" + r.data.tables.length, 1);
+    } else {
+      toast("MySQL连接失败：" + ((r && r.error) || '未知错误'), 0);
+    }
+  }).catch(function(e) {
+    btn.disabled = false; btn.textContent = "测试MySQL连接";
+    toast("请求失败：" + e.message, 0);
+  });
 });
 
 document.getElementById("dbSyncBtn").addEventListener("click", function() {
