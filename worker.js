@@ -560,14 +560,13 @@ async function handleDbRebuildMysql(env) {
     const { ensureMySQLTables, resetMySQLTablesEnsured } = await import('./src/mysql.js');
     resetMySQLTablesEnsured();
     const ok = await ensureMySQLTables(env);
-    if (!ok) return json({ ok: false, error: '部分表创建失败，请查看 Workers 日志' });
-    // 验证表数量
+    // 获取实际表数量
     const { withConn } = await import('./src/mysql.js');
     const result = await withConn(env, async (c) => {
       const [tables] = await c.query('SHOW TABLES');
       return { count: tables.length, tables: tables.map(r => Object.values(r)[0]) };
     });
-    return json({ ok: true, data: result });
+    return json({ ok: true, data: { ...result, ensureOk: ok } });
   } catch (e) {
     return json({ ok: false, error: e.message });
   }

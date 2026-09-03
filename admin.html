@@ -3706,7 +3706,7 @@ document.getElementById("dbRebuildMysqlBtn").addEventListener("click", function(
   api("POST", "/admin/api/db-rebuild-mysql").then(function(r) {
     btn.disabled = false; btn.textContent = "重建MySQL表";
     if (r && r.ok && r.data) {
-      toast("MySQL表重建完成，共 " + r.data.count + " 张表", 1);
+      toast("MySQL表重建完成，共 " + r.data.count + " 张表: " + r.data.tables.join(', '), 1);
       loadDbStatus();
     } else {
       toast("重建失败：" + ((r && r.error) || '未知错误'), 0);
