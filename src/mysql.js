@@ -219,6 +219,8 @@ const MYSQL_TABLES = [
 
 let _tablesEnsured = false;
 
+export function resetMySQLTablesEnsured() { _tablesEnsured = false; }
+
 export async function ensureMySQLTables(env) {
   if (_tablesEnsured) return true;
   let okCount = 0;

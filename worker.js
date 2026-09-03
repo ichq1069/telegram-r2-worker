@@ -557,10 +557,8 @@ async function handleDbTestMysql(env) {
 
 async function handleDbRebuildMysql(env) {
   try {
-    const { ensureMySQLTables } = await import('./src/mysql.js');
-    // 重置标记以强制重建
-    const mod = await import('./src/mysql.js');
-    if (mod._tablesEnsured !== undefined) mod._tablesEnsured = false;
+    const { ensureMySQLTables, resetMySQLTablesEnsured } = await import('./src/mysql.js');
+    resetMySQLTablesEnsured();
     const ok = await ensureMySQLTables(env);
     if (!ok) return json({ ok: false, error: '部分表创建失败，请查看 Workers 日志' });
     // 验证表数量
