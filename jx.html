@@ -81,7 +81,16 @@ h1 { text-align: center; margin-bottom: 30px; color: #00d4ff; font-size: 24px; }
 </div>
 
 <script>
-var API_KEY = new URLSearchParams(window.location.search).get('api_key') || localStorage.getItem('admin_api_key') || '';
+var API_KEY = new URLSearchParams(window.location.search).get('api_key') || localStorage.getItem('admin_api_key') || localStorage.getItem('ak') || '';
+
+// 如果没有 API Key，提示用户先登录 admin
+if (!API_KEY) {
+  var input = prompt('请输入 API Key（从 admin 后台获取）');
+  if (input) {
+    API_KEY = input;
+    localStorage.setItem('ak', API_KEY);
+  }
+}
 var history = JSON.parse(localStorage.getItem('parse_history') || '[]');
 
 // 加载配置
