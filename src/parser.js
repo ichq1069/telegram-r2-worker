@@ -258,9 +258,10 @@ async function parseXWithSyndication(link, chatId, msgId, from, env, date, optio
       if (best?.url) media.push({ type: 'video', url: best.url, name: 'xvideo_' + tid + '.mp4' });
     }
     
-    // 图片
+    // 图片（最多 4 张，避免资源超限）
     if (j?.photos?.length) {
-      for (let p = 0; p < j.photos.length; p++) {
+      const maxPhotos = Math.min(j.photos.length, 4);
+      for (let p = 0; p < maxPhotos; p++) {
         const pu = j.photos[p].url;
         if (pu) media.push({ type: 'photo', url: pu, name: 'ximg_' + tid + '_' + (p + 1) + '.jpg' });
       }
@@ -268,13 +269,18 @@ async function parseXWithSyndication(link, chatId, msgId, from, env, date, optio
     
     if (!media.length) return { ok: false, error: 'no_media_found', link };
     
-    // 下载并存储每个媒体文件
+    // 下载并存储每个媒体文件（串行处理避免资源超限）
     const results = [];
     const dp = date.getFullYear() + '/' + String(date.getMonth() + 1).padStart(2, '0');
     
     for (const item of media) {
       try {
-        const dl = await fetch(item.url);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000); // 15s 超时
+        
+        const dl = await fetch(item.url, { signal: controller.signal });
+        clearTimeout(timeout);
+        
         if (!dl.ok) continue;
         
         const ct = item.type === 'video' ? 'video/mp4' : (dl.headers.get('content-type') || 'image/jpeg');
