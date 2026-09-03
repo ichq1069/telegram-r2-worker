@@ -300,6 +300,35 @@ function fmtDT(s) {
   if (!s) return "-";
   return String(s).replace("T", " ").slice(0, 16);
 }
+function fmtSize(b) {
+  if (!b || b == 0) return "0 B";
+  var u = ["B", "KB", "MB", "GB", "TB"];
+  var i = Math.floor(Math.log(b) / Math.log(1024));
+  return (b / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + " " + u[i];
+}
+
+// API 调用函数
+function api(method, path, body) {
+  var sep = path.indexOf('?') >= 0 ? '&' : '?';
+  var url = OR + path + sep + "api_key=" + encodeURIComponent(AK);
+  var opts = { method: method, headers: { "Content-Type": "application/json" } };
+  if (body) opts.body = JSON.stringify(body);
+  var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  if (ctrl) {
+    opts.signal = ctrl.signal;
+    setTimeout(function() { ctrl.abort(); }, 20000);
+  }
+  return fetch(url, opts).then(function(r) {
+    if (r.status === 401) {
+      toast("API Key 无效，请重新登录", 0);
+      localStorage.removeItem("up_key");
+      localStorage.removeItem("up_pass");
+      setTimeout(function() { location.reload(); }, 1500);
+      return { ok: false, error: "Unauthorized" };
+    }
+    return r.json();
+  }).catch(function(e) { return { ok: false, error: e.name === "AbortError" ? "请求超时" : e.message }; });
+}
 
 // 用户门户 API 调用（POST JSON，带 key + key_pass）
 function portal(method, path, body) {
