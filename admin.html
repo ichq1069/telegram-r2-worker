@@ -871,10 +871,6 @@ https://example.com/b.jpg"></textarea></div>
           <div style="display:flex;gap:8px;align-items:center">
             <input class="inp" style="width:220px" id="keyName" placeholder="用途说明，如：我的网站">
             <input class="inp" type="date" id="keyExpires" title="到期日期（留空 = 永久有效）">
-            <select class="inp" id="keyLevel" title="密钥级别：决定可访问内容级别（级别对等，默认 pt）">
-              <option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option>
-            </select>
-            <input class="inp" style="width:180px" id="keyPass" type="password" placeholder="登录密码 key-pass（可选）" title="用户门户 /user 登录密码，可选；设置后用户可用密钥+此密码登录查看统计与生成接口">
             <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;max-width:200px" id="keyLevelGroup">
               <span style="font-size:11px;color:var(--text-secondary);margin-right:4px">可访问级别:</span>
               <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
@@ -893,9 +889,223 @@ https://example.com/b.jpg"></textarea></div>
                 <input type="checkbox" id="keyLevelAll" value="*"> * 全部
               </label>
             </div>
+            <input class="inp" style="width:180px" id="keyPass" type="password" placeholder="登录密码 key-pass（可选）" title="用户门户 /user 登录密码，可选；设置后用户可用密钥+此密码登录查看统计与生成接口">
+            <div style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;max-width:280px" id="keyScopesGroup">
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="files:read" checked> files:read
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="files:write"> files:write
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="files:delete"> files:delete
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="random"> random
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)">
+                <input type="checkbox" name="keyScope" value="user_files"> user_files
+              </label>
+              <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--bg)" title="全部权限">
+                <input type="checkbox" id="keyScopeAll" value="*"> * 全部
+              </label>
+            </div>
             <button class="btn btn-primary" id="createKeyBtn">+ 生成密钥</button>
           </div>
         </div>
+        <div style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px">第三方程序用此密钥调用公开 JSON 接口，密钥级别决定可获取内容级别（pt&lt;vip&lt;svip&lt;vvip，级别对等，低级别不会输出高级别内容）：
+          <code>GET /api/v1/files?api_key=密钥&tags=风景,美女&type=photo&limit=20</code> ·
+          <code>GET /api/v1/random?api_key=密钥&tags=风景&count=1</code>（随机取图）·
+          <code>GET /gallery?api_key=密钥</code>（画廊瀑布流页）·
+          <code>POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</code>（multipart 上传文件字段名为 file，落库见下方说明，上限 19MB）
+          <br>给普通用户开通自助面板：勾选「登录密码 key-pass」填入密码，把 <code>/user</code> 地址 + 密钥 + 密码发给用户，对方即可登录查看该密钥的调用统计并自助生成接口链接。</div>
+        <div id="keyList"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>公开接口限流 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">防止密钥被滥用打爆 Worker 免费额度</span></div>
+        <div class="fb">
+          <div class="fr" style="flex:1;margin:0"><label>每分钟每个密钥最多请求数</label><input class="inp" type="number" id="rlLimit" value="60" min="1" style="max-width:160px"></div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;white-space:nowrap"><input type="checkbox" id="rlEnabled"> 启用限流</label>
+          <button class="btn btn-primary" id="rlSaveBtn">保存</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">超过限制的请求返回 429。关闭时所有密钥不限流。</div>
+      </div>
+    </div>
+
+    <!-- 密钥用户（注册用户管理） -->
+    <div class="panel" id="panel-keyusers">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>密钥用户管理 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">通过兑换码在 /user 自助注册的账号，可直接按用户名管理</span></div>
+        <div style="font-size:12px;color:var(--text-secondary);margin:0 0 12px">注册用户默认级别来自其兑换码。编辑/停用/删除操作与密钥管理一致（改名 → 在「密钥管理」页编辑）。</div>
+        <div class="tbl-wrap"><table><thead><tr><th>用户名</th><th>密钥</th><th>级别</th><th>状态</th><th>累计调用</th><th>近1小时</th><th>到期</th><th>注册时间</th><th>最近调用</th><th>操作</th></tr></thead><tbody id="keyUserList"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- 兑换码 -->
+    <div class="panel" id="panel-redeem">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>生成兑换码 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">注册码→新用户注册；权限升级码→提升已有用户级别；延时码→延长已有用户到期时间</span></div>
+        <div class="fbs" style="flex-wrap:wrap">
+          <div class="fr" style="flex:0 0 auto"><label>类型</label><select class="inp" id="rdType"><option value="register">注册码</option><option value="upgrade">权限升级码</option><option value="extend">延时码</option></select></div>
+          <div class="fr" style="flex:0 0 auto"><label>数量 (1-200)</label><input class="inp" type="number" id="rdCount" value="1" min="1" max="200" style="width:90px"></div>
+          <div class="fr" style="flex:0 0 auto" id="rdLevelWrap"><label>级别（兑换后的密钥级别）</label><select class="inp" id="rdLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
+          <div class="fr" style="flex:0 0 auto" id="rdExtendWrap"><label>延长天数（累加到到期时间）</label><input class="inp" type="number" id="rdExtendDays" value="30" min="1" max="3650" style="width:90px"></div>
+          <div class="fr" style="flex:0 0 auto"><label>可用次数 / 码</label><input class="inp" type="number" id="rdQuota" value="1" min="1" style="width:90px"></div>
+          <div class="fr" style="flex:0 0 auto"><label>有效天数（0=永久）</label><input class="inp" type="number" id="rdDays" value="30" min="0" style="width:90px"></div>
+          <div class="fr" style="flex:1;min-width:200px"><label>备注</label><input class="inp" id="rdNote" placeholder="发给谁 / 用途"></div>
+          <button class="btn btn-primary" id="rdGenBtn" style="align-self:flex-end">+ 生成</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>兑换码列表</div>
+        <div class="tbl-wrap"><table><thead><tr><th>兑换码</th><th>类型</th><th>参数</th><th>已用/总量</th><th>状态</th><th>到期</th><th>备注</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="redeemList"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- 调用日志 -->
+    <div class="panel" id="panel-logs">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>调用统计 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">密钥调用公开接口的次数（最近 1h / 6h / 24h）</span></div>
+        <div class="stats-grid" id="callStatsGrid"></div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>调用日志</div>
+        <div class="fbs" style="flex-wrap:wrap;margin-bottom:10px">
+          <input class="inp" id="clKw" placeholder="搜索密钥/路径/IP" style="flex:1;min-width:200px">
+          <select class="inp" id="clKeySel"><option value="">全部密钥</option></select>
+          <button class="btn btn-primary" id="clSearchBtn">查询</button>
+        </div>
+        <div class="tbl-wrap"><table><thead><tr><th>ID</th><th>密钥</th><th>方法</th><th>路径</th><th>IP</th><th>状态</th><th>时间</th></tr></thead><tbody id="callLogList"></tbody></table></div>
+        <div class="fb" style="margin-top:10px">
+          <button class="btn btn-ghost btn-sm" id="clPrev">上一页</button>
+          <span style="font-size:12px;color:var(--text-secondary)" id="clPageInfo">-</span>
+          <button class="btn btn-ghost btn-sm" id="clNext">下一页</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 用户 -->
+    <div class="panel" id="panel-users">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>聊天交互统计 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">用户与 bot 的互动行为（部署后开始累计）</span></div>
+        <div class="stats-grid" id="userInteractGrid"></div>
+        <div class="tbl-wrap" style="margin-top:12px">
+          <table><thead><tr><th>用户ID</th><th>用户名</th><th>昵称</th><th>消息</th><th>命令</th><th>文件</th><th>Inline 查询</th><th>按钮点击</th><th>最近活跃</th></tr></thead><tbody id="userInteractList"></tbody></table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>用户统计 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">按文件维度聚合</span></div>
+        <div class="tbl-wrap"><table><thead><tr><th>用户ID</th><th>用户名</th><th>昵称</th><th>文件数</th><th>总大小</th><th>最近活跃</th></tr></thead><tbody id="userList"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- 轮播设置 -->
+    <div class="panel" id="panel-show">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>轮播展示页设置 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">控制 /show 页面（共享库展示）</span></div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+          <div class="fr"><label>展示页开关</label><select class="inp" id="scEnabled"><option value="1">开启</option><option value="0">关闭</option></select></div>
+          <div class="fr"><label>自动切换秒数 (1-60)</label><input class="inp" type="number" id="scInterval" value="5" min="1" max="60"></div>
+          <div class="fr"><label>每次拉取数量 (1-50)</label><input class="inp" type="number" id="scCount" value="20" min="1" max="50"></div>
+          <div class="fr"><label>类型</label><select class="inp" id="scType"><option value="">全部</option><option value="photo">图片</option><option value="video">视频</option><option value="document">文档</option><option value="audio">音频</option></select></div>
+        <div class="fr"><label>标签筛选 (逗号分隔)</label><input class="inp" id="scTags" placeholder="风景,美女"></div>
+          <div class="fr"><label>排序</label><select class="inp" id="scShuffle"><option value="1">随机</option><option value="0">按ID倒序</option></select></div>
+        </div>
+        <div class="fr" style="margin-top:8px"><label>节目表（每个节目自带图片规则：固定图片 / 每日随机换图，支持按标签/类型/来源过滤 + 周期选择）</label>
+          <div id="scheduleRows" style="display:flex;flex-direction:column;gap:8px"></div>
+          <div class="fb" style="margin-top:8px">
+            <button class="btn btn-ghost btn-sm" id="scAddProg">+ 添加节目</button>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" id="scAutoAdvance" checked> 自动换节目（到点自动加载新节目内容，无需等用户点击）</label>
+          </div>
+        </div>
+        <div class="fb" style="margin:12px 0">
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" id="scShowTitle" checked> 显示标题</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" id="scShowTags" checked> 显示标签</label>
+          <label style="display:flex;align-items:center;gap:5px;font-size:13px;cursor:pointer"><input type="checkbox" id="scShowCounter" checked> 显示序号</label>
+        </div>
+        <div class="fr"><label>统计代码（百度统计 / Google Analytics / 自定义脚本，注入到展示页底部）</label><textarea class="inp" id="scStats" style="min-height:90px;font-family:monospace;font-size:12px" placeholder="&lt;script&gt; 统计代码 &lt;/script&gt;"></textarea></div>
+        <div class="fb" style="margin-top:12px">
+          <button class="btn btn-primary" id="scSaveBtn">保存设置</button>
+          <button class="btn btn-ghost" id="scOpenBtn">打开展示页</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 节目组选图弹窗（已废弃，图片直接在节目内配置） -->
+    <div id="gpPickBg" style="display:none"></div>
+
+    <!-- 命令 -->
+    <div class="panel" id="panel-cmds">
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title"><span class="dot"></span>机器人命令</div>
+          <button class="btn btn-primary" id="addCmdBtn">+ 添加命令</button>
+        </div>
+        <div id="cmdList"></div>
+      </div>
+    </div>
+
+    <!-- Bot API -->
+    <div class="panel" id="panel-api">
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>Bot API 测试</div>
+
+        <!-- API 模式切换 -->
+        <div class="fr">
+          <label>API 模式</label>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:4px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="apiMode" value="proxy" checked> Worker 代理
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+              <input type="radio" name="apiMode" value="official"> 官方 API
+            </label>
+          </div>
+        </div>
+
+        <!-- Token 输入 (官方模式) -->
+        <div class="fr" id="tokenRow" style="display:none">
+          <label>Bot Token</label>
+          <input class="inp" id="tgToken" type="password" placeholder="123456:ABC-DEF..." autocomplete="off">
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">Token 仅保存在浏览器本地，不会上传到服务器</div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="fr">
+            <label>请求方法</label>
+            <select class="inp" id="apiMethod">
+              <optgroup label="发送">
+                <option>sendMessage</option>
+                <option>sendPhoto</option>
+                <option>sendVideo</option>
+                <option>sendDocument</option>
+                <option>sendMediaGroup</option>
+                <option>sendChatAction</option>
+                <option>copyMessage</option>
+                <option>forwardMessage</option>
+              </optgroup>
+              <optgroup label="查询">
+                <option>getMe</option>
+                <option>getChat</option>
+                <option>getChatMemberCount</option>
+                <option>getFile</option>
+                <option>getWebhookInfo</option>
+                <option>getUpdates</option>
+              </optgroup>
+              <optgroup label="管理">
+                <option>setWebhook</option>
+                <option>deleteMessage</option>
+                <option>editMessageText</option>
+                <option>editMessageCaption</option>
+                <option>pinChatMessage</option>
+                <option>unpinChatMessage</option>
+                <option>banChatMember</option>
+                <option>unbanChatMember</option>
+              </optgroup>
+              <optgroup label="Inline 搜图">
+                <option>answerInlineQuery</option>
+              </optgroup>
+            </select>
           </div>
           <div></div>
         </div>
