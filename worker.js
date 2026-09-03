@@ -17,7 +17,7 @@ import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDe
 import { handleTgFileRedirect, handleFiles, handleFile, getProxyMode, getBotUsername, handleAdminGetProxyMode, handleAdminSaveProxyMode, handleAdminGetProxyOnly, handleAdminSaveProxyOnly, handleStats } from './src/api.js';
 import { handleAdminGetNotify, handleAdminSaveNotify, handleAdminNotifyTest, handleAdminGetRateLimit, handleAdminSaveRateLimit } from './src/notify.js';
 
-import { fireWebhook, handleAdminGetWebhook, handleAdminSaveWebhook, handleAdminWebhookTest, handleAdminPoolTags, handleAdminPoolBatch, handleAdminPoolBatchDelete, handleSetFilePoolStatus, handleAdminGetAutoPoolTags, handleAdminSaveAutoPoolTags, handleAdminPoolFromTg, handleAdminPoolDelete, handleAdminPrivatePoolList, handleAdminPrivatePoolFromTg, handleByChat, handleByUser, handleByDate, handleSearch, handleLatest, handleStream, handleDeleteFile, handleTrashList, handleTrashRestore, handleR2Inspect, handleR2Cleanup, handleListBots, handleAddBot, handleRemoveBot, handleGetConfig, handleSetConfig, handleBotGetMeApi } from './src/events.js';
+import { fireWebhook, handleAdminGetWebhook, handleAdminSaveWebhook, handleAdminWebhookTest, handleAdminPoolTags, handleAdminPoolBatch, handleAdminPoolBatchDelete, handleSetFilePoolStatus, handleAdminGetAutoPoolTags, handleAdminSaveAutoPoolTags, handleAdminPoolFromTg, handleAdminPoolDelete, handleAdminPrivatePoolList, handleAdminPrivatePoolFromTg, handleByChat, handleByUser, handleByDate, handleSearch, handleLatest, handleStream, handleDeleteFile, handleTrashList, handleTrashRestore, handleR2Inspect, handleR2Cleanup, handleR2List, handleR2Delete, handleListBots, handleAddBot, handleRemoveBot, handleGetConfig, handleSetConfig, handleBotGetMeApi } from './src/events.js';
 import { handleRetry, handleUnsavedList, handleUnsavedRetry, retryUnsavedCron, handleProcessingStatus, handleDedupStats, handleDedupGroups, handleDedupRow, handleDedupRows, compressCronBatch, sendDailyReport, storageMaintenanceCron, handleCompressStats, handleCompressRun, runDedupBatch, handleDedup, handleAdminCommands, handleAdminAddCommand, handleAdminUpdateCommand, handleAdminDeleteCommand } from './src/admin.js';
 import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebhookFix, handleAdminWebhookLogs, handlePollUpdates, handlePollEndpoint, processShareLinkAsync, processFileAsync } from './src/webhook.js';
 
@@ -163,6 +163,8 @@ export default {
     if (m === 'POST' && p === '/admin/api/trash/restore') return isAdmin ? handleTrashRestore(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/r2/inspect') return isAdmin ? handleR2Inspect(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/r2/cleanup') return isAdmin ? handleR2Cleanup(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/r2/list') return isAdmin ? handleR2List(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/r2/delete') return isAdmin ? handleR2Delete(request, env) : json({ok:false,error:'Unauthorized'},401);
     // Manual poll trigger (fallback while cron is being set up)
     if (m === 'GET' && p === '/admin/api/poll') return isAdmin ? handlePollEndpoint(env) : json({ok:false,error:'Unauthorized'},401);
     // Tag management

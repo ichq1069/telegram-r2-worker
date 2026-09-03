@@ -480,6 +480,78 @@ export async function collectReferencedKeys(db) {
   return refs;
 }
 
+// R2 文件浏览 / 删除（对象级管理）
+// - 仅允许删除"孤儿"对象（D1 无引用且非站点静态页/备份），避免删到正被引用的文件
+// - 列表数据单次 R2 list 返回，引用标注基于 D1 引用集（20s 缓存），避免每次刷新全表扫
+const R2_STATIC_PAGE_KEYS = ['admin.html', 'admin-guide.html', 'user.html', 'user-manage.html', 'docs.js'];
+let r2refCache = { at: 0, refs: null };
+
+async function r2Refs(env) {
+  const now = Date.now();
+  if (r2refCache.refs && now - r2refCache.at < 20000) return r2refCache.refs;
+  const refs = await collectReferencedKeys(env.D1_DB);
+  r2refCache = { at: now, refs };
+  return refs;
+}
+
+function r2KeyState(key, refs) {
+  if (R2_STATIC_PAGE_KEYS.indexOf(key) !== -1) return 'page';
+  if (key.indexOf('backups/') === 0) return 'backup';
+  if (refs && refs.has(key)) return 'used';
+  return 'orphan';
+}
+
+export async function handleR2List(request, env) {
+  try {
+    const u = new URL(request.url);
+    const limit = clampInt(u.searchParams.get('limit') || '200', 200, 10, 1000);
+    const prefix = u.searchParams.get('prefix') || '';
+    const cursor = u.searchParams.get('cursor') || undefined;
+    const opts = { limit: limit, prefix: prefix };
+    if (cursor) opts.cursor = cursor;
+    const list = await env.R2_BUCKET.list(opts);
+    const refs = await r2Refs(env);
+    const objects = (list.objects || []).map(function(o) {
+      return {
+        key: o.key,
+        size: o.size,
+        uploaded: o.uploaded,
+        state: r2KeyState(o.key, refs),
+        public_url: env.R2_PUBLIC_URL ? env.R2_PUBLIC_URL + '/' + o.key : ''
+      };
+    });
+    return json({ ok: true, data: {
+      prefix: prefix,
+      truncated: !!list.truncated,
+      cursor: list.truncated ? list.cursor : null,
+      objects_count: objects.length,
+      objects: objects,
+      refs_count: refs.size,
+      public_base: env.R2_PUBLIC_URL || '',
+      static_pages: R2_STATIC_PAGE_KEYS
+    } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+export async function handleR2Delete(request, env) {
+  try {
+    const body = await request.json();
+    const keys = Array.isArray(body && body.keys) ? body.keys.slice(0, 100) : [];
+    if (!keys.length) return json({ ok: false, error: 'No keys' }, 400);
+    const refs = await r2Refs(env);
+    const deleted = [];
+    const refused = [];
+    for (const k of keys) {
+      const st = r2KeyState(k, refs);
+      if (st !== 'orphan') { refused.push({ key: k, state: st }); continue; }
+      try { await env.R2_BUCKET.delete(k); deleted.push(k); }
+      catch (e) { refused.push({ key: k, error: e.message }); }
+    }
+    r2refCache = { at: 0, refs: null };
+    return json({ ok: true, data: { deleted: deleted, refused: refused } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 // R2 orphan inspection: walk the bucket, list objects with no D1 reference.
 // Read-only. max= limits how many objects are scanned per call (CPU budget).
 export async function handleR2Inspect(request, env) {

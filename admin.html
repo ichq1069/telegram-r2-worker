@@ -1134,6 +1134,37 @@ https://example.com/b.jpg"></textarea></div>
       </div>
     </div>
 
+    <!-- R2 文件 -->
+    <div class="panel" id="panel-r2files">
+      <div class="card">
+        <div class="fbs" style="flex-wrap:wrap;gap:10px">
+          <div class="card-title" style="margin:0"><span class="dot" style="background:#f59e0b"></span>R2 文件 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">按 R2 对象浏览（年月目录），单次读取；标注引用状态，仅孤儿对象可删除</span></div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" id="r2fOnlyOrphan">只看孤儿</button>
+            <button class="btn btn-ghost btn-sm" id="r2fRefresh">刷新</button>
+          </div>
+        </div>
+        <div class="fbs" style="flex-wrap:wrap;gap:10px;margin-top:4px">
+          <input class="inp" id="r2fPrefix" placeholder="目录/前缀过滤，如 2026/09 或 backups/" style="min-width:240px;flex:1">
+          <button class="btn btn-primary btn-sm" id="r2fApply">进入</button>
+          <span style="font-size:12px;color:var(--text-secondary)" id="r2fPath">前缀: (根目录)</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin:8px 0" id="r2fInfo"></div>
+        <div id="r2fBody" style="font-size:13px">点击「刷新」加载 R2 对象列表。</div>
+        <div class="fbs" style="flex-wrap:wrap;gap:10px;margin-top:12px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" id="r2fSelAll">全选</button>
+            <button class="btn btn-danger btn-sm" id="r2fDelSel" style="display:none">删除选中（仅孤儿）</button>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" id="r2fPrev" style="display:none">← 上一页</button>
+            <button class="btn btn-ghost btn-sm" id="r2fNext" style="display:none">下一页 →</button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:10px;border-top:1px solid #f1f5f9;padding-top:8px">「站点静态页」（admin/user 等页面）与「备份」（backups/）受保护不可删；「已引用」对象被文件记录使用，请在 Tele文件/回收站 中删除对应记录后再清理对象。若要全量清孤儿，可回到概览页 R2 对象存储的「清理孤儿」。</div>
+      </div>
+    </div>
+
     <!-- 运维 -->
     <div class="panel" id="panel-ops">
       <div class="card">
@@ -1349,7 +1380,7 @@ function toast(msg, ok) {
 }
 
 // 初始化
-var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","ops"];
+var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","r2files","ops"];
 function switchTab(name) {
   var panels = document.querySelectorAll(".panel");
   var tabs = document.querySelectorAll("#tabBar .tab");
@@ -1378,6 +1409,7 @@ function switchTab(name) {
   if (name === "show") loadShowConfig();
   if (name === "cmds") loadCmds();
   if (name === "ops") loadOpsPage();
+  if (name === "r2files") loadR2Files();
   window.scrollTo(0, 0);
 }
 
@@ -1389,7 +1421,7 @@ function init() {
     { label: "素材库", items: [["pool","共享库","📚"],["private","私密库","🔒"],["quicktag","快速打标","⚡"],["tags","标签库","🏷"]] },
     { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"],["keyusers","密钥用户","👤"],["redeem","兑换码","🎟"],["logs","调用日志","📈"]] },
     { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"]] },
-    { label: "系统", items: [["ops","运维工具","🛠"]] }
+    { label: "系统", items: [["r2files","R2文件","🗄"],["ops","运维工具","🛠"]] }
   ];
   var tabBar = document.getElementById("tabBar");
   var html = "";
@@ -6186,6 +6218,163 @@ function fmtSize(b) {
   var i = Math.floor(Math.log(b) / Math.log(k));
   return (b / Math.pow(k, i)).toFixed(1) + " " + s[i];
 }
+
+// ---------- R2 文件浏览 ----------
+var r2f = { prefix: "", page: 0, rows: [], nextCursor: null, back: [], only: false, sel: {} };
+
+function r2fBootstrap() {
+  if (r2f._bound) return;
+  r2f._bound = true;
+  document.getElementById("r2fRefresh").addEventListener("click", function() {
+    r2f.nextCursor = null; r2f.back = []; r2f.page = 0; r2f.sel = {};
+    loadR2Files();
+  });
+  document.getElementById("r2fApply").addEventListener("click", function() {
+    r2f.prefix = (document.getElementById("r2fPrefix").value || "").trim();
+    r2f.page = 0; r2f.nextCursor = null; r2f.back = []; r2f.sel = {};
+    loadR2Files();
+  });
+  document.getElementById("r2fPrefix").addEventListener("keydown", function(e) { if (e.key === "Enter") document.getElementById("r2fApply").click(); });
+  document.getElementById("r2fOnlyOrphan").addEventListener("click", function() {
+    r2f.only = !r2f.only;
+    this.classList.toggle("on", r2f.only);
+    renderR2Table();
+  });
+  document.getElementById("r2fNext").addEventListener("click", function() {
+    if (!r2f.nextCursor) return;
+    r2f.back.push({ prefix: r2f.prefix, page: r2f.page });
+    r2f.page++; r2f.sel = {};
+    loadR2Files(r2f.nextCursor);
+  });
+  document.getElementById("r2fPrev").addEventListener("click", function() {
+    var b = r2f.back.pop();
+    if (!b) return;
+    r2f.page--; r2f.sel = {};
+    r2f.prefix = b.prefix;
+    loadR2Files(null);
+  });
+  document.getElementById("r2fSelAll").addEventListener("click", function() {
+    var on = false;
+    for (var i = 0; i < r2f.rows.length; i++) if (r2f.rows[i].state === "orphan" && !r2f.sel[r2f.rows[i].key]) { on = true; break; }
+    r2f.sel = {};
+    if (on) for (var j = 0; j < r2f.rows.length; j++) if (r2f.rows[j].state === "orphan") r2f.sel[r2f.rows[j].key] = 1;
+    renderR2Table();
+  });
+  document.getElementById("r2fDelSel").addEventListener("click", function() { delR2Selected(); });
+}
+
+function r2fCopy(k, pub) {
+  var txt = pub || (OR + "/r2/" + encodeURI(k).replace(/%2F/g, "/"));
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(function() { toast("已复制链接", 1); });
+  } else {
+    var ta = document.createElement("textarea");
+    ta.value = txt; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); toast("已复制链接", 1); } catch (e) { toast("复制失败", 0); }
+    ta.remove();
+  }
+}
+
+async function loadR2Files(cursor) {
+  r2fBootstrap();
+  document.getElementById("r2fBody").innerHTML = '<div style="padding:20px;color:var(--text-secondary)">加载中...</div>';
+  var q = "/admin/api/r2/list?limit=300" + (r2f.prefix ? "&prefix=" + encodeURIComponent(r2f.prefix) : "") + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
+  var r = await api("GET", q);
+  if (!r.ok) { document.getElementById("r2fBody").innerHTML = '<div style="padding:20px;color:var(--danger)">' + escStr(r.error || "加载失败") + "</div>"; return; }
+  var d = r.data || {};
+  r2f.nextCursor = d.cursor || null;
+  r2f.rows = d.objects || [];
+  document.getElementById("r2fPath").textContent = "前缀: " + (r2f.prefix || "(根目录)");
+  document.getElementById("r2fInfo").textContent = "本页 " + r2f.rows.length + " 个对象" + (d.truncated ? "（未列完，可下一页）" : "（已到尾页）") + " · D1 引用 " + d.refs_count + " 键";
+  document.getElementById("r2fNext").style.display = (d.truncated && d.cursor) ? "" : "none";
+  document.getElementById("r2fPrev").style.display = r2f.back.length ? "" : "none";
+  renderR2Table();
+}
+
+function renderR2Table() {
+  var rows = [];
+  for (var i = 0; i < r2f.rows.length; i++) if (!r2f.only || r2f.rows[i].state === "orphan") rows.push(r2f.rows[i]);
+  var body = document.getElementById("r2fBody");
+  var delBtn = document.getElementById("r2fDelSel");
+  var hasOrphan = false;
+  for (var k = 0; k < rows.length; k++) if (rows[k].state === "orphan") { hasOrphan = true; break; }
+  if (delBtn) delBtn.style.display = hasOrphan ? "" : "none";
+
+  if (!rows.length) {
+    body.innerHTML = '<div style="padding:20px;color:var(--text-secondary)">' + (r2f.only ? "当前范围没有孤儿对象。" : "当前范围没有对象。") + "</div>";
+    return;
+  }
+  var stMap = { page: ["站点静态页", "#64748b"], backup: ["备份", "#64748b"], used: ["已引用", "#6366f1"], orphan: ["孤儿", "#ef4444"] };
+  var h = '<div class="tbl-wrap"><table><thead><tr style="background:#f8fafc">' +
+    '<th style="padding:8px 10px;text-align:left;width:34px"></th>' +
+    '<th style="padding:8px 10px;text-align:left">对象 Key</th>' +
+    '<th style="padding:8px 10px;text-align:left;width:90px">大小</th>' +
+    '<th style="padding:8px 10px;text-align:left;width:170px">上传时间</th>' +
+    '<th style="padding:8px 10px;text-align:left;width:100px">状态</th>' +
+    '<th style="padding:8px 10px;text-align:left;width:160px">操作</th></tr></thead><tbody>';
+  for (var n = 0; n < rows.length; n++) {
+    var o = rows[n];
+    var orphan = o.state === "orphan";
+    var st = stMap[o.state] || ["未知", "#64748b"];
+    var checked = r2f.sel[o.key] ? " checked" : "";
+    h += '<tr style="border-top:1px solid #f1f5f9">' +
+      '<td style="padding:6px 10px">' + (orphan ? '<input type="checkbox" class="r2f-chk" data-key="' + escStr(o.key) + '"' + checked + '>' : "") + "</td>" +
+      '<td style="padding:6px 10px;word-break:break-all;font-family:monospace;font-size:12px">' + escStr(o.key) + "</td>" +
+      "<td style=\"padding:6px 10px\">" + fmtSize(o.size) + "</td>" +
+      '<td style="padding:6px 10px">' + (o.uploaded ? new Date(o.uploaded).toLocaleString() : "-") + "</td>" +
+      '<td style="padding:6px 10px;color:' + st[1] + ';font-weight:600">' + st[0] + "</td>" +
+      '<td style="padding:6px 10px">' +
+      (o.public_url ? '<button class="btn btn-ghost btn-sm" data-act="view" data-key="' + escStr(o.key) + '" data-url="' + escStr(o.public_url) + '">预览</button>' : "") +
+      '<button class="btn btn-ghost btn-sm" data-act="copy" data-key="' + escStr(o.key) + '" data-url="' + escStr(o.public_url || "") + '">复制链接</button>' +
+      "</td></tr>";
+  }
+  h += "</tbody></table></div>";
+  body.innerHTML = h;
+  var chks = body.querySelectorAll(".r2f-chk");
+  for (var c = 0; c < chks.length; c++) {
+    chks[c].addEventListener("change", function() {
+      if (this.checked) r2f.sel[this.getAttribute("data-key")] = 1;
+      else delete r2f.sel[this.getAttribute("data-key")];
+      updateR2DelBtn();
+    });
+  }
+  var acts = body.querySelectorAll("button[data-act]");
+  for (var a = 0; a < acts.length; a++) {
+    acts[a].addEventListener("click", function() {
+      var act = this.getAttribute("data-act");
+      var key = this.getAttribute("data-key");
+      var url = this.getAttribute("data-url");
+      if (act === "view") { if (url) window.open(url, "_blank"); else toast("该对象无公开 URL", 0); }
+      else r2fCopy(key, url);
+    });
+  }
+  updateR2DelBtn();
+}
+
+function updateR2DelBtn() {
+  var n = 0;
+  for (var k in r2f.sel) if (r2f.sel[k]) n++;
+  var btn = document.getElementById("r2fDelSel");
+  if (btn) btn.textContent = n ? "删除选中（" + n + "）" : "删除选中（仅孤儿）";
+}
+
+async function delR2Selected() {
+  var keys = [];
+  for (var k in r2f.sel) if (r2f.sel[k]) keys.push(k);
+  if (!keys.length) return;
+  if (!confirm("确定删除以下孤儿对象（不可恢复）？\n\n" + keys.slice(0, 5).join("\n") + (keys.length > 5 ? "\n… 共 " + keys.length + " 个" : ""))) return;
+  var r = await api("POST", "/admin/api/r2/delete", { keys: keys });
+  if (r.ok) {
+    var refused = (r.data && r.data.refused) || [];
+    toast((r.data && r.data.deleted && r.data.deleted.length ? "已删除 " + r.data.deleted.length + " 个" : "无删除") + (refused.length ? "，" + refused.length + " 个拒绝（受保护/被引用）" : ""), r.data && r.data.deleted && r.data.deleted.length ? 1 : 0);
+  } else {
+    toast("删除失败: " + (r.error || ""), 0);
+  }
+  r2f.sel = {};
+  r2f.nextCursor = null; r2f.back = []; r2f.page = 0;
+  loadR2Files();
+}
+r2fBootstrap();
 })();
 </script>
 </body>
