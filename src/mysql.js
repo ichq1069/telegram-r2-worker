@@ -136,6 +136,46 @@ const MYSQL_TABLES = [
     inline_queries INTEGER DEFAULT 0,
     callback_clicks INTEGER DEFAULT 0,
     last_active_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS bot_commands (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    command TEXT UNIQUE,
+    response TEXT,
+    description TEXT,
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT,
+    menu TEXT DEFAULT ''
+  )`,
+  `CREATE TABLE IF NOT EXISTS bot_config (
+    \`key\` TEXT PRIMARY KEY,
+    value TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS redeem_codes (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    code TEXT UNIQUE NOT NULL,
+    level TEXT DEFAULT 'pt',
+    quota INTEGER DEFAULT 1,
+    used_count INTEGER DEFAULT 0,
+    note TEXT DEFAULT '',
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT,
+    expires_at TEXT,
+    type TEXT DEFAULT 'register',
+    extend_days INTEGER DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS show_groups (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    name TEXT NOT NULL,
+    images TEXT DEFAULT '',
+    created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    color TEXT DEFAULT '',
+    category TEXT DEFAULT '',
+    sort_order INTEGER DEFAULT 0,
+    created_at TEXT
   )`
 ];
 

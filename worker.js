@@ -679,10 +679,54 @@ async function handleDbSync(env) {
 async function handleDbFullSync(env) {
   try {
     const syncStart = Date.now();
-    let counts = { files: 0, pool: 0, uploads: 0, settings: 0, api_keys: 0, known_chats: 0 };
+    let counts = { files: 0, pool: 0, uploads: 0, settings: 0, api_keys: 0, known_chats: 0, bot_commands: 0, bot_config: 0, redeem_codes: 0, show_groups: 0, tags: 0, user_stats: 0 };
     let errors = [];
     
     if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' }, 500);
+    
+    // 同步 files 表
+    try {
+      const d1Files = await env.D1_DB.prepare("SELECT id, storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at FROM files WHERE deleted_at IS NULL").all();
+      for (const f of (d1Files.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO files (id, storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE storage_key=VALUES(storage_key), r2_url=VALUES(r2_url), processing_state=VALUES(processing_state), deleted_at=VALUES(deleted_at)", [
+            f.id, f.storage_key, f.r2_url, f.chat_id, f.chat_title, f.chat_type, f.chat_username,
+            f.user_id, f.username, f.full_name, f.telegram_file_id, f.file_name, f.file_size,
+            f.file_type, f.mime_type, f.width, f.height, f.caption, f.message_id, f.md5_hash,
+            f.processing_state, f.created_at, f.tags, f.group_ref, f.media_group_id, f.level, f.is_private, f.deleted_at
+          ]);
+          counts.files++;
+        } catch (e) { errors.push('files#' + f.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('files: ' + e.message); }
+    
+    // 同步 random_pool 表
+    try {
+      const d1Pool = await env.D1_DB.prepare("SELECT id, url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private FROM random_pool").all();
+      for (const p of (d1Pool.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO random_pool (id, url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), enabled=VALUES(enabled), level=VALUES(level), is_private=VALUES(is_private)", [
+            p.id, p.url, p.thumb_url, p.title, p.tags, p.file_type, p.width, p.height,
+            p.file_size, p.source, p.tg_file_id, p.enabled, p.created_at, p.level, p.is_private
+          ]);
+          counts.pool++;
+        } catch (e) { errors.push('pool#' + p.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('pool: ' + e.message); }
+    
+    // 同步 user_uploads 表
+    try {
+      const d1Uploads = await env.D1_DB.prepare("SELECT id, user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at, deleted_at FROM user_uploads WHERE deleted_at IS NULL").all();
+      for (const u of (d1Uploads.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO user_uploads (id, user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), deleted_at=VALUES(deleted_at)", [
+            u.id, u.user_id, u.url, u.thumb_url, u.file_name, u.file_size, u.file_type,
+            u.width, u.height, u.tags, u.created_at, u.deleted_at
+          ]);
+          counts.uploads++;
+        } catch (e) { errors.push('uploads#' + u.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('uploads: ' + e.message); }
     
     // 同步 settings 表
     try {
@@ -720,6 +764,82 @@ async function handleDbFullSync(env) {
         } catch (e) { errors.push('known_chats#' + c.chat_id + ': ' + e.message); }
       }
     } catch (e) { errors.push('known_chats: ' + e.message); }
+    
+    // 同步 bot_commands 表
+    try {
+      const cmds = await env.D1_DB.prepare("SELECT id, command, response, description, enabled, created_at, menu FROM bot_commands").all();
+      for (const cmd of (cmds.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO bot_commands (id, command, response, description, enabled, created_at, menu) VALUES (?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE command=VALUES(command), response=VALUES(response), description=VALUES(description), enabled=VALUES(enabled), menu=VALUES(menu)", [
+            cmd.id, cmd.command, cmd.response, cmd.description, cmd.enabled, cmd.created_at, cmd.menu
+          ]);
+          counts.bot_commands++;
+        } catch (e) { errors.push('bot_commands#' + cmd.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('bot_commands: ' + e.message); }
+    
+    // 同步 bot_config 表
+    try {
+      const configs = await env.D1_DB.prepare("SELECT key, value FROM bot_config").all();
+      for (const c of (configs.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO bot_config (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)", [c.key, c.value]);
+          counts.bot_config++;
+        } catch (e) { errors.push('bot_config#' + c.key + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('bot_config: ' + e.message); }
+    
+    // 同步 redeem_codes 表
+    try {
+      const codes = await env.D1_DB.prepare("SELECT id, code, level, quota, used_count, note, enabled, created_at, expires_at, type, extend_days FROM redeem_codes").all();
+      for (const c of (codes.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO redeem_codes (id, code, level, quota, used_count, note, enabled, created_at, expires_at, type, extend_days) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE code=VALUES(code), level=VALUES(level), quota=VALUES(quota), enabled=VALUES(enabled), type=VALUES(type)", [
+            c.id, c.code, c.level, c.quota, c.used_count, c.note, c.enabled, c.created_at, c.expires_at, c.type, c.extend_days
+          ]);
+          counts.redeem_codes++;
+        } catch (e) { errors.push('redeem_codes#' + c.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('redeem_codes: ' + e.message); }
+    
+    // 同步 show_groups 表
+    try {
+      const groups = await env.D1_DB.prepare("SELECT id, name, images, created_at FROM show_groups").all();
+      for (const g of (groups.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO show_groups (id, name, images, created_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), images=VALUES(images)", [
+            g.id, g.name, g.images, g.created_at
+          ]);
+          counts.show_groups++;
+        } catch (e) { errors.push('show_groups#' + g.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('show_groups: ' + e.message); }
+    
+    // 同步 tags 表
+    try {
+      const tags = await env.D1_DB.prepare("SELECT id, name, color, category, sort_order, created_at FROM tags").all();
+      for (const t of (tags.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO tags (id, name, color, category, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), color=VALUES(color), category=VALUES(category), sort_order=VALUES(sort_order)", [
+            t.id, t.name, t.color, t.category, t.sort_order, t.created_at
+          ]);
+          counts.tags++;
+        } catch (e) { errors.push('tags#' + t.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('tags: ' + e.message); }
+    
+    // 同步 user_stats 表
+    try {
+      const stats = await env.D1_DB.prepare("SELECT user_id, username, full_name, messages, commands, files, inline_queries, callback_clicks, last_active_at FROM user_stats").all();
+      for (const s of (stats.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO user_stats (user_id, username, full_name, messages, commands, files, inline_queries, callback_clicks, last_active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE username=VALUES(username), full_name=VALUES(full_name), messages=VALUES(messages), commands=VALUES(commands), files=VALUES(files), inline_queries=VALUES(inline_queries), callback_clicks=VALUES(callback_clicks), last_active_at=VALUES(last_active_at)", [
+            s.user_id, s.username, s.full_name, s.messages, s.commands, s.files, s.inline_queries, s.callback_clicks, s.last_active_at
+          ]);
+          counts.user_stats++;
+        } catch (e) { errors.push('user_stats#' + s.user_id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('user_stats: ' + e.message); }
     
     const elapsed = ((Date.now() - syncStart) / 1000).toFixed(1);
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
