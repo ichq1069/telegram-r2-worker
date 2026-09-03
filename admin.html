@@ -1461,7 +1461,7 @@ function switchTab(name) {
   if (name === "unsaved") loadUnsaved(1);
   if (name === "pool") { loadFolders(); loadPool(); initPresetTags(); initViewToggle(); }
   if (name === "private") { loadPrivatePool(); }
-  if (name === "tags") loadTagsPage();
+  if (name === "tags") { initPresetTags(); loadTagsPage(); }
   if (name === "gen") loadGen();
   if (name === "keys") { loadKeys(); loadRateLimitCfg(); }
   if (name === "keyusers") loadKeyUsers();
