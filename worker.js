@@ -28,7 +28,7 @@ import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUser
 
 import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
-import { mysqlFailoverGet, mysqlRows, mysqlGet } from './src/mysql.js';
+import { mysqlFailoverGet, mysqlRows, mysqlGet, mysqlExec } from './src/mysql.js';
 
 
 
@@ -180,6 +180,8 @@ export default {
     // D1 降级控制：GET 查当前模式，POST 设置（d1|mysql|auto）
     if (m === 'GET' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeGet(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeSet(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/db-stats') return isAdmin ? handleDbStats(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/db-sync') return isAdmin ? handleDbSync(env) : json({ok:false,error:'Unauthorized'},401);
     // API key management (for third-party programs)
     if (m === 'GET' && p === '/admin/api/keys') return isAdmin ? handleAdminKeys(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -531,6 +533,78 @@ async function handleDbModeSet(request, env) {
     const b = await request.json().catch(function(){ return {}; });
     const r = await setMode(env, b.mode, b.reason || '');
     return r.ok ? json({ ok: true, data: r }) : json(r, 400);
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleDbStats(env) {
+  try {
+    const stats = { d1_files: 0, d1_pool: 0, d1_uploads: 0, mysql_files: 0, mysql_pool: 0, mysql_uploads: 0, sync_status: '正常', last_sync: '-', diff_count: '0' };
+    
+    // D1 统计
+    if (env.D1_DB) {
+      try {
+        const f = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL").first();
+        stats.d1_files = f?.c || 0;
+      } catch (e) {}
+      try {
+        const p = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM random_pool").first();
+        stats.d1_pool = p?.c || 0;
+      } catch (e) {}
+      try {
+        const u = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM user_uploads WHERE deleted_at IS NULL").first();
+        stats.d1_uploads = u?.c || 0;
+      } catch (e) {}
+    }
+    
+    // MySQL 统计
+    try {
+      const f = await mysqlRows(env, "SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL", []);
+      stats.mysql_files = f[0]?.c || 0;
+    } catch (e) {}
+    try {
+      const p = await mysqlRows(env, "SELECT COUNT(*) as c FROM random_pool", []);
+      stats.mysql_pool = p[0]?.c || 0;
+    } catch (e) {}
+    try {
+      const u = await mysqlRows(env, "SELECT COUNT(*) as c FROM user_uploads WHERE deleted_at IS NULL", []);
+      stats.mysql_uploads = u[0]?.c || 0;
+    } catch (e) {}
+    
+    // 同步状态
+    stats.diff_count = Math.abs(stats.d1_files - stats.mysql_files) + Math.abs(stats.d1_pool - stats.mysql_pool) + Math.abs(stats.d1_uploads - stats.mysql_uploads);
+    if (stats.diff_count === 0) {
+      stats.sync_status = '正常';
+    } else {
+      stats.sync_status = '有差异';
+    }
+    
+    return json({ ok: true, data: stats });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+async function handleDbSync(env) {
+  try {
+    let synced = 0;
+    
+    // 同步 files 表
+    if (env.D1_DB) {
+      try {
+        const d1Files = await env.D1_DB.prepare("SELECT id, storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at FROM files WHERE deleted_at IS NULL").all();
+        for (const f of (d1Files.results || [])) {
+          try {
+            await mysqlExec(env, "INSERT INTO files (id, storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE storage_key=VALUES(storage_key), r2_url=VALUES(r2_url), processing_state=VALUES(processing_state), deleted_at=VALUES(deleted_at)", [
+              f.id, f.storage_key, f.r2_url, f.chat_id, f.chat_title, f.chat_type, f.chat_username,
+              f.user_id, f.username, f.full_name, f.telegram_file_id, f.file_name, f.file_size,
+              f.file_type, f.mime_type, f.width, f.height, f.caption, f.message_id, f.md5_hash,
+              f.processing_state, f.created_at, f.tags, f.group_ref, f.media_group_id, f.level, f.is_private, f.deleted_at
+            ]);
+            synced++;
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    
+    return json({ ok: true, data: { message: '已同步 ' + synced + ' 条记录', synced: synced } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

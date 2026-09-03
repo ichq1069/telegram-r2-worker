@@ -1293,6 +1293,47 @@ https://example.com/b.jpg"></textarea></div>
           <span style="font-size:11px;color:var(--text-secondary)">A 类=写入（上传/转存），B 类=读取（访问直链）。</span>
         </div>
       </div>
+      <div class="card">
+        <div class="card-title"><span class="dot"></span>数据库管理 <span style="font-size:11px;color:var(--text-secondary);font-weight:400" id="dbModeHint">当前模式：加载中...</span></div>
+        <div style="margin-bottom:12px">
+          <div style="display:flex;gap:8px;margin-bottom:10px">
+            <button class="btn btn-ghost" id="dbRefreshBtn">刷新状态</button>
+            <button class="btn btn-primary" id="dbSyncBtn">立即同步</button>
+          </div>
+          <div id="dbStatus" style="font-size:13px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid var(--border)">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+              <div>
+                <div style="font-weight:600;margin-bottom:8px;color:#3b82f6">D1 (SQLite)</div>
+                <div id="d1Stats">加载中...</div>
+              </div>
+              <div>
+                <div style="font-weight:600;margin-bottom:8px;color:#10b981">MySQL</div>
+                <div id="mysqlStats">加载中...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:13px;font-weight:600;margin-bottom:8px">同步状态</div>
+          <div id="syncStatus" style="font-size:12px;padding:10px;background:#f8fafc;border-radius:8px;border:1px solid var(--border)">
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+              <span>最后同步时间：</span>
+              <span id="lastSyncTime">-</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+              <span>同步状态：</span>
+              <span id="syncStatusText">-</span>
+            </div>
+            <div style="display:flex;justify-content:space-between">
+              <span>差异记录数：</span>
+              <span id="diffCount">-</span>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text-secondary);border-top:1px solid #f1f5f9;padding-top:10px">
+          <b>数据同步说明：</b> 写入时自动双写到 D1 和 MySQL。MySQL 仅作为备用读库，当 D1 故障时自动切换到 MySQL 读取。点击「立即同步」可手动同步差异数据。
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -3454,6 +3495,8 @@ async function loadOpsPage() {
       if (rad) rad.checked = true;
     }
   } catch (e) {}
+  // 数据库管理
+  loadDbStatus();
   // 用户上传群组
   try {
     const rug = await api("GET", "/admin/api/settings/upload-group");
@@ -3594,6 +3637,67 @@ document.getElementById("r2QuotaSaveBtn").addEventListener("click", function() {
   });
 });
 
+// ==================== 数据库管理 ====================
+async function loadDbStatus() {
+  var hint = document.getElementById("dbModeHint");
+  var d1Stats = document.getElementById("d1Stats");
+  var mysqlStats = document.getElementById("mysqlStats");
+  var syncStatusText = document.getElementById("syncStatusText");
+  var lastSyncTime = document.getElementById("lastSyncTime");
+  var diffCount = document.getElementById("diffCount");
+  
+  try {
+    // 获取当前模式
+    const modeR = await api("GET", "/admin/api/d1-failover");
+    if (modeR && modeR.ok && modeR.data) {
+      var mode = modeR.data.mode || 'auto';
+      hint.textContent = "当前模式：" + mode;
+      hint.style.color = mode === 'mysql' ? "#10b981" : "#3b82f6";
+    }
+  } catch (e) {}
+  
+  try {
+    // 获取数据库统计
+    const statsR = await api("GET", "/admin/api/db-stats");
+    if (statsR && statsR.ok && statsR.data) {
+      var d = statsR.data;
+      d1Stats.innerHTML = '<div style="margin-bottom:6px">文件数：<b>' + (d.d1_files || 0) + '</b></div>' +
+        '<div style="margin-bottom:6px">随机池：<b>' + (d.d1_pool || 0) + '</b></div>' +
+        '<div>用户上传：<b>' + (d.d1_uploads || 0) + '</b></div>';
+      mysqlStats.innerHTML = '<div style="margin-bottom:6px">文件数：<b>' + (d.mysql_files || 0) + '</b></div>' +
+        '<div style="margin-bottom:6px">随机池：<b>' + (d.mysql_pool || 0) + '</b></div>' +
+        '<div>用户上传：<b>' + (d.mysql_uploads || 0) + '</b></div>';
+      syncStatusText.textContent = d.sync_status || '正常';
+      syncStatusText.style.color = d.sync_status === '正常' ? "#10b981" : "#f59e0b";
+      lastSyncTime.textContent = d.last_sync || '-';
+      diffCount.textContent = d.diff_count || '0';
+    }
+  } catch (e) {
+    d1Stats.innerHTML = '<span style="color:#e5484d">加载失败</span>';
+    mysqlStats.innerHTML = '<span style="color:#e5484d">加载失败</span>';
+  }
+}
+
+document.getElementById("dbRefreshBtn").addEventListener("click", function() {
+  loadDbStatus();
+  toast("已刷新数据库状态", 1);
+});
+
+document.getElementById("dbSyncBtn").addEventListener("click", function() {
+  var btn = this;
+  btn.disabled = true; btn.textContent = "同步中...";
+  api("POST", "/admin/api/db-sync").then(function(r) {
+    btn.disabled = false; btn.textContent = "立即同步";
+    if (r && r.ok) {
+      toast("同步完成：" + (r.data.message || ''), 1);
+      loadDbStatus();
+    } else {
+      toast("同步失败：" + ((r && r.error) || '未知错误'), 0);
+    }
+  });
+});
+
+// ==================== 运维页面（备份 + 告警） ====================
 async function loadBackupList() {
   var el = document.getElementById("backupList");
   if (!el) return;
