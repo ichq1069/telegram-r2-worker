@@ -584,7 +584,8 @@ async function handleDbStats(env) {
 
 async function handleDbSync(env) {
   try {
-    let synced = 0;
+    let syncedFiles = 0, syncedPool = 0, syncedUploads = 0;
+    let errors = [];
     
     // 同步 files 表
     if (env.D1_DB) {
@@ -598,13 +599,43 @@ async function handleDbSync(env) {
               f.file_type, f.mime_type, f.width, f.height, f.caption, f.message_id, f.md5_hash,
               f.processing_state, f.created_at, f.tags, f.group_ref, f.media_group_id, f.level, f.is_private, f.deleted_at
             ]);
-            synced++;
-          } catch (e) {}
+            syncedFiles++;
+          } catch (e) { errors.push('files#' + f.id + ': ' + e.message); }
         }
-      } catch (e) {}
+      } catch (e) { errors.push('files query: ' + e.message); }
+      
+      // 同步 random_pool 表
+      try {
+        const d1Pool = await env.D1_DB.prepare("SELECT id, url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private FROM random_pool").all();
+        for (const p of (d1Pool.results || [])) {
+          try {
+            await mysqlExec(env, "INSERT INTO random_pool (id, url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), enabled=VALUES(enabled), level=VALUES(level), is_private=VALUES(is_private)", [
+              p.id, p.url, p.thumb_url, p.title, p.tags, p.file_type, p.width, p.height,
+              p.file_size, p.source, p.tg_file_id, p.enabled, p.created_at, p.level, p.is_private
+            ]);
+            syncedPool++;
+          } catch (e) { errors.push('pool#' + p.id + ': ' + e.message); }
+        }
+      } catch (e) { errors.push('pool query: ' + e.message); }
+      
+      // 同步 user_uploads 表
+      try {
+        const d1Uploads = await env.D1_DB.prepare("SELECT id, user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at, deleted_at FROM user_uploads WHERE deleted_at IS NULL").all();
+        for (const u of (d1Uploads.results || [])) {
+          try {
+            await mysqlExec(env, "INSERT INTO user_uploads (id, user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), deleted_at=VALUES(deleted_at)", [
+              u.id, u.user_id, u.url, u.thumb_url, u.file_name, u.file_size, u.file_type,
+              u.width, u.height, u.tags, u.created_at, u.deleted_at
+            ]);
+            syncedUploads++;
+          } catch (e) { errors.push('uploads#' + u.id + ': ' + e.message); }
+        }
+      } catch (e) { errors.push('uploads query: ' + e.message); }
     }
     
-    return json({ ok: true, data: { message: '已同步 ' + synced + ' 条记录', synced: synced } });
+    const total = syncedFiles + syncedPool + syncedUploads;
+    const msg = '同步完成：files=' + syncedFiles + ', pool=' + syncedPool + ', uploads=' + syncedUploads + (errors.length ? '，错误：' + errors.slice(0, 5).join('; ') : '');
+    return json({ ok: true, data: { message: msg, synced: total, files: syncedFiles, pool: syncedPool, uploads: syncedUploads, errors: errors.slice(0, 10) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
