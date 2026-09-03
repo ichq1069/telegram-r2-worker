@@ -1208,12 +1208,22 @@ https://example.com/b.jpg"></textarea></div>
         </div>
         <div id="jxBatchResult" style="margin-top:12px;font-size:12px"></div>
       </div>
+      <div class="card" style="background:linear-gradient(90deg,#00c48f14,transparent)">
+        <div class="fbs">
+          <div style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:#00c48f"></span><span style="font-weight:600;font-size:14px">需要解析普通网页里的图片（直传群入库）？</span></div>
+          <button class="btn btn-primary" id="jxGoScrape" style="background:#00c48f">去「网页拾取」→</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 网页图片拾取（独立面板） -->
+    <div class="panel" id="panel-scrape">
       <div class="card">
         <div class="fbs">
-          <div class="card-title" style="margin-bottom:0"><span class="dot" style="background:#00c48f"></span>网页图片拾取（直传群入库） <span style="font-size:11px;color:var(--text-secondary);font-weight:400">输入含图网页链接 → 自动拾取 &lt;img&gt;/CSS 背景/懒加载图片 → 勾选后直传群并写入 Tele 库（代理存储，不占 R2）</span></div>
+          <div class="card-title" style="margin-bottom:0"><span class="dot" style="background:#00c48f"></span>网页拾取（直传群入库） <span style="font-size:11px;color:var(--text-secondary);font-weight:400">输入含图网页链接 → 自动拾取 &lt;img&gt;/CSS 背景/懒加载图片 → 勾选后直传群并写入 Tele 库（代理存储，不占 R2）</span></div>
           <a href="/scrape" target="_blank" rel="noopener" style="font-size:12px;color:var(--primary);white-space:nowrap">新窗口打开 →</a>
         </div>
-        <iframe id="jxScrapeFrame" style="width:100%;height:760px;border:1px solid var(--border);border-radius:10px;background:#fff" title="网页图片直传"></iframe>
+        <iframe id="jxScrapeFrame" style="width:100%;height:780px;border:1px solid var(--border);border-radius:10px;background:#fff" title="网页图片直传"></iframe>
       </div>
     </div>
 
@@ -1499,7 +1509,7 @@ function toast(msg, ok) {
 }
 
 // 初始化
-var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","jx","r2files","ops"];
+var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","jx","scrape","r2files","ops"];
 function switchTab(name) {
   var panels = document.querySelectorAll(".panel");
   var tabs = document.querySelectorAll("#tabBar .tab");
@@ -1540,7 +1550,7 @@ function init() {
     { label: "文件", items: [["files","Tele文件","📁"],["unsaved","未转存","⏳"],["trash","回收站","🗑"]] },
     { label: "素材库", items: [["pool","共享库","📚"],["private","私密库","🔒"],["quicktag","快速打标","⚡"],["tags","标签库","🏷"]] },
     { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"],["keyusers","密钥用户","👤"],["redeem","兑换码","🎟"],["logs","调用日志","📈"]] },
-    { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"],["jx","链接解析","🔗"]] },
+    { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"],["jx","链接解析","🔗"],["scrape","网页拾取","🖼"]] },
     { label: "系统", items: [["r2files","R2文件","🗄"],["ops","运维工具","🛠"]] }
   ];
   var tabBar = document.getElementById("tabBar");
@@ -1635,9 +1645,11 @@ function init() {
   bindStoreTabs("privateStoreTabs", ["local", "tg", "zup", "pi", "link"]);
   bindStoreTabs("fileStoreTabs", ["local", "tg", "link"]);
 
-  // 「链接解析」页内嵌的网页图片拾取页（带 admin api_key，避免重复登录）
+  // 「链接解析」/「网页拾取」内嵌的网页图片拾取页（带 admin api_key，避免重复登录）
   var jxFrame = document.getElementById("jxScrapeFrame");
   if (jxFrame && AK) jxFrame.src = OR + "/scrape?api_key=" + encodeURIComponent(AK);
+  var goScrape = document.getElementById("jxGoScrape");
+  if (goScrape) goScrape.addEventListener("click", function() { switchTab("scrape"); });
 
   initQuickTagUI();
 
