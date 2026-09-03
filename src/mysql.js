@@ -183,16 +183,28 @@ let _tablesEnsured = false;
 
 export async function ensureMySQLTables(env) {
   if (_tablesEnsured) return true;
+  let okCount = 0;
+  let failCount = 0;
+  const errors = [];
   try {
     await withConn(env, async (c) => {
       for (const sql of MYSQL_TABLES) {
-        await c.query(sql);
+        try {
+          await c.query(sql);
+          okCount++;
+        } catch (e) {
+          failCount++;
+          errors.push(e.message);
+          console.error('ensureMySQLTables table error:', e.message);
+        }
       }
     });
-    _tablesEnsured = true;
-    return true;
+    // 至少部分表创建成功就标记为已初始化（避免阻塞双写）
+    if (okCount > 0) _tablesEnsured = true;
+    if (failCount > 0) console.error('ensureMySQLTables: ' + failCount + ' tables failed:', errors.join('; '));
+    return okCount > 0;
   } catch (e) {
-    console.error('ensureMySQLTables error:', e.message);
+    console.error('ensureMySQLTables connection error:', e.message);
     return false;
   }
 }
@@ -214,7 +226,7 @@ export async function dualInsertFiles(env, params) {
       p.processing_state, p.created_at, p.tags, p.group_ref, p.media_group_id, p.level, p.is_private, p.deleted_at
     ]);
   } catch (e) {
-    console.error('dualInsertFiles error:', e.message);
+    console.error('dualInsertFiles error:', e.message, 'storage_key:', params?.storage_key);
     return { ok: false };
   }
 }

@@ -1296,9 +1296,10 @@ https://example.com/b.jpg"></textarea></div>
       <div class="card">
         <div class="card-title"><span class="dot"></span>数据库管理 <span style="font-size:11px;color:var(--text-secondary);font-weight:400" id="dbModeHint">当前模式：加载中...</span></div>
         <div style="margin-bottom:12px">
-          <div style="display:flex;gap:8px;margin-bottom:10px">
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
             <button class="btn btn-ghost" id="dbRefreshBtn">刷新状态</button>
             <button class="btn btn-ghost" id="dbTestMysqlBtn">测试MySQL连接</button>
+            <button class="btn btn-ghost" id="dbRebuildMysqlBtn">重建MySQL表</button>
             <button class="btn btn-primary" id="dbSyncBtn">快速同步</button>
             <button class="btn btn-primary" id="dbFullSyncBtn" style="background:#8b5cf6">全量同步</button>
           </div>
@@ -3692,6 +3693,24 @@ document.getElementById("dbTestMysqlBtn").addEventListener("click", function() {
     }
   }).catch(function(e) {
     btn.disabled = false; btn.textContent = "测试MySQL连接";
+    toast("请求失败：" + e.message, 0);
+  });
+});
+
+document.getElementById("dbRebuildMysqlBtn").addEventListener("click", function() {
+  var btn = this;
+  if (!confirm("将重新创建 MySQL 中的所有表（不影响现有数据），继续？")) return;
+  btn.disabled = true; btn.textContent = "重建中...";
+  api("POST", "/admin/api/db-rebuild-mysql").then(function(r) {
+    btn.disabled = false; btn.textContent = "重建MySQL表";
+    if (r && r.ok && r.data) {
+      toast("MySQL表重建完成，共 " + r.data.count + " 张表", 1);
+      loadDbStatus();
+    } else {
+      toast("重建失败：" + ((r && r.error) || '未知错误'), 0);
+    }
+  }).catch(function(e) {
+    btn.disabled = false; btn.textContent = "重建MySQL表";
     toast("请求失败：" + e.message, 0);
   });
 });

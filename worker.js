@@ -182,6 +182,7 @@ export default {
     if (m === 'POST' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeSet(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/db-stats') return isAdmin ? handleDbStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/db-test-mysql') return isAdmin ? handleDbTestMysql(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/db-rebuild-mysql') return isAdmin ? handleDbRebuildMysql(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-sync') return isAdmin ? handleDbSync(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-full-sync') return isAdmin ? handleDbFullSync(env) : json({ok:false,error:'Unauthorized'},401);
     // API key management (for third-party programs)
@@ -550,6 +551,26 @@ async function handleDbTestMysql(env) {
     return json({ ok: true, data: result });
   } catch (e) {
     return json({ ok: false, error: e.message, hint: '检查 Hyperdrive 绑定和 MySQL 服务是否正常' });
+  }
+}
+
+async function handleDbRebuildMysql(env) {
+  try {
+    const { ensureMySQLTables } = await import('./src/mysql.js');
+    // 重置标记以强制重建
+    const mod = await import('./src/mysql.js');
+    if (mod._tablesEnsured !== undefined) mod._tablesEnsured = false;
+    const ok = await ensureMySQLTables(env);
+    if (!ok) return json({ ok: false, error: '部分表创建失败，请查看 Workers 日志' });
+    // 验证表数量
+    const { withConn } = await import('./src/mysql.js');
+    const result = await withConn(env, async (c) => {
+      const [tables] = await c.query('SHOW TABLES');
+      return { count: tables.length, tables: tables.map(r => Object.values(r)[0]) };
+    });
+    return json({ ok: true, data: result });
+  } catch (e) {
+    return json({ ok: false, error: e.message });
   }
 }
 
