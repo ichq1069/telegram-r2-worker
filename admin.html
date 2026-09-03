@@ -3717,7 +3717,7 @@ document.getElementById("dbRebuildMysqlBtn").addEventListener("click", function(
 });
 
 // 强制同步：逐表同步，带详细结果
-var FORCE_SYNC_TABLES = ['files','random_pool','user_uploads','settings','api_keys','known_chats','bot_commands','bot_config','redeem_codes','show_groups','tags','user_stats'];
+var FORCE_SYNC_TABLES = ['files','random_pool','user_uploads','settings','api_keys','known_chats','bot_commands','bot_config','redeem_codes','show_groups','tags','user_stats','rate_limits','worker_stats','api_call_logs','folders','webhook_logs'];
 document.getElementById("dbForceSyncBtn").addEventListener("click", function() {
   var btn = this;
   if (!confirm("强制同步将逐表从D1读取并写入MySQL，每表50条，确定？")) return;

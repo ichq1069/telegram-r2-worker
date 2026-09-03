@@ -594,6 +594,11 @@ async function handleDbForceSync(request, env) {
       show_groups: { d1: "SELECT * FROM show_groups LIMIT ?", mysql: "INSERT INTO show_groups (id,name,images,created_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),images=VALUES(images)", fields: 4 },
       tags: { d1: "SELECT * FROM tags LIMIT ?", mysql: "INSERT INTO tags (id,name,color,category,sort_order,created_at) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)", fields: 6 },
       user_stats: { d1: "SELECT * FROM user_stats LIMIT ?", mysql: "INSERT INTO user_stats (user_id,username,full_name,messages,commands,files,inline_queries,callback_clicks,last_active_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE messages=VALUES(messages),commands=VALUES(commands)", fields: 9 },
+      rate_limits: { d1: "SELECT * FROM rate_limits LIMIT ?", mysql: "INSERT INTO rate_limits (id,`key`,window,count) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE count=VALUES(count)", fields: 4 },
+      worker_stats: { d1: "SELECT * FROM worker_stats LIMIT ?", mysql: "INSERT INTO worker_stats (day,requests,errors,updated_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE requests=VALUES(requests),errors=VALUES(errors)", fields: 4 },
+      api_call_logs: { d1: "SELECT * FROM api_call_logs LIMIT ?", mysql: "INSERT INTO api_call_logs (id,key_id,api_key,path,method,ip,status,created_at) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status)", fields: 8 },
+      folders: { d1: "SELECT * FROM folders LIMIT ?", mysql: "INSERT INTO folders (id,name,parent_id,created_at,updated_at) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)", fields: 5 },
+      webhook_logs: { d1: "SELECT * FROM webhook_logs LIMIT ?", mysql: "INSERT INTO webhook_logs (id,status,ok,source,error,created_at) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status)", fields: 6 },
     };
     const cfg = TABLE_MAP[table];
     if (!cfg) return json({ ok: false, error: '未知表: ' + table + '，可选: ' + Object.keys(TABLE_MAP).join(',') });
@@ -623,7 +628,7 @@ async function handleDbForceSync(request, env) {
 async function handleDbStats(env) {
   try {
     const stats = { sync_status: '正常', last_sync: '-', diff_count: '0', d1: {}, mysql: {} };
-    const TABLES = ['files', 'random_pool', 'user_uploads', 'settings', 'api_keys', 'known_chats', 'user_stats', 'bot_commands', 'bot_config', 'redeem_codes', 'show_groups', 'tags'];
+    const TABLES = ['files', 'random_pool', 'user_uploads', 'settings', 'api_keys', 'known_chats', 'user_stats', 'bot_commands', 'bot_config', 'redeem_codes', 'show_groups', 'tags', 'rate_limits', 'worker_stats', 'api_call_logs', 'folders', 'webhook_logs'];
     
     // D1 统计
     for (const t of TABLES) {
@@ -751,7 +756,7 @@ async function handleDbSync(env) {
 async function handleDbFullSync(env) {
   try {
     const syncStart = Date.now();
-    let counts = { files: 0, pool: 0, uploads: 0, settings: 0, api_keys: 0, known_chats: 0, bot_commands: 0, bot_config: 0, redeem_codes: 0, show_groups: 0, tags: 0, user_stats: 0 };
+    let counts = { files: 0, pool: 0, uploads: 0, settings: 0, api_keys: 0, known_chats: 0, bot_commands: 0, bot_config: 0, redeem_codes: 0, show_groups: 0, tags: 0, user_stats: 0, rate_limits: 0, worker_stats: 0, api_call_logs: 0, folders: 0, webhook_logs: 0 };
     let errors = [];
     
     if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' }, 500);

@@ -176,6 +176,44 @@ const MYSQL_TABLES = [
     category TEXT DEFAULT '',
     sort_order INTEGER DEFAULT 0,
     created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS rate_limits (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    key TEXT NOT NULL,
+    window TEXT NOT NULL,
+    count INTEGER DEFAULT 0,
+    UNIQUE(key, window)
+  )`,
+  `CREATE TABLE IF NOT EXISTS worker_stats (
+    day TEXT PRIMARY KEY,
+    requests INTEGER DEFAULT 0,
+    errors INTEGER DEFAULT 0,
+    updated_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS api_call_logs (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    key_id INTEGER,
+    api_key TEXT,
+    path TEXT,
+    method TEXT,
+    ip TEXT,
+    status INTEGER DEFAULT 200,
+    created_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS folders (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    name TEXT NOT NULL,
+    parent_id INTEGER DEFAULT NULL,
+    created_at TEXT,
+    updated_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS webhook_logs (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    status INTEGER DEFAULT 200,
+    ok INTEGER DEFAULT 1,
+    source TEXT DEFAULT 'webhook',
+    error TEXT DEFAULT '',
+    created_at TEXT
   )`
 ];
 
