@@ -242,20 +242,19 @@ export async function handleAdminPoolDelete(request, env) {
     // Get the file info before deleting
     const file = await env.D1_DB.prepare('SELECT * FROM random_pool WHERE id = ?').bind(id).first();
     if (file) {
-      // If this is a user upload, also delete from user_uploads
-      if (file.source === 'user_upload' && file.title) {
-        const userId = file.title.split('_')[0]; // Extract user_id from title prefix
-        if (userId) {
-          await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE file_name = ? AND user_id = ? AND deleted_at IS NULL')
-            .bind(cnNowISO(), file.title.replace(userId + '_', ''), userId).run();
-        }
+      // 识别关联的 files.id：tg 来源走 tg_file_id；user_upload 等来源从 url(/file/tg/<id> 或签名链接)解析
+      let linkId = parseInt(file.tg_file_id, 10) || 0;
+      if (!linkId && file.url) {
+        const m = String(file.url).match(/\/file\/tg\/(?:[0-9a-f]{16}\/)?(\d+)(?:\.\w+)?$/);
+        if (m) linkId = parseInt(m[1], 10) || 0;
       }
-      
-      // Also soft-delete from files table if it exists
-      if (file.url && file.url.startsWith('/file/tg/')) {
-        const fileId = file.url.replace('/file/tg/', '');
+      if (linkId) {
+        // 同步软删用户上传记录（url 存相对占位 /file/tg/<id>）
+        await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE url = ? AND deleted_at IS NULL')
+          .bind(cnNowISO(), '/file/tg/' + linkId).run();
+        // 同步软删 files 行，避免代理出图残留
         await env.D1_DB.prepare('UPDATE files SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL')
-          .bind(cnNowISO(), fileId).run();
+          .bind(cnNowISO(), linkId).run();
       }
     }
     

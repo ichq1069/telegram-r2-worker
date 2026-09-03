@@ -2,8 +2,8 @@
 // 幻灯片页（/show）、Show groups（节目单）、画廊瀑布流、公开 JSON API、公开上传、Random pool。
 // 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
 import { json, log, invalidateStatsCache } from "./util.js";
-import { cnShift, cnTodayStr, cnNowISO, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode, splitTags } from "./core.js";
-import { lastUploadError, putR2, putR2Stream } from "./telegram.js";
+import { cnShift, cnTodayStr, cnNowISO, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode, splitTags, fileExtOf } from "./core.js";
+import { lastUploadError, putR2, putR2Stream, fileTok } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
 import { applyRateLimit } from "./ratelimit.js";
@@ -2349,6 +2349,8 @@ export async function handleUserUpload(request, env) {
     
     if (!groupId) return json({ ok: false, error: 'No upload group configured' }, 400);
     
+    const u = new URL(request.url);
+    const tags = splitTags(u.searchParams.get('tags') || '').join(',');
     const formData = await request.formData();
     const files = formData.getAll('files');
     if (!files.length) return json({ ok: false, error: 'No files provided' }, 400);
@@ -2357,8 +2359,8 @@ export async function handleUserUpload(request, env) {
     const now = cnNowISO();
     
     for (const file of files) {
-      if (!file.type.startsWith('image/')) {
-        results.push({ name: file.name, error: 'Not an image file' });
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+        results.push({ name: file.name, error: 'Not an image/video file' });
         continue;
       }
       
@@ -2369,13 +2371,14 @@ export async function handleUserUpload(request, env) {
       }
       
       try {
-        // Send photo to Telegram group
+        const isVideo = file.type.startsWith('video/');
+        // Send photo/video to Telegram group
         const telegramFormData = new FormData();
         telegramFormData.append('chat_id', groupId);
-        telegramFormData.append('photo', file);
+        telegramFormData.append(isVideo ? 'video' : 'photo', file);
         telegramFormData.append('caption', `${user.name || user.id} - ${file.name}`);
         
-        const tgResponse = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendPhoto`, {
+        const tgResponse = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/${isVideo ? 'sendVideo' : 'sendPhoto'}`, {
           method: 'POST',
           body: telegramFormData
         });
@@ -2386,9 +2389,18 @@ export async function handleUserUpload(request, env) {
           continue;
         }
         
-        // Get photo file_id from the largest photo size
-        const photo = tgResult.result.photo;
-        const fileId = photo[photo.length - 1].file_id;
+        // Get file_id from the largest photo/video size
+        let fileId;
+        if (isVideo) {
+          fileId = tgResult.result.video && tgResult.result.video.file_id;
+        } else {
+          const photo = tgResult.result.photo;
+          fileId = photo[photo.length - 1].file_id;
+        }
+        if (!fileId) {
+          results.push({ name: file.name, error: 'Telegram did not return a file_id' });
+          continue;
+        }
         const messageId = tgResult.result.message_id;
         
         // Add user_id prefix to filename
@@ -2396,8 +2408,8 @@ export async function handleUserUpload(request, env) {
         
         // Insert into files table (Tele库 - 代理模式)
         const filesResult = await env.D1_DB.prepare(
-          'INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-        ).bind(`tg/${fileId}`, '/file/tg/placeholder', fileNameWithPrefix, file.size, 'photo', file.type, groupId, fileId, String(messageId), groupId, 'completed', now).run();
+          'INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, group_ref, telegram_file_id, message_id, chat_id, tags, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        ).bind(`tg/${fileId}`, '/file/tg/placeholder', fileNameWithPrefix, file.size, isVideo ? 'video' : 'photo', file.type, groupId, fileId, String(messageId), groupId, tags, 'completed', now).run();
         
         const dbId = filesResult.meta.last_row_id;
         
@@ -2407,13 +2419,21 @@ export async function handleUserUpload(request, env) {
         
         // Insert into user_uploads table
         const userUploadResult = await env.D1_DB.prepare(
-          'INSERT INTO user_uploads (user_id, url, file_name, file_size, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-        ).bind(user.id, `/file/tg/${dbId}`, file.name, file.size, 'photo', now).run();
+          'INSERT INTO user_uploads (user_id, url, file_name, file_size, file_type, tags, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).bind(user.id, `/file/tg/${dbId}`, file.name, file.size, isVideo ? 'video' : 'photo', tags, now).run();
+        
+        // 签名直链：公开随机/共享池返回的 url 必须可访问（/file/tg/<id> 需签名，防枚举）
+        let sharedUrl = `/file/tg/${dbId}`;
+        try {
+          const tok = await fileTok(dbId, env);
+          const ext = fileExtOf(file.name, file.type);
+          sharedUrl = u.origin + '/file/tg/' + tok + '/' + dbId + '.' + ext;
+        } catch (e) {}
         
         // Insert into random_pool table
         await env.D1_DB.prepare(
-          'INSERT INTO random_pool (url, thumb_url, title, file_type, file_size, source, enabled, created_at, level, group_ref) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)'
-        ).bind(`/file/tg/${dbId}`, `/file/tg/${dbId}`, fileNameWithPrefix, 'photo', file.size, 'user_upload', now, user.level || 'pt', groupId).run();
+          'INSERT INTO random_pool (url, thumb_url, title, tags, file_type, file_size, source, enabled, created_at, level, group_ref) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)'
+        ).bind(sharedUrl, sharedUrl, fileNameWithPrefix, tags, isVideo ? 'video' : 'photo', file.size, 'user_upload', now, user.level || 'pt', groupId).run();
         
         // Update quota
         await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used + 1, storage_used = storage_used + ? WHERE id = ?')
@@ -2455,18 +2475,41 @@ export async function handleUserFiles(request, env) {
     const offset = (page - 1) * pageSize;
     const kw = u.searchParams.get('keyword') || '';
     const tags = u.searchParams.get('tags') || '';
+    const type = u.searchParams.get('type') || '';
     
     let w = 'WHERE user_id = ? AND deleted_at IS NULL';
     const p = [user.id];
     
     if (kw) { w += ' AND (file_name LIKE ? OR tags LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
     if (tags) { w = appendTagFilter(tags, w, p); }
+    if (type) { w += ' AND file_type=?'; p.push(type); }
     
     const total = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM user_uploads ' + w).bind(...p).first();
     const files = await env.D1_DB.prepare('SELECT * FROM user_uploads ' + w + ' ORDER BY created_at DESC LIMIT ? OFFSET ?').bind(...p, pageSize, offset).all();
+    const origin = new URL(request.url).origin;
+    const rows = (files.results || []);
+    const items = await Promise.all(rows.map(async function(row) { return decorateUserUpload(row, origin, env); }));
     
-    return json({ ok: true, data: files.results || [], total: total?.total || 0, page, pageSize });
+    return json({ ok: true, data: items, total: total?.total || 0, page, pageSize });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 给 user_uploads 行补签名直链：user_uploads.url 存的是 /file/tg/<files.id>（占位），
+// 浏览器/图片需走 /file/tg/<token>/<id>.<ext> 签名路径才能访问，防止 403 死链
+async function decorateUserUpload(row, origin, env) {
+  const out = Object.assign({}, row);
+  const idPart = String(row.url || '').replace('/file/tg/', '');
+  const id = parseInt(idPart, 10) || 0;
+  if (id) {
+    try {
+      const tok = await fileTok(id, env);
+      const ext = fileExtOf(row.file_name, row.file_type);
+      out.proxy_url = origin + '/file/tg/' + tok + '/' + id + '.' + ext;
+      out.display_url = out.proxy_url;
+      out.url = out.proxy_url;
+    } catch (e) { /* 保持原样 */ }
+  }
+  return out;
 }
 
 export async function handleUserFileDetail(request, env) {
@@ -2485,7 +2528,7 @@ export async function handleUserFileDetail(request, env) {
     const file = await env.D1_DB.prepare('SELECT * FROM user_uploads WHERE id = ? AND user_id = ? AND deleted_at IS NULL').bind(fileId, user.id).first();
     if (!file) return json({ ok: false, error: 'File not found' }, 404);
     
-    return json({ ok: true, data: file });
+    return json({ ok: true, data: await decorateUserUpload(file, new URL(request.url).origin, env) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -2499,7 +2542,7 @@ export async function handleUserFileDelete(request, env) {
     
     const u = new URL(request.url);
     const pathParts = u.pathname.split('/');
-    const fileId = parseInt(pathParts[pathParts.length - 2], 10);
+    const fileId = parseInt(pathParts[pathParts.length - 1], 10);
     if (!fileId) return json({ ok: false, error: 'File ID required' }, 400);
     
     const file = await env.D1_DB.prepare('SELECT * FROM user_uploads WHERE id = ? AND user_id = ? AND deleted_at IS NULL').bind(fileId, user.id).first();
@@ -2508,11 +2551,77 @@ export async function handleUserFileDelete(request, env) {
     const now = cnNowISO();
     await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE id = ?').bind(now, fileId).run();
     
+    // 级联清理（与后台删除文件惯例一致，避免"孤儿数据"残留）：
+    //   - files 行软删 → /file/tg/<id> 代理不再出图
+    //   - random_pool 行删除 → 公开随机/共享池不再分发已删图片
+    const linkId = parseInt(String(file.url || '').replace('/file/tg/', ''), 10) || 0;
+    if (linkId) {
+      await cascadeCleanUserFile(env, linkId, now);
+    }
+    
     // Update quota
     await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used - 1, storage_used = storage_used - ? WHERE id = ?')
       .bind(file.file_size || 0, user.id).run();
     
     return json({ ok: true });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 级联清理：软删 files 行 + 删除 random_pool 中对同一文件的引用（幂等，可复用于孤儿清理）
+// random_pool 引用形态多样：tg 来源存 tg_file_id=files.id；user_upload 来源存
+// 相对占位 url=/file/tg/<id> 或绝对签名 url=.../file/tg/<tok>/<id>.<ext>，统一按 files.id 命中
+async function cascadeCleanUserFile(env, linkId, now) {
+  try {
+    await env.D1_DB.prepare('UPDATE files SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').bind(now, linkId).run();
+  } catch (e) {}
+  try {
+    await env.D1_DB.prepare('DELETE FROM random_pool WHERE tg_file_id = ? OR url = ? OR url LIKE ? OR url LIKE ?')
+      .bind(linkId, '/file/tg/' + linkId, '%/file/tg/' + linkId + '.%', '%/file/tg/%/' + linkId + '.%').run();
+  } catch (e) {}
+}
+
+// 孤儿数据清理：修复历史遗留的不一致
+//   1) user_uploads 仍"可见"但 files 记录已删/已软删（断链死图）→ 软删并扣配额
+//   2) user_uploads 已删记录（deleted_at 非空）残留在 files/random_pool → 级联清理后物理删除记录
+export async function handleUserFilesCleanup(request, env) {
+  try {
+    const apiKey = request.headers.get('X-API-Key') || new URL(request.url).searchParams.get('api_key');
+    if (!apiKey) return json({ ok: false, error: 'API key required' }, 401);
+    
+    const user = await env.D1_DB.prepare('SELECT * FROM api_keys WHERE key = ?').bind(apiKey).first();
+    if (!user) return json({ ok: false, error: 'Invalid API key' }, 401);
+    
+    const now = cnNowISO();
+    const stats = { broken: 0, cascaded: 0, purged: 0 };
+    
+    const all = await env.D1_DB.prepare('SELECT id, url, file_size, deleted_at FROM user_uploads WHERE user_id = ?').bind(user.id).all();
+    for (const row of (all.results || [])) {
+      const linkId = parseInt(String(row.url || '').replace('/file/tg/', ''), 10) || 0;
+      if (!linkId) continue;
+      if (row.deleted_at) {
+        // 已删记录：级联清 files/random_pool 残留，然后物理删除记录
+        const f = await env.D1_DB.prepare('SELECT id, deleted_at FROM files WHERE id = ?').bind(linkId).first();
+        if (f) {
+          await cascadeCleanUserFile(env, linkId, now);
+          if (f.deleted_at) stats.cascaded++; else stats.purged++;
+        } else {
+          await cascadeCleanUserFile(env, linkId, now);
+          stats.purged++;
+        }
+        await env.D1_DB.prepare('DELETE FROM user_uploads WHERE id = ?').bind(row.id).run();
+      } else {
+        // 可见记录：files 行不存在或已软删 = 断链死图 → 软删该记录并扣配额
+        const f = await env.D1_DB.prepare('SELECT id FROM files WHERE id = ? AND deleted_at IS NULL').bind(linkId).first();
+        if (!f) {
+          await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE id = ?').bind(now, row.id).run();
+          await env.D1_DB.prepare('UPDATE api_keys SET upload_used = CASE WHEN upload_used > 0 THEN upload_used - 1 ELSE 0 END, storage_used = CASE WHEN storage_used >= ? THEN storage_used - ? ELSE 0 END WHERE id = ?')
+            .bind(row.file_size || 0, row.file_size || 0, user.id).run();
+          stats.broken++;
+        }
+      }
+    }
+    
+    return json({ ok: true, data: stats });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

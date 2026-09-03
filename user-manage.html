@@ -115,6 +115,7 @@ body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-seri
   <div class="topbar">
     <div class="topbar-title">图片管理</div>
     <div class="topbar-right">
+      <button class="btn btn-ghost btn-sm" id="cleanupBtn" title="清除文件管理中已失效/残留的孤儿数据">清理孤儿数据</button>
       <button class="btn btn-ghost btn-sm" id="refreshBtn">刷新</button>
       <button class="btn btn-ghost btn-sm" id="logoutBtn">退出</button>
     </div>
@@ -380,22 +381,27 @@ async function uploadFiles(files) {
   
   var formData = new FormData();
   for (var i = 0; i < files.length; i++) {
-    formData.append('file', files[i]);
+    formData.append('files', files[i]);
   }
   
-  var tags = document.getElementById('uploadTags').value.trim();
-  
-  var url = '/api/v1/upload?api_key=' + encodeURIComponent(AK);
-  if (tags) url += '&tags=' + encodeURIComponent(tags);
-  
   try {
-    var r = await fetch(OR + url, { method: 'POST', body: formData });
+    var r = await fetch(OR + '/api/v1/user/upload', {
+      method: 'POST',
+      headers: { 'X-API-Key': AK },
+      body: formData
+    });
     var data = await r.json();
     
     if (data.ok) {
-      status.textContent = '上传成功！';
-      loadFiles(1);
-      loadStats();
+      var res = (data.data && data.data.results) || [];
+      var okN = res.filter(function(x) { return !x.error; }).length;
+      var failN = res.filter(function(x) { return x.error; }).length;
+      var tips = res.filter(function(x) { return x.error; }).map(function(x) { return x.name + ': ' + x.error; }).join('；');
+      status.textContent = '上传完成：' + okN + ' 成功' + (failN ? '，' + failN + ' 失败' + (tips ? '（' + tips + '）' : '') : '');
+      if (okN) {
+        loadFiles(1);
+        loadStats();
+      }
     } else {
       status.textContent = '上传失败：' + (data.error || '未知错误');
     }
@@ -536,6 +542,30 @@ document.addEventListener('DOMContentLoaded', function() {
     loadStats();
     loadFiles(currentPage);
     loadGroups();
+  });
+
+  // Clean up orphan data (deleted files still referenced in pool / broken links)
+  document.getElementById('cleanupBtn').addEventListener('click', async function() {
+    if (!confirm('将扫描并清理：\n1) 已删除但仍残留在共享池/数据库的文件记录\n2) 已失效(链接已不可访问)的文件记录\n确认执行？')) return;
+    var btn = document.getElementById('cleanupBtn');
+    btn.disabled = true;
+    var old = btn.textContent;
+    btn.textContent = '清理中...';
+    var r = await api('POST', '/api/v1/user/files/cleanup');
+    btn.disabled = false;
+    btn.textContent = old;
+    if (r.ok) {
+      var d = r.data || {};
+      var parts = [];
+      if (d.broken) parts.push('修复失效记录 ' + d.broken + ' 条');
+      if (d.purged) parts.push('清除残留 ' + d.purged + ' 条');
+      if (d.cascaded) parts.push('级联清理 ' + d.cascaded + ' 条');
+      toast(parts.length ? parts.join('，') : '无孤儿数据', true);
+      loadFiles(1);
+      loadStats();
+    } else {
+      toast(r.error || '清理失败', false);
+    }
   });
   
   // Logout
