@@ -45,6 +45,7 @@ crons = ["*/2 * * * *", "0 1 * * *"]
 enabled = true
 head_sampling_rate = 1
 
-# 资源限制：付费版可提升至更高
-# limits.memory_mb = 256  # 默认 128MB，付费版可提升
-# limits.cpu_ms = 30000   # 默认 30s
+# 付费版资源限制
+[limits]
+memory_mb = 256
+cpu_ms = 30000
