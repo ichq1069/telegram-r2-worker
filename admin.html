@@ -316,6 +316,26 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
 .qt-ac-item:hover, .qt-ac-item.active { background: #f1f5f9; }
 .qt-ac-item .ac-hl { color: var(--primary); font-weight: 600; }
 .qt-ac-hint { padding: 4px 12px; font-size: 11px; color: var(--text-secondary); border-top: 1px solid var(--border); }
+/* R2 文件网格视图 */
+.r2f-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.r2f-tile { position: relative; background: var(--card); border: 1.5px solid var(--border); border-radius: 10px; overflow: hidden; cursor: pointer; transition: all .15s; }
+.r2f-tile:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.1); border-color: var(--primary); }
+.r2f-tile-img { width: 100%; height: 120px; background: #f8fafc; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.r2f-tile-img img { width: 100%; height: 100%; object-fit: cover; }
+.r2f-tile-icon { font-size: 32px; color: #94a3b8; }
+.r2f-tile-name { padding: 6px 8px; font-size: 11px; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.r2f-tile-meta { padding: 0 8px 6px; font-size: 10px; color: var(--text-secondary); display: flex; justify-content: space-between; align-items: center; }
+.r2f-tile-badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 9px; font-weight: 600; color: #fff; line-height: 14px; }
+.r2f-tile-chk { position: absolute; top: 6px; left: 6px; z-index: 3; width: 16px; height: 16px; cursor: pointer; }
+.r2f-tile-hover { position: absolute; inset: 0; background: rgba(15,23,42,.45); display: flex; align-items: center; justify-content: center; gap: 8px; opacity: 0; transition: opacity .15s; pointer-events: none; }
+.r2f-tile:hover .r2f-tile-hover { opacity: 1; pointer-events: auto; }
+.r2f-tile-hover .btn { pointer-events: auto; }
+/* R2 分页 */
+.r2f-pager { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.r2f-pager .pg { min-width: 30px; height: 28px; border: 1px solid var(--border); background: var(--card); border-radius: 6px; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0 8px; transition: all .15s; }
+.r2f-pager .pg:hover { border-color: var(--primary); color: var(--primary); }
+.r2f-pager .pg.on { background: var(--primary); color: #fff; border-color: var(--primary); }
+.r2f-pager .pg.disabled { opacity: .4; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -1138,9 +1158,12 @@ https://example.com/b.jpg"></textarea></div>
     <div class="panel" id="panel-r2files">
       <div class="card">
         <div class="fbs" style="flex-wrap:wrap;gap:10px">
-          <div class="card-title" style="margin:0"><span class="dot" style="background:#f59e0b"></span>R2 文件 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">按 R2 对象浏览（年月目录），单次读取；标注引用状态，仅孤儿对象可删除</span></div>
+          <div class="card-title" style="margin:0"><span class="dot" style="background:#f59e0b"></span>R2 文件 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">按 R2 对象浏览；标注引用状态，仅孤儿可删</span></div>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" id="r2fViewGrid" title="网格视图">▦ 网格</button>
+            <button class="btn btn-ghost btn-sm" id="r2fViewList" title="列表视图">☰ 列表</button>
             <button class="btn btn-ghost btn-sm" id="r2fOnlyOrphan">只看孤儿</button>
+            <button class="btn btn-ghost btn-sm" id="r2fSortTime" title="按时间排序">↑ 时间</button>
             <button class="btn btn-ghost btn-sm" id="r2fRefresh">刷新</button>
           </div>
         </div>
@@ -1156,12 +1179,9 @@ https://example.com/b.jpg"></textarea></div>
             <button class="btn btn-ghost btn-sm" id="r2fSelAll">全选</button>
             <button class="btn btn-danger btn-sm" id="r2fDelSel" style="display:none">删除选中（仅孤儿）</button>
           </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn btn-ghost btn-sm" id="r2fPrev" style="display:none">← 上一页</button>
-            <button class="btn btn-ghost btn-sm" id="r2fNext" style="display:none">下一页 →</button>
-          </div>
+          <div class="r2f-pager" id="r2fPager"></div>
         </div>
-        <div style="font-size:11px;color:var(--text-secondary);margin-top:10px;border-top:1px solid #f1f5f9;padding-top:8px">「站点静态页」（admin/user 等页面）与「备份」（backups/）受保护不可删；「已引用」对象被文件记录使用，请在 Tele文件/回收站 中删除对应记录后再清理对象。若要全量清孤儿，可回到概览页 R2 对象存储的「清理孤儿」。</div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:10px;border-top:1px solid #f1f5f9;padding-top:8px">「站点静态页」与「备份」受保护不可删；「已引用」对象需先在 Tele文件/回收站中删除对应记录。全量清孤儿可回概览页 R2 对象存储的「清理孤儿」。</div>
       </div>
     </div>
 
@@ -6220,47 +6240,76 @@ function fmtSize(b) {
 }
 
 // ---------- R2 文件浏览 ----------
-var r2f = { prefix: "", page: 0, rows: [], nextCursor: null, back: [], only: false, sel: {} };
+var r2f = { prefix: "", page: 0, rows: [], nextCursor: null, back: [], only: false, sel: {}, view: "grid", sort: "time", sortDir: "desc" };
+var IMG_EXTS = /\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff?)$/i;
+var VID_EXTS = /\.(mp4|webm|ogg|mov|avi|mkv)$/i;
 
-function r2fBootstrap() {
-  if (r2f._bound) return;
-  r2f._bound = true;
-  document.getElementById("r2fRefresh").addEventListener("click", function() {
-    r2f.nextCursor = null; r2f.back = []; r2f.page = 0; r2f.sel = {};
-    loadR2Files();
-  });
-  document.getElementById("r2fApply").addEventListener("click", function() {
-    r2f.prefix = (document.getElementById("r2fPrefix").value || "").trim();
-    r2f.page = 0; r2f.nextCursor = null; r2f.back = []; r2f.sel = {};
-    loadR2Files();
-  });
-  document.getElementById("r2fPrefix").addEventListener("keydown", function(e) { if (e.key === "Enter") document.getElementById("r2fApply").click(); });
-  document.getElementById("r2fOnlyOrphan").addEventListener("click", function() {
-    r2f.only = !r2f.only;
-    this.classList.toggle("on", r2f.only);
-    renderR2Table();
-  });
-  document.getElementById("r2fNext").addEventListener("click", function() {
-    if (!r2f.nextCursor) return;
-    r2f.back.push({ prefix: r2f.prefix, page: r2f.page });
-    r2f.page++; r2f.sel = {};
-    loadR2Files(r2f.nextCursor);
-  });
-  document.getElementById("r2fPrev").addEventListener("click", function() {
-    var b = r2f.back.pop();
-    if (!b) return;
-    r2f.page--; r2f.sel = {};
-    r2f.prefix = b.prefix;
-    loadR2Files(null);
-  });
-  document.getElementById("r2fSelAll").addEventListener("click", function() {
-    var on = false;
-    for (var i = 0; i < r2f.rows.length; i++) if (r2f.rows[i].state === "orphan" && !r2f.sel[r2f.rows[i].key]) { on = true; break; }
-    r2f.sel = {};
-    if (on) for (var j = 0; j < r2f.rows.length; j++) if (r2f.rows[j].state === "orphan") r2f.sel[r2f.rows[j].key] = 1;
-    renderR2Table();
-  });
-  document.getElementById("r2fDelSel").addEventListener("click", function() { delR2Selected(); });
+function r2fIsImage(k) { return IMG_EXTS.test(k); }
+function r2fIsVideo(k) { return VID_EXTS.test(k); }
+function r2fFileName(k) { var p = k.split("/"); return p[p.length - 1] || k; }
+function r2fExt(k) { var n = r2fFileName(k); var i = n.lastIndexOf("."); return i > 0 ? n.slice(i).toLowerCase() : ""; }
+
+var r2fBootstrap = (function() {
+  var done = false;
+  return function() {
+    if (done) return;
+    done = true;
+    document.getElementById("r2fRefresh").addEventListener("click", function() {
+      r2f.nextCursor = null; r2f.back = []; r2f.page = 0; r2f.sel = {};
+      loadR2Files();
+    });
+    document.getElementById("r2fApply").addEventListener("click", function() {
+      r2f.prefix = (document.getElementById("r2fPrefix").value || "").trim();
+      r2f.page = 0; r2f.nextCursor = null; r2f.back = []; r2f.sel = {};
+      loadR2Files();
+    });
+    document.getElementById("r2fPrefix").addEventListener("keydown", function(e) { if (e.key === "Enter") document.getElementById("r2fApply").click(); });
+    document.getElementById("r2fOnlyOrphan").addEventListener("click", function() {
+      r2f.only = !r2f.only;
+      this.classList.toggle("on", r2f.only);
+      renderR2View();
+    });
+    document.getElementById("r2fSortTime").addEventListener("click", function() {
+      if (r2f.sortDir === "desc") {
+        r2f.sortDir = "asc";
+        this.textContent = "↓ 时间";
+      } else {
+        r2f.sortDir = "desc";
+        this.textContent = "↑ 时间";
+      }
+      renderR2View();
+    });
+    document.getElementById("r2fViewGrid").addEventListener("click", function() {
+      r2f.view = "grid"; this.classList.add("on"); document.getElementById("r2fViewList").classList.remove("on");
+      renderR2View();
+    });
+    document.getElementById("r2fViewList").addEventListener("click", function() {
+      r2f.view = "list"; this.classList.add("on"); document.getElementById("r2fViewGrid").classList.remove("on");
+      renderR2View();
+    });
+    document.getElementById("r2fSelAll").addEventListener("click", function() {
+      var rows = r2fFiltered();
+      var on = false;
+      for (var i = 0; i < rows.length; i++) if (rows[i].state === "orphan" && !r2f.sel[rows[i].key]) { on = true; break; }
+      r2f.sel = {};
+      if (on) for (var j = 0; j < rows.length; j++) if (rows[j].state === "orphan") r2f.sel[rows[j].key] = 1;
+      renderR2View();
+    });
+    document.getElementById("r2fDelSel").addEventListener("click", function() { delR2Selected(); });
+  };
+})();
+
+function r2fFiltered() {
+  var rows = [];
+  for (var i = 0; i < r2f.rows.length; i++) if (!r2f.only || r2f.rows[i].state === "orphan") rows.push(r2f.rows[i]);
+  if (r2f.sort === "time") {
+    rows.sort(function(a, b) {
+      var ta = a.uploaded ? new Date(a.uploaded).getTime() : 0;
+      var tb = b.uploaded ? new Date(b.uploaded).getTime() : 0;
+      return r2f.sortDir === "asc" ? ta - tb : tb - ta;
+    });
+  }
+  return rows;
 }
 
 function r2fCopy(k, pub) {
@@ -6275,6 +6324,113 @@ function r2fCopy(k, pub) {
   }
 }
 
+// R2 图片 lightbox
+var r2fLb = { imgs: [], idx: 0 };
+
+function r2fOpenLightbox(index) {
+  var rows = r2fFiltered();
+  var imgs = [];
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].public_url && (r2fIsImage(rows[i].key) || r2fIsVideo(rows[i].key))) {
+      imgs.push({ url: rows[i].public_url, name: r2fFileName(rows[i].key), type: r2fIsVideo(rows[i].key) ? "video" : "image" });
+    }
+  }
+  if (!imgs.length) return;
+  var target = rows[index];
+  var startIdx = 0;
+  for (var j = 0; j < imgs.length; j++) { if (imgs[j].name === r2fFileName(target.key)) { startIdx = j; break; } }
+  r2fLb.imgs = imgs;
+  r2fLb.idx = startIdx;
+  r2fRenderLightbox();
+}
+
+function r2fRenderLightbox() {
+  var imgs = r2fLb.imgs;
+  if (!imgs.length) return;
+  var cur = imgs[r2fLb.idx];
+  var navHtml = imgs.length > 1
+    ? '<button class="lb-nav lb-prev" id="r2fLbPrev">&#8249;</button><button class="lb-nav lb-next" id="r2fLbNext">&#8250;</button>'
+    : "";
+  var mediaHtml = cur.type === "video"
+    ? '<video src="' + cur.url + '" controls autoplay playsinline preload="metadata" style="max-width:90vw;max-height:85vh;border-radius:12px;background:#000"></video>'
+    : '<img src="' + cur.url + '" alt="" style="max-width:90vw;max-height:85vh;border-radius:12px">';
+  document.getElementById("lightboxArea").innerHTML =
+    '<div class="lightbox">' + navHtml +
+    '<button class="lb-close" id="r2fLbClose">&times;</button>' +
+    mediaHtml +
+    '<div class="lb-info">' + escStr(cur.name) + " (" + (r2fLb.idx + 1) + "/" + imgs.length + ")</div>" +
+    "</div>";
+  document.getElementById("r2fLbClose").onclick = function() { document.getElementById("lightboxArea").innerHTML = ""; };
+  if (document.getElementById("r2fLbPrev")) document.getElementById("r2fLbPrev").onclick = function() { r2fLb.idx = (r2fLb.idx - 1 + r2fLb.imgs.length) % r2fLb.imgs.length; r2fRenderLightbox(); };
+  if (document.getElementById("r2fLbNext")) document.getElementById("r2fLbNext").onclick = function() { r2fLb.idx = (r2fLb.idx + 1) % r2fLb.imgs.length; r2fRenderLightbox(); };
+}
+
+// R2 分页
+function renderR2Pager() {
+  var el = document.getElementById("r2fPager");
+  var cur = r2f.page + 1;
+  var pages = r2f.back.length + 1;
+  var hasMore = !!r2f.nextCursor;
+  var h = "";
+  h += '<button class="pg' + (cur <= 1 ? " disabled" : "") + '" data-pg="prev">‹</button>';
+  for (var i = 1; i <= pages; i++) h += '<button class="pg' + (i === cur ? " on" : "") + '" data-pg="' + i + '">' + i + "</button>";
+  if (hasMore) h += '<button class="pg" data-pg="next">›</button>';
+  el.innerHTML = h;
+  var btns = el.querySelectorAll(".pg");
+  for (var b = 0; b < btns.length; b++) {
+    btns[b].addEventListener("click", function() {
+      var pg = this.getAttribute("data-pg");
+      if (pg === "prev") r2fGoPage(cur - 2);
+      else if (pg === "next") r2fGoNext();
+      else r2fGoPage(parseInt(pg, 10) - 1);
+    });
+  }
+}
+
+function r2fGoNext() {
+  if (!r2f.nextCursor) return;
+  r2f.back.push({ prefix: r2f.prefix, page: r2f.page, cursor: r2f.nextCursor });
+  r2f.page++; r2f.sel = {};
+  loadR2Files(r2f.nextCursor);
+}
+
+function r2fGoPage(target) {
+  if (target === r2f.page) return;
+  if (target < 0) target = 0;
+  // 需要重建 back 栈到目标页，由于 R2 只支持单向游标，只能回到首页或逐页前进
+  // 如果目标页 < 当前页，回到首页再前进
+  if (target < r2f.page) {
+    r2f.back = []; r2f.page = 0; r2f.sel = {};
+    // 加载首页，然后用 nextCursor 前进到目标页
+    r2fGoToPage(target, r2f.prefix, null);
+  } else {
+    // 向前跳到目标页
+    r2fGoToPage(target, r2f.prefix, null);
+  }
+}
+
+function r2fGoToPage(target, prefix, cursor) {
+  // 递归前进到目标页
+  if (r2f.page >= target) return;
+  var q = "/admin/api/r2/list?limit=300" + (prefix ? "&prefix=" + encodeURIComponent(prefix) : "") + (cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
+  api("GET", q).then(function(r) {
+    if (!r.ok) return;
+    var d = r.data || {};
+    r2f.rows = d.objects || [];
+    r2f.nextCursor = d.cursor || null;
+    r2f.prefix = prefix;
+    r2f.back.push({ prefix: prefix, page: r2f.page });
+    r2f.page++;
+    r2f.sel = {};
+    if (r2f.page < target && r2f.nextCursor) {
+      r2fGoToPage(target, prefix, r2f.nextCursor);
+    } else {
+      renderR2View();
+      renderR2Pager();
+    }
+  });
+}
+
 async function loadR2Files(cursor) {
   r2fBootstrap();
   document.getElementById("r2fBody").innerHTML = '<div style="padding:20px;color:var(--text-secondary)">加载中...</div>';
@@ -6285,21 +6441,70 @@ async function loadR2Files(cursor) {
   r2f.nextCursor = d.cursor || null;
   r2f.rows = d.objects || [];
   document.getElementById("r2fPath").textContent = "前缀: " + (r2f.prefix || "(根目录)");
-  document.getElementById("r2fInfo").textContent = "本页 " + r2f.rows.length + " 个对象" + (d.truncated ? "（未列完，可下一页）" : "（已到尾页）") + " · D1 引用 " + d.refs_count + " 键";
-  document.getElementById("r2fNext").style.display = (d.truncated && d.cursor) ? "" : "none";
-  document.getElementById("r2fPrev").style.display = r2f.back.length ? "" : "none";
-  renderR2Table();
+  document.getElementById("r2fInfo").textContent = "本页 " + r2f.rows.length + " 个对象" + (d.truncated ? "（还有更多）" : "（已到尾页）") + " · D1 引用 " + d.refs_count + " 键";
+  renderR2View();
+  renderR2Pager();
 }
 
-function renderR2Table() {
-  var rows = [];
-  for (var i = 0; i < r2f.rows.length; i++) if (!r2f.only || r2f.rows[i].state === "orphan") rows.push(r2f.rows[i]);
-  var body = document.getElementById("r2fBody");
-  var delBtn = document.getElementById("r2fDelSel");
-  var hasOrphan = false;
-  for (var k = 0; k < rows.length; k++) if (rows[k].state === "orphan") { hasOrphan = true; break; }
-  if (delBtn) delBtn.style.display = hasOrphan ? "" : "none";
+function renderR2View() {
+  if (r2f.view === "grid") renderR2Grid();
+  else renderR2Table();
+  updateR2DelBtn();
+}
 
+// 网格视图
+function renderR2Grid() {
+  var rows = r2fFiltered();
+  var body = document.getElementById("r2fBody");
+  if (!rows.length) {
+    body.innerHTML = '<div style="padding:20px;color:var(--text-secondary)">' + (r2f.only ? "当前范围没有孤儿对象。" : "当前范围没有对象。") + "</div>";
+    return;
+  }
+  var stMap = { page: ["静态页", "#64748b"], backup: ["备份", "#64748b"], used: ["已引用", "#6366f1"], orphan: ["孤儿", "#ef4444"] };
+  var h = '<div class="r2f-grid">';
+  for (var n = 0; n < rows.length; n++) {
+    var o = rows[n];
+    var orphan = o.state === "orphan";
+    var st = stMap[o.state] || ["未知", "#64748b"];
+    var checked = r2f.sel[o.key] ? " checked" : "";
+    h += '<div class="r2f-tile" data-idx="' + n + '">';
+    if (orphan) h += '<input type="checkbox" class="r2f-tile-chk r2f-chk" data-key="' + escStr(o.key) + '"' + checked + ">";
+    h += '<div class="r2f-tile-img">';
+    if (o.public_url && r2fIsImage(o.key)) {
+      h += '<img src="' + escStr(o.public_url) + '" loading="lazy" alt="">';
+    } else if (o.public_url && r2fIsVideo(o.key)) {
+      h += '<div style="text-align:center"><div style="font-size:28px">🎬</div><div style="font-size:10px;color:var(--text-secondary)">' + escStr(r2fExt(o.key)) + "</div></div>";
+    } else {
+      var icon = "📄";
+      if (/\.zip|\.rar|\.7z|\.tar|\.gz$/i.test(o.key)) icon = "📦";
+      else if (/\.pdf$/i.test(o.key)) icon = "📕";
+      else if (/\.mp3|\.wav|\.ogg|\.flac$/i.test(o.key)) icon = "🎵";
+      else if (/\.html?$/i.test(o.key)) icon = "🌐";
+      else if (/\.js|\.css|\.json|\.xml$/i.test(o.key)) icon = "📜";
+      else if (/backups?\//.test(o.key)) icon = "💾";
+      h += '<div class="r2f-tile-icon">' + icon + "</div>";
+    }
+    h += "</div>";
+    h += '<div class="r2f-tile-name" title="' + escStr(o.key) + '">' + escStr(o.key) + "</div>";
+    h += '<div class="r2f-tile-meta"><span>' + fmtSize(o.size) + '</span><span class="r2f-tile-badge" style="background:' + st[1] + '">' + st[0] + "</span></div>";
+    if (o.public_url) {
+      h += '<div class="r2f-tile-hover">';
+      if (r2fIsImage(o.key) || r2fIsVideo(o.key)) h += '<button class="btn btn-ghost btn-sm" data-act="preview" data-idx="' + n + '">预览</button>';
+      h += '<button class="btn btn-ghost btn-sm" data-act="open" data-url="' + escStr(o.public_url) + '">打开</button>';
+      h += '<button class="btn btn-ghost btn-sm" data-act="copy" data-key="' + escStr(o.key) + '" data-url="' + escStr(o.public_url) + '">复制</button>';
+      h += "</div>";
+    }
+    h += "</div>";
+  }
+  h += "</div>";
+  body.innerHTML = h;
+  bindR2Events(body);
+}
+
+// 列表视图
+function renderR2Table() {
+  var rows = r2fFiltered();
+  var body = document.getElementById("r2fBody");
   if (!rows.length) {
     body.innerHTML = '<div style="padding:20px;color:var(--text-secondary)">' + (r2f.only ? "当前范围没有孤儿对象。" : "当前范围没有对象。") + "</div>";
     return;
@@ -6311,25 +6516,30 @@ function renderR2Table() {
     '<th style="padding:8px 10px;text-align:left;width:90px">大小</th>' +
     '<th style="padding:8px 10px;text-align:left;width:170px">上传时间</th>' +
     '<th style="padding:8px 10px;text-align:left;width:100px">状态</th>' +
-    '<th style="padding:8px 10px;text-align:left;width:160px">操作</th></tr></thead><tbody>';
+    '<th style="padding:8px 10px;text-align:left;width:170px">操作</th></tr></thead><tbody>';
   for (var n = 0; n < rows.length; n++) {
     var o = rows[n];
     var orphan = o.state === "orphan";
     var st = stMap[o.state] || ["未知", "#64748b"];
     var checked = r2f.sel[o.key] ? " checked" : "";
     h += '<tr style="border-top:1px solid #f1f5f9">' +
-      '<td style="padding:6px 10px">' + (orphan ? '<input type="checkbox" class="r2f-chk" data-key="' + escStr(o.key) + '"' + checked + '>' : "") + "</td>" +
+      '<td style="padding:6px 10px">' + (orphan ? '<input type="checkbox" class="r2f-chk" data-key="' + escStr(o.key) + '"' + checked + ">" : "") + "</td>" +
       '<td style="padding:6px 10px;word-break:break-all;font-family:monospace;font-size:12px">' + escStr(o.key) + "</td>" +
       "<td style=\"padding:6px 10px\">" + fmtSize(o.size) + "</td>" +
       '<td style="padding:6px 10px">' + (o.uploaded ? new Date(o.uploaded).toLocaleString() : "-") + "</td>" +
       '<td style="padding:6px 10px;color:' + st[1] + ';font-weight:600">' + st[0] + "</td>" +
       '<td style="padding:6px 10px">' +
-      (o.public_url ? '<button class="btn btn-ghost btn-sm" data-act="view" data-key="' + escStr(o.key) + '" data-url="' + escStr(o.public_url) + '">预览</button>' : "") +
-      '<button class="btn btn-ghost btn-sm" data-act="copy" data-key="' + escStr(o.key) + '" data-url="' + escStr(o.public_url || "") + '">复制链接</button>' +
+      (o.public_url && (r2fIsImage(o.key) || r2fIsVideo(o.key)) ? '<button class="btn btn-ghost btn-sm" data-act="preview" data-idx="' + n + '">预览</button>' : "") +
+      (o.public_url ? '<button class="btn btn-ghost btn-sm" data-act="open" data-url="' + escStr(o.public_url) + '">打开</button>' : "") +
+      '<button class="btn btn-ghost btn-sm" data-act="copy" data-key="' + escStr(o.key) + '" data-url="' + escStr(o.public_url || "") + '">复制</button>' +
       "</td></tr>";
   }
   h += "</tbody></table></div>";
   body.innerHTML = h;
+  bindR2Events(body);
+}
+
+function bindR2Events(body) {
   var chks = body.querySelectorAll(".r2f-chk");
   for (var c = 0; c < chks.length; c++) {
     chks[c].addEventListener("change", function() {
@@ -6340,15 +6550,32 @@ function renderR2Table() {
   }
   var acts = body.querySelectorAll("button[data-act]");
   for (var a = 0; a < acts.length; a++) {
-    acts[a].addEventListener("click", function() {
+    acts[a].addEventListener("click", function(e) {
+      e.stopPropagation();
       var act = this.getAttribute("data-act");
-      var key = this.getAttribute("data-key");
-      var url = this.getAttribute("data-url");
-      if (act === "view") { if (url) window.open(url, "_blank"); else toast("该对象无公开 URL", 0); }
-      else r2fCopy(key, url);
+      if (act === "preview") {
+        var idx = parseInt(this.getAttribute("data-idx"), 10);
+        r2fOpenLightbox(idx);
+      } else if (act === "open") {
+        var url = this.getAttribute("data-url");
+        if (url) window.open(url, "_blank");
+      } else if (act === "copy") {
+        r2fCopy(this.getAttribute("data-key"), this.getAttribute("data-url"));
+      }
     });
   }
-  updateR2DelBtn();
+  // 点击网格 tile 打开 lightbox
+  if (r2f.view === "grid") {
+    var tiles = body.querySelectorAll(".r2f-tile");
+    for (var t = 0; t < tiles.length; t++) {
+      tiles[t].addEventListener("click", function(e) {
+        if (e.target.type === "checkbox" || e.target.tagName === "BUTTON") return;
+        var idx = parseInt(this.getAttribute("data-idx"), 10);
+        var row = r2fFiltered()[idx];
+        if (row && row.public_url && (r2fIsImage(row.key) || r2fIsVideo(row.key))) r2fOpenLightbox(idx);
+      });
+    }
+  }
 }
 
 function updateR2DelBtn() {
