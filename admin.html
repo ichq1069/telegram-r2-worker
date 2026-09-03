@@ -1300,6 +1300,7 @@ https://example.com/b.jpg"></textarea></div>
             <button class="btn btn-ghost" id="dbRefreshBtn">刷新状态</button>
             <button class="btn btn-ghost" id="dbTestMysqlBtn">测试MySQL连接</button>
             <button class="btn btn-ghost" id="dbRebuildMysqlBtn">重建MySQL表</button>
+            <button class="btn btn-primary" id="dbForceSyncBtn" style="background:#10b981">强制同步</button>
             <button class="btn btn-primary" id="dbSyncBtn">快速同步</button>
             <button class="btn btn-primary" id="dbFullSyncBtn" style="background:#8b5cf6">全量同步</button>
           </div>
@@ -3713,6 +3714,42 @@ document.getElementById("dbRebuildMysqlBtn").addEventListener("click", function(
     btn.disabled = false; btn.textContent = "重建MySQL表";
     toast("请求失败：" + e.message, 0);
   });
+});
+
+// 强制同步：逐表同步，带详细结果
+var FORCE_SYNC_TABLES = ['files','random_pool','user_uploads','settings','api_keys','known_chats','bot_commands','bot_config','redeem_codes','show_groups','tags','user_stats'];
+document.getElementById("dbForceSyncBtn").addEventListener("click", function() {
+  var btn = this;
+  if (!confirm("强制同步将逐表从D1读取并写入MySQL，每表50条，确定？")) return;
+  btn.disabled = true; btn.textContent = "同步中...";
+  var results = [];
+  var idx = 0;
+  function nextTable() {
+    if (idx >= FORCE_SYNC_TABLES.length) {
+      btn.disabled = false; btn.textContent = "强制同步";
+      var msg = "完成！" + results.map(function(r) { return r.table + ':' + r.synced + '/' + r.d1Count; }).join('，');
+      toast(msg, 1);
+      loadDbStatus();
+      return;
+    }
+    var t = FORCE_SYNC_TABLES[idx++];
+    btn.textContent = "同步 " + t + " (" + idx + "/" + FORCE_SYNC_TABLES.length + ")";
+    api("POST", "/admin/api/db-force-sync", { table: t, limit: 50 }, 30000).then(function(r) {
+      if (r && r.ok && r.data) {
+        results.push(r.data);
+        if (r.data.errorCount > 0 && r.data.errors && r.data.errors.length > 0) {
+          console.error("force sync " + t + " errors:", r.data.errors);
+        }
+      } else {
+        results.push({ table: t, d1Count: 0, synced: 0, errorCount: 0 });
+      }
+      nextTable();
+    }).catch(function(e) {
+      results.push({ table: t, d1Count: 0, synced: 0, errorCount: 0 });
+      nextTable();
+    });
+  }
+  nextTable();
 });
 
 document.getElementById("dbSyncBtn").addEventListener("click", function() {

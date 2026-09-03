@@ -183,6 +183,7 @@ export default {
     if (m === 'GET' && p === '/admin/api/db-stats') return isAdmin ? handleDbStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/db-test-mysql') return isAdmin ? handleDbTestMysql(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-rebuild-mysql') return isAdmin ? handleDbRebuildMysql(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/db-force-sync') return isAdmin ? handleDbForceSync(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-sync') return isAdmin ? handleDbSync(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-full-sync') return isAdmin ? handleDbFullSync(env) : json({ok:false,error:'Unauthorized'},401);
     // API key management (for third-party programs)
@@ -572,6 +573,51 @@ async function handleDbRebuildMysql(env) {
   } catch (e) {
     return json({ ok: false, error: e.message });
   }
+}
+
+// 强制同步：逐表从 D1 读取 → INSERT 到 MySQL，返回详细结果
+async function handleDbForceSync(request, env) {
+  try {
+    const b = await request.json().catch(() => ({}));
+    const table = b.table || 'files';
+    const limit = Math.min(parseInt(b.limit) || 50, 200);
+    const TABLE_MAP = {
+      files: { d1: "SELECT * FROM files WHERE deleted_at IS NULL LIMIT ?", mysql: "INSERT INTO files (id,storage_key,r2_url,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,md5_hash,processing_state,created_at,tags,group_ref,media_group_id,level,is_private,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE storage_key=VALUES(storage_key)", fields: 28 },
+      random_pool: { d1: "SELECT * FROM random_pool LIMIT ?", mysql: "INSERT INTO random_pool (id,url,thumb_url,title,tags,file_type,width,height,file_size,source,tg_file_id,enabled,created_at,level,is_private) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE url=VALUES(url)", fields: 15 },
+      user_uploads: { d1: "SELECT * FROM user_uploads WHERE deleted_at IS NULL LIMIT ?", mysql: "INSERT INTO user_uploads (id,user_id,url,thumb_url,file_name,file_size,file_type,width,height,tags,created_at,deleted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE url=VALUES(url)", fields: 12 },
+      settings: { d1: "SELECT * FROM settings LIMIT ?", mysql: "INSERT INTO settings (`key`,`value`) VALUES (?,?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)", fields: 2 },
+      api_keys: { d1: "SELECT * FROM api_keys LIMIT ?", mysql: "INSERT INTO api_keys (id,`key`,name,scopes,enabled,created_at,last_used_at,usage_count,expires_at,level,key_pass,username) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)", fields: 12 },
+      known_chats: { d1: "SELECT * FROM known_chats LIMIT ?", mysql: "INSERT INTO known_chats (chat_id,chat_type,chat_title,chat_username,last_active_at) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE chat_title=VALUES(chat_title)", fields: 5 },
+      bot_commands: { d1: "SELECT * FROM bot_commands LIMIT ?", mysql: "INSERT INTO bot_commands (id,command,response,description,enabled,created_at,menu) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE response=VALUES(response)", fields: 7 },
+      bot_config: { d1: "SELECT * FROM bot_config LIMIT ?", mysql: "INSERT INTO bot_config (`key`,`value`) VALUES (?,?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)", fields: 2 },
+      redeem_codes: { d1: "SELECT * FROM redeem_codes LIMIT ?", mysql: "INSERT INTO redeem_codes (id,code,level,quota,used_count,note,enabled,created_at,expires_at,type,extend_days) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE code=VALUES(code)", fields: 11 },
+      show_groups: { d1: "SELECT * FROM show_groups LIMIT ?", mysql: "INSERT INTO show_groups (id,chat_id,program_index,image_url,created_at) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE image_url=VALUES(image_url)", fields: 5 },
+      tags: { d1: "SELECT * FROM tags LIMIT ?", mysql: "INSERT INTO tags (id,name,color,category,sort_order,created_at) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)", fields: 6 },
+      user_stats: { d1: "SELECT * FROM user_stats LIMIT ?", mysql: "INSERT INTO user_stats (user_id,username,full_name,last_active_at,interaction_count) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE interaction_count=VALUES(interaction_count)", fields: 5 },
+    };
+    const cfg = TABLE_MAP[table];
+    if (!cfg) return json({ ok: false, error: '未知表: ' + table + '，可选: ' + Object.keys(TABLE_MAP).join(',') });
+    
+    // 读 D1
+    const d1Result = await env.D1_DB.prepare(cfg.d1).bind(limit).all();
+    const rows = d1Result.results || [];
+    if (rows.length === 0) return json({ ok: true, data: { table, d1Count: 0, synced: 0, errors: [] } });
+    
+    // 逐条 INSERT 到 MySQL，收集错误
+    const { mysqlExec } = await import('./src/mysql.js');
+    let synced = 0;
+    const errors = [];
+    for (const row of rows) {
+      try {
+        const vals = Object.values(row);
+        await mysqlExec(env, cfg.mysql, vals);
+        synced++;
+      } catch (e) {
+        if (errors.length < 5) errors.push({ id: row.id, error: e.message });
+      }
+    }
+    return json({ ok: true, data: { table, d1Count: rows.length, synced, errorCount: rows.length - synced, errors } });
+  } catch (e) { return json({ ok: false, error: e.message }); }
 }
 
 async function handleDbStats(env) {
