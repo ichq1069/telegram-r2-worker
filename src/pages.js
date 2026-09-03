@@ -76,6 +76,20 @@ export async function handleJxPage(env) {
   }
 }
 
+// 网页图片直传页：从 R2 读取 scrape.html（输入网页链接 → 拾取图片 → 直传群入库 Tele 库）
+export async function handleScrapePage(env) {
+  try {
+    const obj = await env.R2_BUCKET.get('scrape.html');
+    if (!obj) return new Response('scrape.html not found in R2. Please upload scrape.html to R2 bucket.', { status: 404 });
+    const headers = new Headers();
+    headers.set('Content-Type', 'text/html; charset=utf-8');
+    headers.set('Cache-Control', 'no-cache');
+    return new Response(obj.body, { headers });
+  } catch (e) {
+    return new Response('Error loading scrape page: ' + e.message, { status: 500 });
+  }
+}
+
 // 用户门户登录：支持「密钥 + key-pass」或「用户名 + 密码」两种方式，返回该密钥的统计信息（不含密码哈希）
 export async function handleUserLogin(request, env) {
   try {

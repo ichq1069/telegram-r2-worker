@@ -8,7 +8,7 @@ import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
 import { applyRateLimit } from "./ratelimit.js";
 import { isD1FaultError, noteD1Fault, d1Read } from "./dbaccess.js";
-import { mysqlGet, mysqlRows, dualInsertFiles, dualInsertUserUploads, dualUpdateUserUploads } from "./mysql.js";
+import { mysqlGet, mysqlRows, dualInsertFiles, dualInsertUserUploads, dualUpdateUserUploads, dualInsertRandomPool } from "./mysql.js";
 // ==================== Public slideshow page (random pool showcase) ====================
 // 30s in-memory cache so /show and /show/data skip D1 on hot requests (cold starts used to add seconds)
 let _showCfg = null, _showCfgAt = 0;
@@ -2013,6 +2013,278 @@ export async function handleAdminFilesImport(request, env) {
       added++;
     }
     return json({ ok: true, data: { added: added } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 直传群（TG 代理存储，不占 R2）====================
+// 把文件作为 document 发送到「用户上传绑定群组」（settings.upload_group_id），
+// 取 telegram_file_id/message_id 后写入 files 行（storage_key=tg/<fileId>，r2_url=/file/tg/<id> 占位代理）。
+// 可选 to_pool=true 时再插入 random_pool（source='tg'，tg_file_id 关联），等价「共享库/私密库直传群」。
+
+const TG_UA = 'Mozilla/5.0 (compatible; TgLibraryBot/1.0)';
+const SCRAPE_MAX_BYTES = 30 * 1024 * 1024; // 单张抓取上限 ~30MB（Telegram sendDocument 云端 50MB）
+
+function tgExtInfo(name) {
+  const ext = (String(name || '').split('.').pop() || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const mimeMap = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', avif: 'image/avif', svg: 'image/svg+xml',
+    mp4: 'video/mp4', mov: 'video/quicktime', mkv: 'video/x-matroska', webm: 'video/webm', avi: 'video/x-msvideo',
+    mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', flac: 'audio/flac',
+    pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', doc: 'application/msword'
+  };
+  const ct = (ext && mimeMap[ext]) ? mimeMap[ext] : 'application/octet-stream';
+  const typeMap = { photo: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif', 'svg'], video: ['mp4', 'mov', 'mkv', 'webm', 'avi'], audio: ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'] };
+  let fileType = 'document';
+  if (ext) { for (const t of Object.keys(typeMap)) { if (typeMap[t].indexOf(ext) !== -1) { fileType = t; break; } } }
+  return { ext: ext || 'bin', ct: ct, fileType: fileType };
+}
+
+async function getUploadGroupId(env) {
+  try {
+    const s = await env.D1_DB.prepare("SELECT value FROM settings WHERE key = 'upload_group_id'").first();
+    return (s && s.value) ? String(s.value).trim() : '';
+  } catch (e) { return ''; }
+}
+
+// 把字节作为 document 发送到 upload_group_id 群（官方 Bot API，保证 file_id 全局可用）
+async function tgSendDocumentToGroup(env, groupId, bytes, name, ct, caption) {
+  const fd = new FormData();
+  fd.append('chat_id', String(groupId));
+  fd.append('document', new Blob([bytes], { type: ct }), String(name).slice(0, 200));
+  if (caption) fd.append('caption', String(caption).slice(0, 1024));
+  const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendDocument', { method: 'POST', body: fd });
+  const j = await resp.json().catch(() => ({ ok: false, description: 'Telegram response not JSON' }));
+  if (!j.ok || !j.result) return { ok: false, error: j.description || 'Telegram sendDocument failed' };
+  const doc = j.result.document;
+  return { ok: true, fileId: doc && doc.file_id ? doc.file_id : '', messageId: j.result.message_id || 0, chatId: j.result.chat && j.result.chat.id ? j.result.chat.id : String(groupId) };
+}
+
+// 核心：直传群 + 落库 files（proxy 代理行）。返回 { ok, id, url, fileType, fileId, messageId, error }
+// opts: { name, bytes, size, tags, title, caption, level, isPrivate, toPool, origin }
+async function tgProxySave(env, opts) {
+  const groupId = await getUploadGroupId(env);
+  if (!groupId) return { ok: false, error: '尚未配置上传群组：请到「运维 → 用户上传配置」设置默认绑定群组' };
+  if (!env.TG_BOT_TOKEN) return { ok: false, error: 'TG_BOT_TOKEN 未配置' };
+  const o = opts || {};
+  const info = tgExtInfo(o.name);
+  const caption = (o.caption != null ? o.caption : '') || (o.title || '');
+  const sent = await tgSendDocumentToGroup(env, groupId, o.bytes, o.name, info.ct, caption || undefined);
+  if (!sent.ok) return { ok: false, error: sent.error };
+  if (!sent.fileId) return { ok: false, error: 'Telegram 未返回 file_id' };
+  const now = cnNowISO();
+  const isPrivate = o.isPrivate ? 1 : 0;
+  const level = isPrivate ? 'vvip' : sanitizeLevel(o.level);
+  const r = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
+    .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(o.name).slice(0, 255), o.size, info.fileType, info.ct, String(o.title || '').slice(0, 200), o.tags, level, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now).run();
+  const dbId = r.meta.last_row_id;
+  const proxyUrl = '/file/tg/' + dbId;
+  await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind(proxyUrl, dbId).run();
+  // 共享库/私密库直传群：需要同时进 random_pool，写入可访问的签名直链
+  if (o.toPool && o.origin) {
+    try {
+      const tok = await fileTok(dbId, env);
+      const ext = fileExtOf(o.name, info.fileType);
+      const signed = o.origin + '/file/tg/' + tok + '/' + dbId + '.' + ext;
+      const pr = await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
+        .bind(signed, signed, String(o.title || o.name).slice(0, 200), o.tags, level, isPrivate, info.fileType, o.size, dbId, now).run();
+      return { ok: true, id: dbId, url: proxyUrl, poolId: pr.meta.last_row_id, signedUrl: signed, fileType: info.fileType, fileId: sent.fileId, messageId: sent.messageId };
+    } catch (e) { return { ok: true, id: dbId, url: proxyUrl, fileType: info.fileType, fileId: sent.fileId, messageId: sent.messageId, poolError: e.message }; }
+  }
+  return { ok: true, id: dbId, url: proxyUrl, fileType: info.fileType, fileId: sent.fileId, messageId: sent.messageId };
+}
+
+// 上传到 Tele 库（files 表）直传群：Body { name, data(base64), size, tags, title, level, is_private }
+export async function handleAdminFilesUploadTg(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.data) return json({ ok: false, error: 'data (base64) required' }, 400);
+    if (b.data.length > 45 * 1024 * 1024) return json({ ok: false, error: 'file too large (max ~30MB)' }, 400);
+    let bytes;
+    try { bytes = b64ToBytes(String(b.data)); } catch (e) { return json({ ok: false, error: 'invalid base64' }, 400); }
+    if (!bytes || !bytes.length) return json({ ok: false, error: 'empty file' }, 400);
+    const name = String(b.name || 'file.bin').replace(/[\\/:*?"<>|]/g, '_');
+    const tags = (b.tags || []).map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || b.caption || '').slice(0, 200);
+    const fsize = (b.size && Number(b.size) > 0) ? Math.round(Number(b.size)) : bytes.byteLength;
+    const res = await tgProxySave(env, { name: name, bytes: bytes, size: fsize, tags: tags, title: title, caption: b.caption, level: sanitizeLevel(b.level), isPrivate: b.is_private ? 1 : 0 });
+    if (!res.ok) return json({ ok: false, error: res.error }, 502);
+    return json({ ok: true, data: { id: res.id, url: res.url, file_type: res.fileType, file_id: res.fileId, message_id: res.messageId, group_id: await getUploadGroupId(env), proxy_only: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 上传并加入共享库/私密库（random_pool）直传群：Body { name, data(base64), size, tags, title, level, is_private }
+export async function handleAdminPoolUploadTg(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !b.data) return json({ ok: false, error: 'data (base64) required' }, 400);
+    if (b.data.length > 45 * 1024 * 1024) return json({ ok: false, error: 'file too large (max ~30MB)' }, 400);
+    let bytes;
+    try { bytes = b64ToBytes(String(b.data)); } catch (e) { return json({ ok: false, error: 'invalid base64' }, 400); }
+    if (!bytes || !bytes.length) return json({ ok: false, error: 'empty file' }, 400);
+    const name = String(b.name || 'image.jpg').replace(/[\\/:*?"<>|]/g, '_');
+    const tags = (b.tags || []).map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || b.caption || '').slice(0, 200);
+    const fsize = (b.size && Number(b.size) > 0) ? Math.round(Number(b.size)) : bytes.byteLength;
+    const u = new URL(request.url);
+    const res = await tgProxySave(env, { name: name, bytes: bytes, size: fsize, tags: tags, title: title, caption: b.caption, level: sanitizeLevel(b.level), isPrivate: b.is_private ? 1 : 0, toPool: true, origin: u.origin });
+    if (!res.ok) return json({ ok: false, error: res.error }, 502);
+    // 双写 MySQL random_pool
+    if (res.signedUrl) {
+      const isPrivate = b.is_private ? 1 : 0;
+      const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+      dualInsertRandomPool(env, {
+        url: res.signedUrl, thumb_url: res.signedUrl, title: title, tags: tags,
+        file_type: res.fileType, width: null, height: null, file_size: fsize,
+        source: 'tg', tg_file_id: res.id, enabled: 1, created_at: cnNowISO(), level: level, is_private: isPrivate
+      }).catch(e => console.error('dualInsertRandomPool error:', e.message));
+    }
+    return json({ ok: true, data: { id: res.id, pool_id: res.poolId, url: res.signedUrl || res.url, file_type: res.fileType, file_id: res.fileId, message_id: res.messageId, group_id: await getUploadGroupId(env), proxy_only: true } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ==================== 网页图片拾取（直传群入库）====================
+// 抓取页面 <img>/srcset/lazy、CSS background、og:image 等，得到候选图片，供勾选后 grab 直传群。
+
+// 从页面提取候选图片 URL（保留 HTML 顺序，去重，上限 300）
+export function extractPageImages(html, baseUrl) {
+  const out = [], seen = new Set();
+  const add = (raw) => {
+    if (!raw) return;
+    let v = String(raw).replace(/&amp;/g, '&').replace(/&#0*38;/gi, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&#x2f;/gi, '/').trim();
+    if (/^(data:|#)/i.test(v)) return;
+    const abs = normUrl(v, baseUrl);
+    if (!abs) return;
+    const c = canonImgUrl(abs);
+    if (seen.has(c) || out.length >= 300) return;
+    seen.add(c);
+    out.push(c);
+  };
+  const pickAttr = (tag, attrs) => {
+    for (const a of attrs) {
+      const re = new RegExp('\\b' + a + '=["\']([^"\']+)["\']', 'i');
+      const m = tag.match(re);
+      if (m && m[1]) return m[1];
+    }
+    return '';
+  };
+  const tags = html.match(/<img\b[^>]*>/gi) || [];
+  for (const tag of tags) {
+    const ss = pickAttr(tag, ['srcset']);
+    if (ss) {
+      ss.split(',').forEach(function(part) {
+        const first = part.trim().split(/\s+/)[0];
+        if (first) add(first);
+      });
+    }
+    const src = pickAttr(tag, ['src', 'data-src', 'data-original', 'data-lazy', 'data-url', 'data-lazy-src']);
+    if (src) add(src);
+  }
+  // CSS background：内联 style 与 <style> 块（url(...)）
+  const cssBlocks = [];
+  (html.match(/<style\b[^>]*>([\s\S]*?)<\/style>/gi) || []).forEach(function(b) {
+    cssBlocks.push(b.replace(/^<style\b[^>]*>/i, '').replace(/<\/style>$/i, ''));
+  });
+  (html.match(/<[a-zA-Z][^>]*style=["'][^"']*["']/gi) || []).forEach(function(tag) {
+    const m = tag.match(/style=["']([^"']*)["']/i);
+    if (m && m[1]) cssBlocks.push(m[1]);
+  });
+  const uRe = /url\(\s*['"]?([^'")]+)['"]?\s*\)/gi;
+  for (const block of cssBlocks) {
+    let m;
+    while ((m = uRe.exec(block))) {
+      const v = String(m[1]).trim();
+      if (/^(data:|#)/i.test(v)) continue;
+      add(v);
+    }
+  }
+  // meta og:image / twitter:image
+  (html.match(/<meta\b[^>]+(?:property|name)=["'](?:og:image|twitter:image)["'][^>]*>/gi) || []).forEach(function(tag) {
+    const m = tag.match(/content=["']([^"']*)["']/i);
+    if (m) add(m[1]);
+  });
+  // 兜底：HTML 中裸露的图片直链
+  const re2 = /https?:\/\/[^\s"'<>()\\]+\.(?:jpg|jpeg|png|gif|webp|avif|bmp)(?:\?[^\s"'<>()\\]*)?/gi;
+  let m2;
+  while ((m2 = re2.exec(html))) {
+    if (out.length >= 300) break;
+    if (/\.(?:jpg|jpeg|png|gif|webp|avif|bmp)(?:\?|$)/i.test(m2[0])) add(m2[0]);
+  }
+  return out;
+}
+
+// 解析页面并返回候选图片：POST /admin/api/scrape/analyze  Body: { url }
+export async function handleAdminScrapeAnalyze(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const raw = b && b.url ? String(b.url).trim() : '';
+    if (!raw || !/^https?:\/\//i.test(raw)) return json({ ok: false, error: '请输入 http(s) 链接' }, 400);
+    let html = '';
+    let directImage = false;
+    try {
+      const res = await fetch(raw, { headers: { 'User-Agent': TG_UA }, redirect: 'follow' });
+      if (!res.ok) return json({ ok: false, error: '页面抓取失败（HTTP ' + res.status + '）' }, 502);
+      const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+      if (ct.indexOf('image/') === 0) {
+        // 输入本身是一张图片直链：直接作为唯一候选
+        html = '';
+        directImage = true;
+      } else {
+        html = await res.text();
+      }
+    } catch (e) { return json({ ok: false, error: '页面抓取失败：' + e.message }, 502); }
+    const title = directImage ? raw : (String((html.match(/<title[^>]*>([^<]*)<\/title>/i) || [null, ''])[1]).trim().slice(0, 200) || raw);
+    const urls = directImage ? [raw] : extractPageImages(html, raw);
+    return json({ ok: true, data: { url: raw, title: title, count: urls.length, images: urls } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 抓取勾选的图片并直传群入库 files：POST /admin/api/scrape/grab
+// Body: { urls:[...], title, tags, level, is_private, caption }  (单个请求上限 40 张)
+export async function handleAdminScrapeGrab(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    if (!b || !Array.isArray(b.urls) || !b.urls.length) return json({ ok: false, error: 'urls required' }, 400);
+    const urls = b.urls.map(function(x) { return String(x).trim(); }).filter(function(x) { return /^https?:\/\//i.test(x); }).slice(0, 40);
+    if (!urls.length) return json({ ok: false, error: 'url must be http(s)' }, 400);
+    const groupId = await getUploadGroupId(env);
+    if (!groupId) return json({ ok: false, error: '尚未配置上传群组：请到「运维 → 用户上传配置」设置默认绑定群组' }, 400);
+    const tags = (b.tags || []).map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || '').slice(0, 200);
+    const isPrivate = b.is_private ? 1 : 0;
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const referer = b.ref ? String(b.ref).trim() : '';
+    const results = [];
+    let added = 0;
+    for (const url of urls) {
+      const row = { url: url, ok: false, error: '' };
+      try {
+        const fh = { 'User-Agent': TG_UA };
+        // 带 Referer 下载：部分图床/反盗链站点校验来源页
+        if (referer) fh['Referer'] = referer;
+        const res = await fetch(url, { headers: fh, redirect: 'follow' });
+        if (!res.ok) { row.error = '下载失败（HTTP ' + res.status + '）'; results.push(row); continue; }
+        const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+        const cl = parseInt(res.headers.get('content-length') || '0', 10);
+        if (cl > SCRAPE_MAX_BYTES) { row.error = '图片过大（>30MB）'; results.push(row); continue; }
+        const buf = await res.arrayBuffer();
+        if (!buf || !buf.byteLength) { row.error = '空响应'; results.push(row); continue; }
+        if (buf.byteLength > SCRAPE_MAX_BYTES) { row.error = '图片过大（>30MB）'; results.push(row); continue; }
+        const bytes = new Uint8Array(buf);
+        let name = '';
+        try { const pu = new URL(url); name = decodeURIComponent(pu.pathname.split('/').pop() || ''); } catch (e) {}
+        if (!name || name.indexOf('.') < 0) {
+          const extMap = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg' };
+          const ext = extMap[ct] || 'jpg';
+          name = 'img_' + String(Math.random()).slice(2, 10) + '.' + ext;
+        }
+        name = String(name).replace(/[\\/:*?"<>|]/g, '_');
+        const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate });
+        if (!res2.ok) { row.error = res2.error; }
+        else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; added++; }
+      } catch (e) { row.error = e.message; }
+      results.push(row);
+    }
+    return json({ ok: true, data: { added: added, failed: results.length - added, results: results } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

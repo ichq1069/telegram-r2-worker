@@ -469,6 +469,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
         </div>
         <div class="store-tabs" id="fileStoreTabs">
           <button type="button" class="store-tab on" data-store="local">本地上传 (R2)</button>
+          <button type="button" class="store-tab" data-store="tg">直传群 (TG)</button>
           <button type="button" class="store-tab" data-store="link">外链链接</button>
         </div>
         <div id="fileStoreLocal">
@@ -484,6 +485,14 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             <button class="btn btn-primary" id="fileLinkImportBtn">导入外链到 Tele 库</button>
             <span id="fileLinkStatus" style="font-size:12px;color:var(--text-secondary)"></span>
           </div>
+        </div>
+        <div id="fileStoreTg" style="display:none">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px"><label>选择文件（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="fileTgFiles" multiple></div>
+            <button class="btn btn-primary" id="fileTgUploadBtn">直传群并保存</button>
+            <span id="fileTgStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:8px;line-height:1.6">把原文件发送到「上传群」（sendDocument，保留原始字节），按返回的 file_id 入库为代理记录，不占 R2 存储；文件进入 Tele 库并可参与公开 API 输出。入库级别/标签用卡片顶部选项。需先在「运维 → 用户上传配置」设置绑定群组。</div>
         </div>
       </div>
 
@@ -643,6 +652,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
         </div>
         <div class="store-tabs" id="storeTabs">
           <button type="button" class="store-tab on" data-store="local">本地上传 (R2)</button>
+          <button type="button" class="store-tab" data-store="tg">直传群 (TG)</button>
           <button type="button" class="store-tab" data-store="zup">Zupimages</button>
           <button type="button" class="store-tab" data-store="pi">Postimages</button>
           <button type="button" class="store-tab" data-store="link">外链链接</button>
@@ -659,6 +669,15 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
             <span id="poolLocalStatus" style="font-size:12px;color:var(--text-secondary)"></span>
           </div>
           <div style="font-size:11px;color:var(--text-secondary);margin-top:8px">图片直接存入你自己的 R2（telegramup.wo58.cn），无数量限制、永不过期，推荐首选。</div>
+        </div>
+        <div id="storeTg" style="display:none">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px"><label>选择图片（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="poolTgFiles" accept="image/*" multiple></div>
+            <div style="flex:1;min-width:160px"><label>标签（逗号分隔，可选）</label><input class="inp" id="poolTgTags" placeholder="风景,美女"></div>
+            <button class="btn btn-primary" id="poolTgUploadBtn">直传群并加入共享库</button>
+            <span id="poolTgStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:8px;line-height:1.6">图片发送到「上传群」后直接加入共享库（source=tg），存储走 Telegram 代理、不占 R2，直链为签名代理链接 /file/tg/&lt;id&gt;。入库级别用上方选项；需先在「运维 → 用户上传配置」设置绑定群组。</div>
         </div>
         <div id="storeZup" style="display:none">
           <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
@@ -767,6 +786,7 @@ https://example.com/b.jpg"></textarea></div>
         </div>
         <div class="store-tabs" id="privateStoreTabs">
           <button type="button" class="store-tab on" data-store="local">本地上传 (R2)</button>
+          <button type="button" class="store-tab" data-store="tg">直传群 (TG)</button>
           <button type="button" class="store-tab" data-store="zup">Zupimages</button>
           <button type="button" class="store-tab" data-store="pi">Postimages</button>
           <button type="button" class="store-tab" data-store="link">外链链接</button>
@@ -797,6 +817,14 @@ https://example.com/b.jpg"></textarea></div>
             <button class="btn btn-primary" id="privPiUploadBtn">上传到 Postimages</button>
             <span id="privPiStatus" style="font-size:12px;color:var(--text-secondary)"></span>
           </div>
+        </div>
+        <div id="privateStoreTg" style="display:none">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+            <div style="flex:1;min-width:240px"><label>选择图片（可多选，单张 ≤ 30MB）</label><input class="inp" type="file" id="privateTgFiles" accept="image/*" multiple></div>
+            <button class="btn btn-primary" id="privateTgUploadBtn">直传群并加入私密库</button>
+            <span id="privateTgStatus" style="font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:8px;line-height:1.6">私密内容等同 vvip，仅 vvip 密钥可访问。图片发送到「上传群」后直接加入私密库（source=tg，不占 R2）。标签用卡片顶部输入框。</div>
         </div>
         <div id="privateStoreLink" style="display:none">
           <div class="fr"><label>图片 URL（每行一个，支持多张）</label><textarea class="inp" id="privPoolUrls" rows="2" placeholder="https://example.com/a.jpg&#10;https://example.com/b.jpg"></textarea></div>
@@ -1179,6 +1207,13 @@ https://example.com/b.jpg"></textarea></div>
           <button class="btn btn-primary" id="jxBatchParseBtn">批量解析</button>
         </div>
         <div id="jxBatchResult" style="margin-top:12px;font-size:12px"></div>
+      </div>
+      <div class="card">
+        <div class="fbs">
+          <div class="card-title" style="margin-bottom:0"><span class="dot" style="background:#00c48f"></span>网页图片拾取（直传群入库） <span style="font-size:11px;color:var(--text-secondary);font-weight:400">输入含图网页链接 → 自动拾取 &lt;img&gt;/CSS 背景/懒加载图片 → 勾选后直传群并写入 Tele 库（代理存储，不占 R2）</span></div>
+          <a href="/scrape" target="_blank" rel="noopener" style="font-size:12px;color:var(--primary);white-space:nowrap">新窗口打开 →</a>
+        </div>
+        <iframe id="jxScrapeFrame" style="width:100%;height:760px;border:1px solid var(--border);border-radius:10px;background:#fff" title="网页图片直传"></iframe>
       </div>
     </div>
 
@@ -1571,7 +1606,7 @@ function init() {
     var t = e.target.closest(".store-tab");
     if (!t || !storeTabs.contains(t)) return;
     var s = t.getAttribute("data-store");
-    var names = ["local", "zup", "pi", "link"];
+    var names = ["local", "tg", "zup", "pi", "link"];
     for (var i = 0; i < names.length; i++) {
       var tab = storeTabs.querySelector('[data-store="' + names[i] + '"]');
       var pan = document.getElementById("store" + names[i].charAt(0).toUpperCase() + names[i].slice(1));
@@ -1597,8 +1632,12 @@ function init() {
       }
     });
   }
-  bindStoreTabs("privateStoreTabs", ["local", "zup", "pi", "link"]);
-  bindStoreTabs("fileStoreTabs", ["local", "link"]);
+  bindStoreTabs("privateStoreTabs", ["local", "tg", "zup", "pi", "link"]);
+  bindStoreTabs("fileStoreTabs", ["local", "tg", "link"]);
+
+  // 「链接解析」页内嵌的网页图片拾取页（带 admin api_key，避免重复登录）
+  var jxFrame = document.getElementById("jxScrapeFrame");
+  if (jxFrame && AK) jxFrame.src = OR + "/scrape?api_key=" + encodeURIComponent(AK);
 
   initQuickTagUI();
 
@@ -1915,6 +1954,82 @@ function init() {
       rd.readAsDataURL(f);
     }
     next();
+  });
+  // 通用「直传群」上传器：发送原文件到上传群并入库（代理，不占 R2）
+  function tgUploadMany(cfg) {
+    var inp = cfg.inp;
+    var files = inp.files;
+    if (!files || !files.length) { toast("请先选择文件", 0); return; }
+    var btn = cfg.btn, old = btn.textContent;
+    var st = cfg.st;
+    var tags = (cfg.tagsEl ? (document.getElementById(cfg.tagsEl) || {}).value : "") || "";
+    var total = files.length, done = 0, okCount = 0, failCount = 0, errMsg = "";
+    btn.disabled = true; btn.textContent = "直传中...";
+    function next() {
+      if (done >= total) {
+        st.textContent = "";
+        btn.disabled = false; btn.textContent = old;
+        inp.value = "";
+        toast("直传完成：成功 " + okCount + " 个" + (failCount ? "，失败 " + failCount + " 个" + (errMsg ? "（" + errMsg + "）" : "") : ""), failCount ? 0 : 1);
+        if (cfg.refresh) cfg.refresh();
+        return;
+      }
+      var f = files[done++];
+      st.textContent = "正在直传 " + done + "/" + total + "：" + (f.name || "文件");
+      if (f.size > 30 * 1024 * 1024) { failCount++; errMsg = errMsg || "存在超过 30MB 的文件"; next(); return; }
+      var rd = new FileReader();
+      rd.onload = function() {
+        var b64 = String(rd.result || "").split(",")[1] || "";
+        var body = { name: f.name || "file.bin", data: b64, tags: tags, title: "", size: f.size };
+        if (cfg.levelEl) body.level = document.getElementById(cfg.levelEl).value;
+        if (cfg.is_private) body.is_private = 1;
+        api("POST", cfg.path, body)
+          .then(function(r) {
+            if (r.ok) okCount++;
+            else { failCount++; if (!errMsg && r.error) errMsg = r.error; }
+            next();
+          });
+      };
+      rd.onerror = function() { failCount++; next(); };
+      rd.readAsDataURL(f);
+    }
+    next();
+  }
+  var fileTgBtn = document.getElementById("fileTgUploadBtn");
+  if (fileTgBtn) fileTgBtn.addEventListener("click", function() {
+    tgUploadMany({
+      inp: document.getElementById("fileTgFiles"),
+      btn: fileTgBtn,
+      st: document.getElementById("fileTgStatus"),
+      path: "/admin/api/files/upload-tg",
+      tagsEl: "fileLocalTags",
+      levelEl: "fileLocalLevel",
+      refresh: function() { loadFiles(currentPage); loadTagCloud(); }
+    });
+  });
+  var poolTgBtn = document.getElementById("poolTgUploadBtn");
+  if (poolTgBtn) poolTgBtn.addEventListener("click", function() {
+    tgUploadMany({
+      inp: document.getElementById("poolTgFiles"),
+      btn: poolTgBtn,
+      st: document.getElementById("poolTgStatus"),
+      path: "/admin/api/pool/upload-tg",
+      tagsEl: "poolTgTags",
+      levelEl: "poolAddLevel",
+      refresh: function() { loadPool(); loadTagCloud(); }
+    });
+  });
+  var privateTgBtn = document.getElementById("privateTgUploadBtn");
+  if (privateTgBtn) privateTgBtn.addEventListener("click", function() {
+    tgUploadMany({
+      inp: document.getElementById("privateTgFiles"),
+      btn: privateTgBtn,
+      st: document.getElementById("privateTgStatus"),
+      path: "/admin/api/pool/upload-tg",
+      tagsEl: "privateLocalTags",
+      is_private: 1,
+      refresh: function() { loadPrivatePool(); loadTagCloud(); }
+    });
   });
   var privLinkBtn = document.getElementById("privLinkImportBtn");
   if (privLinkBtn) privLinkBtn.addEventListener("click", function() {

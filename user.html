@@ -867,7 +867,17 @@ document.addEventListener("DOMContentLoaded", function() {
   
   if (fileSearchBtn) fileSearchBtn.addEventListener("click", function() { loadUserFiles(1); });
   
-  // ＋ 上传宫格：input 选择事件在 renderUpGrid 中绑定
+  // ＋ 上传宫格：input 每次 renderUpGrid 重建，选择事件用容器委托绑定
+  var upGridEl = document.getElementById("upGrid");
+  if (upGridEl) {
+    upGridEl.addEventListener("change", function(e) {
+      var t = e.target;
+      if (t && t.id === "uploadInput" && t.files && t.files.length) {
+        upPick(t.files);
+        t.value = "";
+      }
+    });
+  }
   renderUpGrid();
   
   // Load data when logged in
