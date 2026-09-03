@@ -179,10 +179,10 @@ const MYSQL_TABLES = [
   )`,
   `CREATE TABLE IF NOT EXISTS rate_limits (
     id INTEGER PRIMARY KEY AUTO_INCREMENT,
-    key TEXT NOT NULL,
+    \`key\` TEXT NOT NULL,
     window TEXT NOT NULL,
     count INTEGER DEFAULT 0,
-    UNIQUE(key, window)
+    UNIQUE(\`key\`, window)
   )`,
   `CREATE TABLE IF NOT EXISTS worker_stats (
     day TEXT PRIMARY KEY,
