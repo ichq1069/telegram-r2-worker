@@ -29,6 +29,320 @@ export async function withConn(env, fn) {
   }
 }
 
+// ==================== MySQL 表结构初始化 ====================
+const MYSQL_TABLES = [
+  `CREATE TABLE IF NOT EXISTS files (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    storage_key TEXT NOT NULL,
+    r2_url TEXT NOT NULL,
+    chat_id TEXT,
+    chat_title TEXT,
+    chat_type TEXT,
+    chat_username TEXT,
+    user_id INTEGER,
+    username TEXT,
+    full_name TEXT,
+    telegram_file_id TEXT,
+    file_name TEXT,
+    file_size INTEGER,
+    file_type TEXT,
+    mime_type TEXT,
+    width INTEGER,
+    height INTEGER,
+    caption TEXT,
+    message_id TEXT,
+    md5_hash TEXT,
+    processing_state TEXT DEFAULT 'completed',
+    created_at TEXT,
+    tg_file_url TEXT,
+    error_msg TEXT,
+    progress_bytes INTEGER DEFAULT 0,
+    total_bytes INTEGER DEFAULT 0,
+    thumb_url TEXT,
+    quick_hash TEXT,
+    tags TEXT DEFAULT '',
+    pool_status TEXT DEFAULT '',
+    group_ref TEXT DEFAULT '',
+    level TEXT DEFAULT 'pt',
+    is_private INTEGER DEFAULT 0,
+    media_group_id TEXT DEFAULT '',
+    receipt_msg_id INTEGER DEFAULT 0,
+    deleted_at TEXT,
+    view_count INTEGER DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS random_pool (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    url TEXT NOT NULL,
+    thumb_url TEXT,
+    title TEXT,
+    tags TEXT DEFAULT '',
+    file_type TEXT DEFAULT 'photo',
+    width INTEGER,
+    height INTEGER,
+    file_size INTEGER,
+    source TEXT DEFAULT 'manual',
+    tg_file_id INTEGER,
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT,
+    level TEXT DEFAULT 'pt',
+    is_private INTEGER DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS user_uploads (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    user_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    thumb_url TEXT,
+    file_name TEXT,
+    file_size INTEGER,
+    file_type TEXT,
+    width INTEGER,
+    height INTEGER,
+    tags TEXT DEFAULT '',
+    created_at TEXT,
+    deleted_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS settings (
+    \`key\` TEXT PRIMARY KEY,
+    value TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,
+    \`key\` TEXT UNIQUE NOT NULL,
+    name TEXT,
+    scopes TEXT DEFAULT 'files:read',
+    enabled INTEGER DEFAULT 1,
+    created_at TEXT,
+    last_used_at TEXT,
+    usage_count INTEGER DEFAULT 0,
+    expires_at TEXT,
+    level TEXT DEFAULT 'pt',
+    key_pass TEXT,
+    username TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS known_chats (
+    chat_id TEXT PRIMARY KEY,
+    chat_type TEXT DEFAULT '',
+    chat_title TEXT,
+    chat_username TEXT,
+    last_active_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS user_stats (
+    user_id INTEGER PRIMARY KEY,
+    username TEXT,
+    full_name TEXT,
+    messages INTEGER DEFAULT 0,
+    commands INTEGER DEFAULT 0,
+    files INTEGER DEFAULT 0,
+    inline_queries INTEGER DEFAULT 0,
+    callback_clicks INTEGER DEFAULT 0,
+    last_active_at TEXT
+  )`
+];
+
+let _tablesEnsured = false;
+
+export async function ensureMySQLTables(env) {
+  if (_tablesEnsured) return true;
+  try {
+    await withConn(env, async (c) => {
+      for (const sql of MYSQL_TABLES) {
+        await c.query(sql);
+      }
+    });
+    _tablesEnsured = true;
+    return true;
+  } catch (e) {
+    console.error('ensureMySQLTables error:', e.message);
+    return false;
+  }
+}
+
+// ==================== 双写辅助函数 ====================
+// 写入 D1 后同步写入 MySQL，MySQL 失败不影响主流程
+
+// 双写 files 表 INSERT
+export async function dualInsertFiles(env, params) {
+  try {
+    await ensureMySQLTables(env);
+    const sql = `INSERT INTO files (storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const p = params;
+    return await mysqlExec(env, sql, [
+      p.storage_key, p.r2_url, p.chat_id, p.chat_title, p.chat_type, p.chat_username,
+      p.user_id, p.username, p.full_name, p.telegram_file_id, p.file_name, p.file_size,
+      p.file_type, p.mime_type, p.width, p.height, p.caption, p.message_id, p.md5_hash,
+      p.processing_state, p.created_at, p.tags, p.group_ref, p.media_group_id, p.level, p.is_private, p.deleted_at
+    ]);
+  } catch (e) {
+    console.error('dualInsertFiles error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 files 表 UPDATE（按 id 更新指定字段）
+export async function dualUpdateFiles(env, id, updates) {
+  try {
+    await ensureMySQLTables(env);
+    const keys = Object.keys(updates);
+    if (!keys.length) return { ok: true };
+    const setClause = keys.map(k => `\`${k}\`=?`).join(', ');
+    const sql = `UPDATE files SET ${setClause} WHERE id=?`;
+    const params = [...keys.map(k => updates[k]), id];
+    return await mysqlExec(env, sql, params);
+  } catch (e) {
+    console.error('dualUpdateFiles error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 random_pool 表 INSERT
+export async function dualInsertRandomPool(env, params) {
+  try {
+    await ensureMySQLTables(env);
+    const sql = `INSERT INTO random_pool (url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    return await mysqlExec(env, sql, [
+      params.url, params.thumb_url, params.title, params.tags, params.file_type,
+      params.width, params.height, params.file_size, params.source, params.tg_file_id,
+      params.enabled, params.created_at, params.level, params.is_private
+    ]);
+  } catch (e) {
+    console.error('dualInsertRandomPool error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 random_pool 表 UPDATE
+export async function dualUpdateRandomPool(env, id, updates) {
+  try {
+    await ensureMySQLTables(env);
+    const keys = Object.keys(updates);
+    if (!keys.length) return { ok: true };
+    const setClause = keys.map(k => `\`${k}\`=?`).join(', ');
+    const sql = `UPDATE random_pool SET ${setClause} WHERE id=?`;
+    const params = [...keys.map(k => updates[k]), id];
+    return await mysqlExec(env, sql, params);
+  } catch (e) {
+    console.error('dualUpdateRandomPool error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 user_uploads 表 INSERT
+export async function dualInsertUserUploads(env, params) {
+  try {
+    await ensureMySQLTables(env);
+    const sql = `INSERT INTO user_uploads (user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    return await mysqlExec(env, sql, [
+      params.user_id, params.url, params.thumb_url, params.file_name, params.file_size,
+      params.file_type, params.width, params.height, params.tags, params.created_at
+    ]);
+  } catch (e) {
+    console.error('dualInsertUserUploads error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 user_uploads 表 UPDATE
+export async function dualUpdateUserUploads(env, id, updates) {
+  try {
+    await ensureMySQLTables(env);
+    const keys = Object.keys(updates);
+    if (!keys.length) return { ok: true };
+    const setClause = keys.map(k => `\`${k}\`=?`).join(', ');
+    const sql = `UPDATE user_uploads SET ${setClause} WHERE id=?`;
+    const params = [...keys.map(k => updates[k]), id];
+    return await mysqlExec(env, sql, params);
+  } catch (e) {
+    console.error('dualUpdateUserUploads error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 settings 表（upsert）
+export async function dualUpsertSettings(env, key, value) {
+  try {
+    await ensureMySQLTables(env);
+    return await mysqlExec(env,
+      "INSERT INTO settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)",
+      [key, value]
+    );
+  } catch (e) {
+    console.error('dualUpsertSettings error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 api_keys 表 INSERT
+export async function dualInsertApiKeys(env, params) {
+  try {
+    await ensureMySQLTables(env);
+    const sql = `INSERT INTO api_keys (\`key\`, name, scopes, enabled, created_at, expires_at, level, key_pass, username)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    return await mysqlExec(env, sql, [
+      params.key, params.name, params.scopes, params.enabled, params.created_at,
+      params.expires_at, params.level, params.key_pass, params.username
+    ]);
+  } catch (e) {
+    console.error('dualInsertApiKeys error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 api_keys 表 UPDATE
+export async function dualUpdateApiKeys(env, id, updates) {
+  try {
+    await ensureMySQLTables(env);
+    const keys = Object.keys(updates);
+    if (!keys.length) return { ok: true };
+    const setClause = keys.map(k => `\`${k}\`=?`).join(', ');
+    const sql = `UPDATE api_keys SET ${setClause} WHERE id=?`;
+    const params = [...keys.map(k => updates[k]), id];
+    return await mysqlExec(env, sql, params);
+  } catch (e) {
+    console.error('dualUpdateApiKeys error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 known_chats 表（upsert）
+export async function dualUpsertKnownChats(env, params) {
+  try {
+    await ensureMySQLTables(env);
+    const sql = `INSERT INTO known_chats (chat_id, chat_type, chat_title, chat_username, last_active_at)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE chat_type=VALUES(chat_type), chat_title=VALUES(chat_title),
+                 chat_username=VALUES(chat_username), last_active_at=VALUES(last_active_at)`;
+    return await mysqlExec(env, sql, [
+      params.chat_id, params.chat_type, params.chat_title, params.chat_username, params.last_active_at
+    ]);
+  } catch (e) {
+    console.error('dualUpsertKnownChats error:', e.message);
+    return { ok: false };
+  }
+}
+
+// 双写 user_stats 表（upsert）
+export async function dualUpsertUserStats(env, params) {
+  try {
+    await ensureMySQLTables(env);
+    const sql = `INSERT INTO user_stats (user_id, username, full_name, messages, commands, files, inline_queries, callback_clicks, last_active_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE username=VALUES(username), full_name=VALUES(full_name),
+                 messages=VALUES(messages), commands=VALUES(commands), files=VALUES(files),
+                 inline_queries=VALUES(inline_queries), callback_clicks=VALUES(callback_clicks),
+                 last_active_at=VALUES(last_active_at)`;
+    return await mysqlExec(env, sql, [
+      params.user_id, params.username, params.full_name, params.messages, params.commands,
+      params.files, params.inline_queries, params.callback_clicks, params.last_active_at
+    ]);
+  } catch (e) {
+    console.error('dualUpsertUserStats error:', e.message);
+    return { ok: false };
+  }
+}
+
 // ==================== 通用执行层（D1 降级读取备库） ====================
 // D1 故障/限额时，所有业务表读取回落到这里的等价 MySQL 查询。
 // 时间字段 MySQL 存的是 varchar(32)（与 D1 TEXT 一致），避免类型转换差异。

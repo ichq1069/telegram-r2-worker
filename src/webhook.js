@@ -8,6 +8,7 @@ import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarge
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
 import { getBotUsername, getProxyMode } from "./api.js";
+import { dualInsertFiles, dualUpdateFiles } from "./mysql.js";
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg, isBatchCommand, startManualBatch, isManualBatchActive, finalizeManualBatch, getManualBatchStatus } from "./batch.js";
 import { fireWebhook } from "./events.js";
 // ==================== WEBHOOK ====================
@@ -250,6 +251,16 @@ export async function processUpdateCore(update, env, waitFn) {
               'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,tags,message_id,created_at,group_ref,media_group_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
             ).bind(tempKey, '', '', 'downloading', chatId, chat.title || chat.username || chatId, chat.type || '', chat.username || '', from.id || 0, from.username || '', [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown', fi.fileId, fi.fileName, fi.fileSize, fi.type, '', fi.width, fi.height, msg.caption || '', tags.join(','), msgId, date.toISOString(), ref, msg.media_group_id || '').run();
             rid = r.meta?.last_row_id;
+            // 双写 MySQL
+            dualInsertFiles(env, {
+              storage_key: tempKey, r2_url: '', chat_id: chatId, chat_title: chat.title || chat.username || chatId,
+              chat_type: chat.type || '', chat_username: chat.username || '', user_id: from.id || 0,
+              username: from.username || '', full_name: [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown',
+              telegram_file_id: fi.fileId, file_name: fi.fileName, file_size: fi.fileSize, file_type: fi.type,
+              mime_type: '', width: fi.width, height: fi.height, caption: msg.caption || '',
+              message_id: msgId, md5_hash: '', processing_state: 'downloading', created_at: date.toISOString(),
+              tags: tags.join(','), group_ref: ref, media_group_id: msg.media_group_id || '', level: 'pt', is_private: 0, deleted_at: null
+            }).catch(e => console.error('dualInsertFiles error:', e.message));
             break;
           } catch (e) {
             log.error('D1 pending INSERT attempt ' + (attempt + 1) + ':', e.message);
@@ -279,6 +290,8 @@ export async function processUpdateCore(update, env, waitFn) {
         try {
           // 代理 URL 带后缀名（如 /file/tg/123.jpg），方便识别类型/下载文件名
           await env.D1_DB.prepare("UPDATE files SET r2_url=?, storage_key='', processing_state='completed', progress_bytes=0, total_bytes=? WHERE id=?").bind('/file/tg/' + rid + '.' + fileExtOf(fi.fileName, fi.type), fi.fileSize || 0, rid).run();
+          // 双写 MySQL
+          dualUpdateFiles(env, rid, { r2_url: '/file/tg/' + rid + '.' + fileExtOf(fi.fileName, fi.type), storage_key: '', processing_state: 'completed', progress_bytes: 0, total_bytes: fi.fileSize || 0 }).catch(e => console.error('dualUpdateFiles error:', e.message));
         } catch (e) { log.error('proxy mark:', e.message); }
         // 手动批次模式：跳过 3 秒自动编号，等 #结束 时统一编号
         if (!(await isManualBatchActive(env, chatId))) {
@@ -569,6 +582,8 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
   async function updateState(state, err) {
     if (env.D1_DB && dbId) {
       try { await env.D1_DB.prepare('UPDATE files SET processing_state=?, error_msg=? WHERE id=?').bind(state, err || '', dbId).run(); } catch (e) {}
+      // 双写 MySQL
+      dualUpdateFiles(env, dbId, { processing_state: state, error_msg: err || '' }).catch(e => console.error('dualUpdateFiles error:', e.message));
     }
     if (state === 'failed' && err) {
       var f = null;
@@ -605,6 +620,8 @@ export async function processShareLinkAsync(dbId, link, chatId, msgId, chat, fro
           await env.D1_DB.prepare(
             "UPDATE files SET storage_key='', r2_url=?, md5_hash='', mime_type='video/mp4', processing_state='completed', file_name=?, tg_file_url=?, thumb_url='', quick_hash='' WHERE id=?"
           ).bind(proxyUrl, titleP, videoUrl, dbId).run();
+          // 双写 MySQL
+          dualUpdateFiles(env, dbId, { storage_key: '', r2_url: proxyUrl, md5_hash: '', mime_type: 'video/mp4', processing_state: 'completed', file_name: titleP, tg_file_url: videoUrl, thumb_url: '', quick_hash: '' }).catch(e => console.error('dualUpdateFiles error:', e.message));
         } catch (e) { log.error('D1 share update:', e.message); }
       }
       try {

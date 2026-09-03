@@ -4,6 +4,7 @@ import { json, fmtSize, genHash, cacheGet, cacheSet } from "./util.js";
 import { clampInt, cnDayIso, cnTodayStr, cnNowISO, guessExt, fileExtOf } from "./core.js";
 import { fileTok, putR2 } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
+import { dualUpdateFiles } from "./mysql.js";
 
 
 // /file/tg/<id> -> 302 redirect to official Telegram direct link (if present) else R2 URL.
@@ -92,6 +93,8 @@ export async function lazyTransferToR2(env, id, f, dlUrl) {
     const url = await putR2(key, buf, ct, env);
     if (!url) return;
     await env.D1_DB.prepare("UPDATE files SET storage_key=?, r2_url=?, processing_state='completed' WHERE id=?").bind(key, url, id).run();
+    // 双写 MySQL
+    dualUpdateFiles(env, id, { storage_key: key, r2_url: url, processing_state: 'completed' }).catch(e => console.error('dualUpdateFiles error:', e.message));
   } catch (e) { console.error('lazyTransferToR2:', e.message); }
 }
 

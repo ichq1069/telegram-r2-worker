@@ -8,7 +8,7 @@ import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
 import { extractFileInfo } from "./webhook.js";
 import { applyRateLimit } from "./ratelimit.js";
 import { isD1FaultError, noteD1Fault, d1Read } from "./dbaccess.js";
-import { mysqlGet, mysqlRows } from "./mysql.js";
+import { mysqlGet, mysqlRows, dualInsertFiles, dualInsertUserUploads, dualUpdateUserUploads } from "./mysql.js";
 // ==================== Public slideshow page (random pool showcase) ====================
 // 30s in-memory cache so /show and /show/data skip D1 on hot requests (cold starts used to add seconds)
 let _showCfg = null, _showCfgAt = 0;
@@ -2421,6 +2421,12 @@ export async function handleUserUpload(request, env) {
         const userUploadResult = await env.D1_DB.prepare(
           'INSERT INTO user_uploads (user_id, url, file_name, file_size, file_type, tags, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
         ).bind(user.id, `/file/tg/${dbId}`, file.name, file.size, isVideo ? 'video' : 'photo', tags, now).run();
+        // 双写 MySQL
+        dualInsertUserUploads(env, {
+          user_id: user.id, url: `/file/tg/${dbId}`, thumb_url: null, file_name: file.name,
+          file_size: file.size, file_type: isVideo ? 'video' : 'photo', width: null, height: null,
+          tags: tags, created_at: now
+        }).catch(e => console.error('dualInsertUserUploads error:', e.message));
         
         // 签名直链：公开随机/共享池返回的 url 必须可访问（/file/tg/<id> 需签名，防枚举）
         let sharedUrl = `/file/tg/${dbId}`;
@@ -2550,6 +2556,8 @@ export async function handleUserFileDelete(request, env) {
     
     const now = cnNowISO();
     await env.D1_DB.prepare('UPDATE user_uploads SET deleted_at = ? WHERE id = ?').bind(now, fileId).run();
+    // 双写 MySQL
+    dualUpdateUserUploads(env, fileId, { deleted_at: now }).catch(e => console.error('dualUpdateUserUploads error:', e.message));
     
     // 级联清理（与后台删除文件惯例一致，避免"孤儿数据"残留）：
     //   - files 行软删 → /file/tg/<id> 代理不再出图

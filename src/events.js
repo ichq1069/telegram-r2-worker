@@ -4,6 +4,7 @@ import { json, invalidateStatsCache } from "./util.js";
 import { sanitizeLevel, clampInt, splitTags, cnDayIso, cnNowISO } from "./core.js";
 import { bumpR2Usage } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
+import { dualInsertRandomPool, dualUpdateRandomPool, dualUpdateFiles, dualInsertUserUploads, dualUpdateUserUploads } from "./mysql.js";
 // ==================== 事件 Webhook 通知 ====================
 // 入库/删除/失败时 POST JSON 到外部 URL（settings.webhook_cfg = { url, enabled, events: [] }）
 // events 空数组 = 全部事件；支持事件：file_imported / file_deleted / file_failed
@@ -83,7 +84,11 @@ export async function handleAdminPoolTags(request, env) {
         next = tags.join(',');
       }
       const r = await env.D1_DB.prepare('UPDATE random_pool SET tags = ? WHERE id = ?').bind(next, id).run();
-      if (r && r.meta && r.meta.changes) updated++;
+      if (r && r.meta && r.meta.changes) {
+        updated++;
+        // 双写 MySQL
+        dualUpdateRandomPool(env, id, { tags: next }).catch(e => console.error('dualUpdateRandomPool error:', e.message));
+      }
     }
     return json({ ok: true, updated: updated });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
@@ -202,6 +207,12 @@ export async function importFileToPool(f, opts, env) {
   const useTags = (opts && opts.tags) || f.tags || '';
   await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, width, height, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
     .bind(f.r2_url, f.thumb_url || f.r2_url, f.file_name || '', useTags, level, isPrivate, f.file_type || 'photo', f.width || null, f.height || null, f.file_size || null, f.id, cnNowISO()).run();
+  // 双写 MySQL
+  dualInsertRandomPool(env, {
+    url: f.r2_url, thumb_url: f.thumb_url || f.r2_url, title: f.file_name || '', tags: useTags,
+    file_type: f.file_type || 'photo', width: f.width || null, height: f.height || null, file_size: f.file_size || null,
+    source: 'tg', tg_file_id: f.id, enabled: 1, created_at: cnNowISO(), level: level, is_private: isPrivate
+  }).catch(e => console.error('dualInsertRandomPool error:', e.message));
   return true;
 }
 
