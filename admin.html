@@ -3655,15 +3655,16 @@ async function loadDbStatus() {
     const statsR = await api("GET", "/admin/api/db-stats");
     if (statsR && statsR.ok && statsR.data) {
       var d = statsR.data;
-      var tables = ['files','random_pool','user_uploads','settings','api_keys','known_chats','user_stats','bot_commands','bot_config','redeem_codes','show_groups','tags'];
+      var tables = ['files','random_pool','user_uploads','settings','api_keys','known_chats','user_stats','bot_commands','bot_config','redeem_codes','show_groups','tags','rate_limits','worker_stats','api_call_logs','folders','webhook_logs'];
       var h = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 8px">表名</th><th style="text-align:right;padding:4px 8px;color:#3b82f6">D1</th><th style="text-align:right;padding:4px 8px;color:#10b981">MySQL</th><th style="text-align:center;padding:4px 8px">状态</th></tr></thead><tbody>';
       for (var i = 0; i < tables.length; i++) {
         var t = tables[i];
         var d1c = (d.d1 && d.d1[t] !== undefined) ? d.d1[t] : 0;
         var mc = (d.mysql && d.mysql[t] !== undefined) ? d.mysql[t] : 0;
-        var same = d1c === mc;
+        var diff = Math.abs(d1c - mc);
+        var same = diff === 0;
         var label = t;
-        h += '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:4px 8px;font-weight:500">' + label + '</td><td style="text-align:right;padding:4px 8px">' + d1c + '</td><td style="text-align:right;padding:4px 8px">' + mc + '</td><td style="text-align:center;padding:4px 8px;color:' + (same ? '#10b981' : '#f59e0b') + '">' + (same ? '一致' : '差异 ' + Math.abs(d1c - mc)) + '</td></tr>';
+        h += '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:4px 8px;font-weight:500">' + label + '</td><td style="text-align:right;padding:4px 8px">' + d1c + '</td><td style="text-align:right;padding:4px 8px">' + mc + '</td><td style="text-align:center;padding:4px 8px;color:' + (same ? '#10b981' : '#f59e0b') + '">' + (same ? '跳过' : '差异 ' + diff) + '</td></tr>';
       }
       h += '</tbody></table>';
       d1Stats.innerHTML = h;
