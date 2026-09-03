@@ -539,45 +539,33 @@ async function handleDbModeSet(request, env) {
 
 async function handleDbStats(env) {
   try {
-    const stats = { d1_files: 0, d1_pool: 0, d1_uploads: 0, mysql_files: 0, mysql_pool: 0, mysql_uploads: 0, sync_status: '正常', last_sync: '-', diff_count: '0' };
+    const stats = { sync_status: '正常', last_sync: '-', diff_count: '0', d1: {}, mysql: {} };
+    const TABLES = ['files', 'random_pool', 'user_uploads', 'settings', 'api_keys', 'known_chats', 'user_stats', 'bot_commands', 'bot_config', 'redeem_codes', 'show_groups', 'tags'];
     
     // D1 统计
-    if (env.D1_DB) {
+    for (const t of TABLES) {
       try {
-        const f = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL").first();
-        stats.d1_files = f?.c || 0;
-      } catch (e) {}
-      try {
-        const p = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM random_pool").first();
-        stats.d1_pool = p?.c || 0;
-      } catch (e) {}
-      try {
-        const u = await env.D1_DB.prepare("SELECT COUNT(*) as c FROM user_uploads WHERE deleted_at IS NULL").first();
-        stats.d1_uploads = u?.c || 0;
-      } catch (e) {}
+        const q = (t === 'files' || t === 'user_uploads') ? `SELECT COUNT(*) as c FROM ${t} WHERE deleted_at IS NULL` : `SELECT COUNT(*) as c FROM ${t}`;
+        const r = await env.D1_DB.prepare(q).first();
+        stats.d1[t] = r?.c || 0;
+      } catch (e) { stats.d1[t] = 0; }
     }
     
     // MySQL 统计
-    try {
-      const f = await mysqlRows(env, "SELECT COUNT(*) as c FROM files WHERE deleted_at IS NULL", []);
-      stats.mysql_files = f[0]?.c || 0;
-    } catch (e) {}
-    try {
-      const p = await mysqlRows(env, "SELECT COUNT(*) as c FROM random_pool", []);
-      stats.mysql_pool = p[0]?.c || 0;
-    } catch (e) {}
-    try {
-      const u = await mysqlRows(env, "SELECT COUNT(*) as c FROM user_uploads WHERE deleted_at IS NULL", []);
-      stats.mysql_uploads = u[0]?.c || 0;
-    } catch (e) {}
-    
-    // 同步状态
-    stats.diff_count = Math.abs(stats.d1_files - stats.mysql_files) + Math.abs(stats.d1_pool - stats.mysql_pool) + Math.abs(stats.d1_uploads - stats.mysql_uploads);
-    if (stats.diff_count === 0) {
-      stats.sync_status = '正常';
-    } else {
-      stats.sync_status = '有差异';
+    for (const t of TABLES) {
+      try {
+        const q = (t === 'files' || t === 'user_uploads') ? `SELECT COUNT(*) as c FROM ${t} WHERE deleted_at IS NULL` : `SELECT COUNT(*) as c FROM ${t}`;
+        const r = await mysqlRows(env, q, []);
+        stats.mysql[t] = r[0]?.c || 0;
+      } catch (e) { stats.mysql[t] = 0; }
     }
+    
+    // 同步状态（只比较核心表）
+    const diffFiles = Math.abs((stats.d1.files || 0) - (stats.mysql.files || 0));
+    const diffPool = Math.abs((stats.d1.random_pool || 0) - (stats.mysql.random_pool || 0));
+    const diffUploads = Math.abs((stats.d1.user_uploads || 0) - (stats.mysql.user_uploads || 0));
+    stats.diff_count = diffFiles + diffPool + diffUploads;
+    stats.sync_status = stats.diff_count === 0 ? '正常' : '有差异';
     
     // 获取最后同步时间
     try {

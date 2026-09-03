@@ -1301,17 +1301,8 @@ https://example.com/b.jpg"></textarea></div>
             <button class="btn btn-primary" id="dbSyncBtn">快速同步</button>
             <button class="btn btn-primary" id="dbFullSyncBtn" style="background:#8b5cf6">全量同步</button>
           </div>
-          <div id="dbStatus" style="font-size:13px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid var(--border)">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-              <div>
-                <div style="font-weight:600;margin-bottom:8px;color:#3b82f6">D1 (SQLite)</div>
-                <div id="d1Stats">加载中...</div>
-              </div>
-              <div>
-                <div style="font-weight:600;margin-bottom:8px;color:#10b981">MySQL</div>
-                <div id="mysqlStats">加载中...</div>
-              </div>
-            </div>
+          <div id="dbStatus" style="font-size:12px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid var(--border)">
+            <div id="d1Stats">加载中...</div>
           </div>
         </div>
         <div style="margin-bottom:12px">
@@ -3642,7 +3633,6 @@ document.getElementById("r2QuotaSaveBtn").addEventListener("click", function() {
 async function loadDbStatus() {
   var hint = document.getElementById("dbModeHint");
   var d1Stats = document.getElementById("d1Stats");
-  var mysqlStats = document.getElementById("mysqlStats");
   var syncStatusText = document.getElementById("syncStatusText");
   var lastSyncTime = document.getElementById("lastSyncTime");
   var diffCount = document.getElementById("diffCount");
@@ -3662,12 +3652,18 @@ async function loadDbStatus() {
     const statsR = await api("GET", "/admin/api/db-stats");
     if (statsR && statsR.ok && statsR.data) {
       var d = statsR.data;
-      d1Stats.innerHTML = '<div style="margin-bottom:6px">文件数：<b>' + (d.d1_files || 0) + '</b></div>' +
-        '<div style="margin-bottom:6px">随机池：<b>' + (d.d1_pool || 0) + '</b></div>' +
-        '<div>用户上传：<b>' + (d.d1_uploads || 0) + '</b></div>';
-      mysqlStats.innerHTML = '<div style="margin-bottom:6px">文件数：<b>' + (d.mysql_files || 0) + '</b></div>' +
-        '<div style="margin-bottom:6px">随机池：<b>' + (d.mysql_pool || 0) + '</b></div>' +
-        '<div>用户上传：<b>' + (d.mysql_uploads || 0) + '</b></div>';
+      var tables = ['files','random_pool','user_uploads','settings','api_keys','known_chats','user_stats','bot_commands','bot_config','redeem_codes','show_groups','tags'];
+      var h = '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:4px 8px">表名</th><th style="text-align:right;padding:4px 8px;color:#3b82f6">D1</th><th style="text-align:right;padding:4px 8px;color:#10b981">MySQL</th><th style="text-align:center;padding:4px 8px">状态</th></tr></thead><tbody>';
+      for (var i = 0; i < tables.length; i++) {
+        var t = tables[i];
+        var d1c = (d.d1 && d.d1[t] !== undefined) ? d.d1[t] : 0;
+        var mc = (d.mysql && d.mysql[t] !== undefined) ? d.mysql[t] : 0;
+        var same = d1c === mc;
+        var label = t;
+        h += '<tr style="border-bottom:1px solid #f1f5f9"><td style="padding:4px 8px;font-weight:500">' + label + '</td><td style="text-align:right;padding:4px 8px">' + d1c + '</td><td style="text-align:right;padding:4px 8px">' + mc + '</td><td style="text-align:center;padding:4px 8px;color:' + (same ? '#10b981' : '#f59e0b') + '">' + (same ? '一致' : '差异 ' + Math.abs(d1c - mc)) + '</td></tr>';
+      }
+      h += '</tbody></table>';
+      d1Stats.innerHTML = h;
       syncStatusText.textContent = d.sync_status || '正常';
       syncStatusText.style.color = d.sync_status === '正常' ? "#10b981" : "#f59e0b";
       lastSyncTime.textContent = d.last_sync || '-';
@@ -3675,7 +3671,6 @@ async function loadDbStatus() {
     }
   } catch (e) {
     d1Stats.innerHTML = '<span style="color:#e5484d">加载失败</span>';
-    mysqlStats.innerHTML = '<span style="color:#e5484d">加载失败</span>';
   }
 }
 

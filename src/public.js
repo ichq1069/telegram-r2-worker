@@ -1078,7 +1078,7 @@ export async function handleAdminTags(env) {
 // ==================== 标签 CRUD ====================
 export async function handleAdminTagList(env) {
   try {
-    // 自动迁移：扫描 files/random_pool 中已用标签，自动写入 tags 表
+    // 自动迁移：扫描 files/random_pool/pool_tags_preset 中已用标签，自动写入 tags 表
     const d1 = await env.D1_DB.prepare("SELECT tags FROM files WHERE processing_state='completed' AND deleted_at IS NULL AND tags IS NOT NULL AND tags != ''").all();
     const d2 = await env.D1_DB.prepare("SELECT tags FROM random_pool WHERE enabled=1 AND tags IS NOT NULL AND tags != ''").all();
     const cnt = {};
@@ -1091,6 +1091,21 @@ export async function handleAdminTagList(env) {
         });
       });
     });
+    // 扫描 pool_tags_preset（预设标签库）和 auto_pool_tags 设置
+    try {
+      const s1 = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='pool_tags_preset'").first();
+      if (s1 && s1.value) {
+        var arr1 = []; try { arr1 = JSON.parse(s1.value); } catch (e) { arr1 = splitTags(String(s1.value)); }
+        if (Array.isArray(arr1)) arr1.forEach(function(t) { t = String(t).trim(); if (t) cnt[t] = cnt[t] || 0; });
+      }
+    } catch (e) {}
+    try {
+      const s2 = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='auto_pool_tags'").first();
+      if (s2 && s2.value) {
+        var arr2 = []; try { arr2 = JSON.parse(s2.value); } catch (e) { arr2 = splitTags(String(s2.value)); }
+        if (Array.isArray(arr2)) arr2.forEach(function(t) { t = String(t).trim(); if (t) cnt[t] = cnt[t] || 0; });
+      }
+    } catch (e) {}
     // 将未入库的标签自动插入 tags 表
     const now = cnNowISO();
     for (const name of Object.keys(cnt)) {
