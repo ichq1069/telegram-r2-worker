@@ -182,6 +182,7 @@ export default {
     if (m === 'POST' && p === '/admin/api/db-mode') return isAdmin ? handleDbModeSet(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/db-stats') return isAdmin ? handleDbStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/db-sync') return isAdmin ? handleDbSync(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/db-full-sync') return isAdmin ? handleDbFullSync(env) : json({ok:false,error:'Unauthorized'},401);
     // API key management (for third-party programs)
     if (m === 'GET' && p === '/admin/api/keys') return isAdmin ? handleAdminKeys(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/keys') return isAdmin ? handleAdminKeysCreate(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -671,6 +672,66 @@ async function handleDbSync(env) {
     
     const msg = '同步完成（' + elapsed + 's）：files=' + syncedFiles + ', pool=' + syncedPool + ', uploads=' + syncedUploads + (errors.length ? '，错误：' + errors.slice(0, 3).join('; ') : '');
     return json({ ok: true, data: { message: msg, synced: total, files: syncedFiles, pool: syncedPool, uploads: syncedUploads, elapsed: elapsed + 's', errors: errors.slice(0, 10) } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 全量同步：同步所有表到 MySQL
+async function handleDbFullSync(env) {
+  try {
+    const syncStart = Date.now();
+    let counts = { files: 0, pool: 0, uploads: 0, settings: 0, api_keys: 0, known_chats: 0 };
+    let errors = [];
+    
+    if (!env.D1_DB) return json({ ok: false, error: 'D1 not available' }, 500);
+    
+    // 同步 settings 表
+    try {
+      const settings = await env.D1_DB.prepare("SELECT key, value FROM settings").all();
+      for (const s of (settings.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)", [s.key, s.value]);
+          counts.settings++;
+        } catch (e) { errors.push('settings#' + s.key + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('settings: ' + e.message); }
+    
+    // 同步 api_keys 表
+    try {
+      const keys = await env.D1_DB.prepare("SELECT id, key, name, scopes, enabled, created_at, last_used_at, usage_count, expires_at, level, key_pass, username FROM api_keys").all();
+      for (const k of (keys.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO api_keys (id, `key`, name, scopes, enabled, created_at, last_used_at, usage_count, expires_at, level, key_pass, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE name=VALUES(name), scopes=VALUES(scopes), enabled=VALUES(enabled), level=VALUES(level)", [
+            k.id, k.key, k.name, k.scopes, k.enabled, k.created_at, k.last_used_at, k.usage_count, k.expires_at, k.level, k.key_pass, k.username
+          ]);
+          counts.api_keys++;
+        } catch (e) { errors.push('api_keys#' + k.id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('api_keys: ' + e.message); }
+    
+    // 同步 known_chats 表
+    try {
+      const chats = await env.D1_DB.prepare("SELECT chat_id, chat_type, chat_title, chat_username, last_active_at FROM known_chats").all();
+      for (const c of (chats.results || [])) {
+        try {
+          await mysqlExec(env, "INSERT INTO known_chats (chat_id, chat_type, chat_title, chat_username, last_active_at) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE chat_type=VALUES(chat_type), chat_title=VALUES(chat_title), chat_username=VALUES(chat_username), last_active_at=VALUES(last_active_at)", [
+            c.chat_id, c.chat_type, c.chat_title, c.chat_username, c.last_active_at
+          ]);
+          counts.known_chats++;
+        } catch (e) { errors.push('known_chats#' + c.chat_id + ': ' + e.message); }
+      }
+    } catch (e) { errors.push('known_chats: ' + e.message); }
+    
+    const elapsed = ((Date.now() - syncStart) / 1000).toFixed(1);
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    
+    // 记录同步时间
+    try {
+      const syncInfo = JSON.stringify({ last_sync: cnNowISO(), synced: total, elapsed: elapsed + 's', type: 'full' });
+      await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('db_sync_info', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(syncInfo).run();
+    } catch (e) {}
+    
+    const msg = '全量同步完成（' + elapsed + 's）：' + Object.entries(counts).map(([k,v]) => k + '=' + v).join(', ') + (errors.length ? '，错误：' + errors.slice(0, 5).join('; ') : '');
+    return json({ ok: true, data: { message: msg, counts: counts, elapsed: elapsed + 's', errors: errors.slice(0, 20) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

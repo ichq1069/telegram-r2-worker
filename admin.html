@@ -1298,7 +1298,8 @@ https://example.com/b.jpg"></textarea></div>
         <div style="margin-bottom:12px">
           <div style="display:flex;gap:8px;margin-bottom:10px">
             <button class="btn btn-ghost" id="dbRefreshBtn">刷新状态</button>
-            <button class="btn btn-primary" id="dbSyncBtn">立即同步</button>
+            <button class="btn btn-primary" id="dbSyncBtn">快速同步</button>
+            <button class="btn btn-primary" id="dbFullSyncBtn" style="background:#8b5cf6">全量同步</button>
           </div>
           <div id="dbStatus" style="font-size:13px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid var(--border)">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
@@ -3648,9 +3649,9 @@ async function loadDbStatus() {
   
   try {
     // 获取当前模式
-    const modeR = await api("GET", "/admin/api/d1-failover");
+    const modeR = await api("GET", "/admin/api/db-mode");
     if (modeR && modeR.ok && modeR.data) {
-      var mode = modeR.data.mode || 'auto';
+      var mode = modeR.data.current || modeR.data.mode || 'auto';
       hint.textContent = "当前模式：" + mode;
       hint.style.color = mode === 'mysql' ? "#10b981" : "#3b82f6";
     }
@@ -3687,12 +3688,27 @@ document.getElementById("dbSyncBtn").addEventListener("click", function() {
   var btn = this;
   btn.disabled = true; btn.textContent = "同步中...";
   api("POST", "/admin/api/db-sync").then(function(r) {
-    btn.disabled = false; btn.textContent = "立即同步";
+    btn.disabled = false; btn.textContent = "快速同步";
     if (r && r.ok) {
       toast("同步完成：" + (r.data.message || ''), 1);
       loadDbStatus();
     } else {
       toast("同步失败：" + ((r && r.error) || '未知错误'), 0);
+    }
+  });
+});
+
+document.getElementById("dbFullSyncBtn").addEventListener("click", function() {
+  var btn = this;
+  if (!confirm("全量同步将同步所有表（files, pool, uploads, settings, api_keys, known_chats），确定继续？")) return;
+  btn.disabled = true; btn.textContent = "全量同步中...";
+  api("POST", "/admin/api/db-full-sync").then(function(r) {
+    btn.disabled = false; btn.textContent = "全量同步";
+    if (r && r.ok) {
+      toast("全量同步完成：" + (r.data.message || ''), 1);
+      loadDbStatus();
+    } else {
+      toast("全量同步失败：" + ((r && r.error) || '未知错误'), 0);
     }
   });
 });
