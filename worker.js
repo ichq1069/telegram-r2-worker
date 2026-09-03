@@ -591,9 +591,9 @@ async function handleDbForceSync(request, env) {
       bot_commands: { d1: "SELECT * FROM bot_commands LIMIT ?", mysql: "INSERT INTO bot_commands (id,command,response,description,enabled,created_at,menu) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE response=VALUES(response)", fields: 7 },
       bot_config: { d1: "SELECT * FROM bot_config LIMIT ?", mysql: "INSERT INTO bot_config (`key`,`value`) VALUES (?,?) ON DUPLICATE KEY UPDATE `value`=VALUES(`value`)", fields: 2 },
       redeem_codes: { d1: "SELECT * FROM redeem_codes LIMIT ?", mysql: "INSERT INTO redeem_codes (id,code,level,quota,used_count,note,enabled,created_at,expires_at,type,extend_days) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE code=VALUES(code)", fields: 11 },
-      show_groups: { d1: "SELECT * FROM show_groups LIMIT ?", mysql: "INSERT INTO show_groups (id,chat_id,program_index,image_url,created_at) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE image_url=VALUES(image_url)", fields: 5 },
+      show_groups: { d1: "SELECT * FROM show_groups LIMIT ?", mysql: "INSERT INTO show_groups (id,name,images,created_at) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name),images=VALUES(images)", fields: 4 },
       tags: { d1: "SELECT * FROM tags LIMIT ?", mysql: "INSERT INTO tags (id,name,color,category,sort_order,created_at) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE name=VALUES(name)", fields: 6 },
-      user_stats: { d1: "SELECT * FROM user_stats LIMIT ?", mysql: "INSERT INTO user_stats (user_id,username,full_name,last_active_at,interaction_count) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE interaction_count=VALUES(interaction_count)", fields: 5 },
+      user_stats: { d1: "SELECT * FROM user_stats LIMIT ?", mysql: "INSERT INTO user_stats (user_id,username,full_name,messages,commands,files,inline_queries,callback_clicks,last_active_at) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE messages=VALUES(messages),commands=VALUES(commands)", fields: 9 },
     };
     const cfg = TABLE_MAP[table];
     if (!cfg) return json({ ok: false, error: '未知表: ' + table + '，可选: ' + Object.keys(TABLE_MAP).join(',') });
