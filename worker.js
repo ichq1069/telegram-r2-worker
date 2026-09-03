@@ -597,12 +597,13 @@ async function handleDbStats(env) {
       } catch (e) { stats.mysql[t] = 0; }
     }
     
-    // 同步状态（只比较核心表）
-    const diffFiles = Math.abs((stats.d1.files || 0) - (stats.mysql.files || 0));
-    const diffPool = Math.abs((stats.d1.random_pool || 0) - (stats.mysql.random_pool || 0));
-    const diffUploads = Math.abs((stats.d1.user_uploads || 0) - (stats.mysql.user_uploads || 0));
-    stats.diff_count = diffFiles + diffPool + diffUploads;
-    stats.sync_status = stats.diff_count === 0 ? '正常' : '有差异';
+    // 同步状态（计算所有表差异）
+    let totalDiff = 0;
+    for (const t of TABLES) {
+      totalDiff += Math.abs((stats.d1[t] || 0) - (stats.mysql[t] || 0));
+    }
+    stats.diff_count = totalDiff;
+    stats.sync_status = totalDiff === 0 ? '正常' : '有差异';
     
     // 获取最后同步时间
     try {

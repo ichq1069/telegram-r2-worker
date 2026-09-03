@@ -1398,7 +1398,7 @@ document.getElementById("loginKey").addEventListener("keydown", function(e) {
 });
 
 // API 调用（带 20s 超时，网络挂起时不永久转圈）
-function api(method, path, body) {
+function api(method, path, body, timeoutMs) {
   var sep = path.indexOf('?') >= 0 ? '&' : '?';
   var url = OR + path + sep + "api_key=" + encodeURIComponent(AK);
   var opts = { method: method, headers: { "Content-Type": "application/json" } };
@@ -1406,7 +1406,7 @@ function api(method, path, body) {
   var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
   if (ctrl) {
     opts.signal = ctrl.signal;
-    setTimeout(function() { ctrl.abort(); }, 20000);
+    setTimeout(function() { ctrl.abort(); }, timeoutMs || 20000);
   }
   return fetch(url, opts).then(function(r) {
     if (r.status === 401) {
@@ -3733,7 +3733,7 @@ document.getElementById("dbFullSyncBtn").addEventListener("click", function() {
   var btn = this;
   if (!confirm("全量同步将同步所有表（files, pool, uploads, settings, api_keys, known_chats），确定继续？")) return;
   btn.disabled = true; btn.textContent = "全量同步中...";
-  api("POST", "/admin/api/db-full-sync").then(function(r) {
+  api("POST", "/admin/api/db-full-sync", null, 60000).then(function(r) {
     btn.disabled = false; btn.textContent = "全量同步";
     if (r && r.ok) {
       toast("全量同步完成：" + (r.data.message || ''), 1);
