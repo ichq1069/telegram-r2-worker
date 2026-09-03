@@ -578,6 +578,15 @@ async function handleDbStats(env) {
       stats.sync_status = '有差异';
     }
     
+    // 获取最后同步时间
+    try {
+      const syncInfo = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='db_sync_info'").first();
+      if (syncInfo && syncInfo.value) {
+        const info = JSON.parse(syncInfo.value);
+        stats.last_sync = info.last_sync || '-';
+      }
+    } catch (e) {}
+    
     return json({ ok: true, data: stats });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
@@ -587,55 +596,81 @@ async function handleDbSync(env) {
     let syncedFiles = 0, syncedPool = 0, syncedUploads = 0;
     let errors = [];
     
-    // 同步 files 表
+    // 记录同步开始时间
+    const syncStart = Date.now();
+    
     if (env.D1_DB) {
+      // 批量同步 files 表（每次 100 条）
       try {
         const d1Files = await env.D1_DB.prepare("SELECT id, storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at FROM files WHERE deleted_at IS NULL").all();
-        for (const f of (d1Files.results || [])) {
-          try {
-            await mysqlExec(env, "INSERT INTO files (id, storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE storage_key=VALUES(storage_key), r2_url=VALUES(r2_url), processing_state=VALUES(processing_state), deleted_at=VALUES(deleted_at)", [
-              f.id, f.storage_key, f.r2_url, f.chat_id, f.chat_title, f.chat_type, f.chat_username,
+        const files = d1Files.results || [];
+        
+        // 分批处理
+        for (let i = 0; i < files.length; i += 100) {
+          const batch = files.slice(i, i + 100);
+          const values = batch.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(',');
+          const params = [];
+          for (const f of batch) {
+            params.push(f.id, f.storage_key, f.r2_url, f.chat_id, f.chat_title, f.chat_type, f.chat_username,
               f.user_id, f.username, f.full_name, f.telegram_file_id, f.file_name, f.file_size,
               f.file_type, f.mime_type, f.width, f.height, f.caption, f.message_id, f.md5_hash,
-              f.processing_state, f.created_at, f.tags, f.group_ref, f.media_group_id, f.level, f.is_private, f.deleted_at
-            ]);
-            syncedFiles++;
-          } catch (e) { errors.push('files#' + f.id + ': ' + e.message); }
+              f.processing_state, f.created_at, f.tags, f.group_ref, f.media_group_id, f.level, f.is_private, f.deleted_at);
+          }
+          try {
+            await mysqlExec(env, `INSERT INTO files (id, storage_key, r2_url, chat_id, chat_title, chat_type, chat_username, user_id, username, full_name, telegram_file_id, file_name, file_size, file_type, mime_type, width, height, caption, message_id, md5_hash, processing_state, created_at, tags, group_ref, media_group_id, level, is_private, deleted_at) VALUES ${values} ON DUPLICATE KEY UPDATE storage_key=VALUES(storage_key), r2_url=VALUES(r2_url), processing_state=VALUES(processing_state), deleted_at=VALUES(deleted_at)`, params);
+            syncedFiles += batch.length;
+          } catch (e) { errors.push('files batch ' + (i/100+1) + ': ' + e.message); }
         }
-      } catch (e) { errors.push('files query: ' + e.message); }
+      } catch (e) { errors.push('files: ' + e.message); }
       
-      // 同步 random_pool 表
+      // 批量同步 random_pool 表
       try {
         const d1Pool = await env.D1_DB.prepare("SELECT id, url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private FROM random_pool").all();
-        for (const p of (d1Pool.results || [])) {
+        const pool = d1Pool.results || [];
+        if (pool.length > 0) {
+          const values = pool.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(',');
+          const params = [];
+          for (const p of pool) {
+            params.push(p.id, p.url, p.thumb_url, p.title, p.tags, p.file_type, p.width, p.height,
+              p.file_size, p.source, p.tg_file_id, p.enabled, p.created_at, p.level, p.is_private);
+          }
           try {
-            await mysqlExec(env, "INSERT INTO random_pool (id, url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), enabled=VALUES(enabled), level=VALUES(level), is_private=VALUES(is_private)", [
-              p.id, p.url, p.thumb_url, p.title, p.tags, p.file_type, p.width, p.height,
-              p.file_size, p.source, p.tg_file_id, p.enabled, p.created_at, p.level, p.is_private
-            ]);
-            syncedPool++;
-          } catch (e) { errors.push('pool#' + p.id + ': ' + e.message); }
+            await mysqlExec(env, `INSERT INTO random_pool (id, url, thumb_url, title, tags, file_type, width, height, file_size, source, tg_file_id, enabled, created_at, level, is_private) VALUES ${values} ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), enabled=VALUES(enabled), level=VALUES(level), is_private=VALUES(is_private)`, params);
+            syncedPool = pool.length;
+          } catch (e) { errors.push('pool: ' + e.message); }
         }
-      } catch (e) { errors.push('pool query: ' + e.message); }
+      } catch (e) { errors.push('pool: ' + e.message); }
       
-      // 同步 user_uploads 表
+      // 批量同步 user_uploads 表
       try {
         const d1Uploads = await env.D1_DB.prepare("SELECT id, user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at, deleted_at FROM user_uploads WHERE deleted_at IS NULL").all();
-        for (const u of (d1Uploads.results || [])) {
+        const uploads = d1Uploads.results || [];
+        if (uploads.length > 0) {
+          const values = uploads.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(',');
+          const params = [];
+          for (const u of uploads) {
+            params.push(u.id, u.user_id, u.url, u.thumb_url, u.file_name, u.file_size, u.file_type,
+              u.width, u.height, u.tags, u.created_at, u.deleted_at);
+          }
           try {
-            await mysqlExec(env, "INSERT INTO user_uploads (id, user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), deleted_at=VALUES(deleted_at)", [
-              u.id, u.user_id, u.url, u.thumb_url, u.file_name, u.file_size, u.file_type,
-              u.width, u.height, u.tags, u.created_at, u.deleted_at
-            ]);
-            syncedUploads++;
-          } catch (e) { errors.push('uploads#' + u.id + ': ' + e.message); }
+            await mysqlExec(env, `INSERT INTO user_uploads (id, user_id, url, thumb_url, file_name, file_size, file_type, width, height, tags, created_at, deleted_at) VALUES ${values} ON DUPLICATE KEY UPDATE url=VALUES(url), thumb_url=VALUES(thumb_url), tags=VALUES(tags), deleted_at=VALUES(deleted_at)`, params);
+            syncedUploads = uploads.length;
+          } catch (e) { errors.push('uploads: ' + e.message); }
         }
-      } catch (e) { errors.push('uploads query: ' + e.message); }
+      } catch (e) { errors.push('uploads: ' + e.message); }
     }
     
+    const elapsed = ((Date.now() - syncStart) / 1000).toFixed(1);
     const total = syncedFiles + syncedPool + syncedUploads;
-    const msg = '同步完成：files=' + syncedFiles + ', pool=' + syncedPool + ', uploads=' + syncedUploads + (errors.length ? '，错误：' + errors.slice(0, 5).join('; ') : '');
-    return json({ ok: true, data: { message: msg, synced: total, files: syncedFiles, pool: syncedPool, uploads: syncedUploads, errors: errors.slice(0, 10) } });
+    
+    // 记录同步时间到 settings
+    try {
+      const syncInfo = JSON.stringify({ last_sync: cnNowISO(), synced: total, elapsed: elapsed + 's' });
+      await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES ('db_sync_info', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(syncInfo).run();
+    } catch (e) {}
+    
+    const msg = '同步完成（' + elapsed + 's）：files=' + syncedFiles + ', pool=' + syncedPool + ', uploads=' + syncedUploads + (errors.length ? '，错误：' + errors.slice(0, 3).join('; ') : '');
+    return json({ ok: true, data: { message: msg, synced: total, files: syncedFiles, pool: syncedPool, uploads: syncedUploads, elapsed: elapsed + 's', errors: errors.slice(0, 10) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
