@@ -2432,8 +2432,8 @@ export async function handleUserUpload(request, env) {
         
         // Insert into random_pool table
         await env.D1_DB.prepare(
-          'INSERT INTO random_pool (url, thumb_url, title, tags, file_type, file_size, source, enabled, created_at, level, group_ref) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)'
-        ).bind(sharedUrl, sharedUrl, fileNameWithPrefix, tags, isVideo ? 'video' : 'photo', file.size, 'user_upload', now, user.level || 'pt', groupId).run();
+          'INSERT INTO random_pool (url, thumb_url, title, tags, file_type, file_size, source, enabled, created_at, level) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)'
+        ).bind(sharedUrl, sharedUrl, fileNameWithPrefix, tags, isVideo ? 'video' : 'photo', file.size, 'user_upload', now, user.level || 'pt').run();
         
         // Update quota
         await env.D1_DB.prepare('UPDATE api_keys SET upload_used = upload_used + 1, storage_used = storage_used + ? WHERE id = ?')
