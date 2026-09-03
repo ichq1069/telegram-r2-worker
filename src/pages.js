@@ -62,6 +62,20 @@ export async function handleUserManageFromR2(env) {
   }
 }
 
+// 链接解析页：从 R2 读取 jx.html（粘贴链接 → 解析 → 入库）
+export async function handleJxPage(env) {
+  try {
+    const obj = await env.R2_BUCKET.get('jx.html');
+    if (!obj) return new Response('jx.html not found in R2. Please upload jx.html to R2 bucket.', { status: 404 });
+    const headers = new Headers();
+    headers.set('Content-Type', 'text/html; charset=utf-8');
+    headers.set('Cache-Control', 'no-cache');
+    return new Response(obj.body, { headers });
+  } catch (e) {
+    return new Response('Error loading jx page: ' + e.message, { status: 500 });
+  }
+}
+
 // 用户门户登录：支持「密钥 + key-pass」或「用户名 + 密码」两种方式，返回该密钥的统计信息（不含密码哈希）
 export async function handleUserLogin(request, env) {
   try {

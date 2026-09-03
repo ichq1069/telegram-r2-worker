@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>链接解析 - Telegram Bot</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f23; color: #e0e0e0; min-height: 100vh; }
+.container { max-width: 800px; margin: 0 auto; padding: 20px; }
+h1 { text-align: center; margin-bottom: 30px; color: #00d4ff; font-size: 24px; }
+.card { background: #1a1a2e; border-radius: 12px; padding: 24px; margin-bottom: 20px; border: 1px solid #2a2a4a; }
+.card h2 { font-size: 18px; margin-bottom: 16px; color: #fff; }
+.input-group { display: flex; gap: 10px; margin-bottom: 16px; }
+.input-group input { flex: 1; padding: 12px 16px; border-radius: 8px; border: 1px solid #3a3a5a; background: #0f0f23; color: #fff; font-size: 14px; outline: none; }
+.input-group input:focus { border-color: #00d4ff; }
+.btn { padding: 12px 24px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.2s; }
+.btn-primary { background: #00d4ff; color: #000; }
+.btn-primary:hover { background: #00b8e6; }
+.btn-primary:disabled { background: #3a3a5a; color: #666; cursor: not-allowed; }
+.result { margin-top: 16px; padding: 16px; border-radius: 8px; background: #0f0f23; border: 1px solid #2a2a4a; display: none; }
+.result.show { display: block; }
+.result.success { border-color: #00ff88; }
+.result.error { border-color: #ff4444; }
+.result-item { display: flex; align-items: center; gap: 12px; padding: 12px; margin-bottom: 8px; background: #1a1a2e; border-radius: 8px; }
+.result-item img { width: 80px; height: 80px; object-fit: cover; border-radius: 6px; }
+.result-item .info { flex: 1; }
+.result-item .info .name { font-weight: 600; margin-bottom: 4px; }
+.result-item .info .url { font-size: 12px; color: #888; word-break: break-all; }
+.result-item .info .platform { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-top: 4px; }
+.platform-instagram { background: #e1306c; color: #fff; }
+.platform-twitter { background: #1da1f2; color: #fff; }
+.platform-youtube { background: #ff0000; color: #fff; }
+.platform-tiktok { background: #000; color: #fff; border: 1px solid #333; }
+.config-section { margin-top: 20px; }
+.config-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.config-row label { min-width: 80px; color: #888; }
+.config-row input { flex: 1; }
+.status { text-align: center; padding: 8px; border-radius: 6px; margin-top: 12px; font-size: 13px; }
+.status.ok { background: #00ff8822; color: #00ff88; }
+.status.err { background: #ff444422; color: #ff4444; }
+.loading { display: inline-block; width: 16px; height: 16px; border: 2px solid #3a3a5a; border-top-color: #00d4ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.history { margin-top: 20px; }
+.history-item { display: flex; align-items: center; gap: 12px; padding: 12px; margin-bottom: 8px; background: #1a1a2e; border-radius: 8px; border: 1px solid #2a2a4a; }
+.history-item .time { font-size: 12px; color: #666; min-width: 60px; }
+.history-item .link { flex: 1; font-size: 13px; color: #aaa; word-break: break-all; }
+.history-item .status { min-width: 60px; text-align: right; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔗 链接解析</h1>
+  
+  <div class="card">
+    <h2>粘贴链接</h2>
+    <div class="input-group">
+      <input type="text" id="linkInput" placeholder="粘贴 Instagram/X/YouTube/TikTok 链接..." autofocus>
+      <button class="btn btn-primary" id="parseBtn" onclick="parseLink()">解析</button>
+    </div>
+    <div class="input-group">
+      <input type="text" id="chatIdInput" placeholder="目标群组 chat_id（可选，留空则仅入库不发群）">
+    </div>
+    <div id="result" class="result"></div>
+  </div>
+
+  <div class="card config-section">
+    <h2>解析配置</h2>
+    <div class="config-row">
+      <label>Cobalt API</label>
+      <input type="text" id="cobaltUrl" placeholder="http://84.247.129.220:9002">
+      <button class="btn btn-primary" onclick="saveConfig()">保存</button>
+    </div>
+    <div id="configStatus" class="status" style="display:none"></div>
+  </div>
+
+  <div class="card history">
+    <h2>解析历史</h2>
+    <div id="historyList"><div style="text-align:center;color:#666;padding:20px">暂无记录</div></div>
+  </div>
+</div>
+
+<script>
+var API_KEY = new URLSearchParams(window.location.search).get('api_key') || localStorage.getItem('admin_api_key') || '';
+var history = JSON.parse(localStorage.getItem('parse_history') || '[]');
+
+// 加载配置
+fetch('/admin/api/settings/cobalt?api_key=' + encodeURIComponent(API_KEY))
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.ok && d.data && d.data.url) {
+      document.getElementById('cobaltUrl').value = d.data.url;
+    }
+  }).catch(function() {});
+
+// 渲染历史
+function renderHistory() {
+  var el = document.getElementById('historyList');
+  if (!history.length) {
+    el.innerHTML = '<div style="text-align:center;color:#666;padding:20px">暂无记录</div>';
+    return;
+  }
+  el.innerHTML = history.slice(0, 20).map(function(h) {
+    var platformClass = 'platform-' + h.platform;
+    var statusText = h.ok ? '✅ 成功' : '❌ 失败';
+    var statusColor = h.ok ? '#00ff88' : '#ff4444';
+    return '<div class="history-item">' +
+      '<div class="time">' + h.time + '</div>' +
+      '<div class="link">' + h.url + '</div>' +
+      '<div class="status" style="color:' + statusColor + '">' + statusText + '</div>' +
+    '</div>';
+  }).join('');
+}
+renderHistory();
+
+// 回车解析
+document.getElementById('linkInput').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') parseLink();
+});
+
+function parseLink() {
+  var url = document.getElementById('linkInput').value.trim();
+  var chatId = document.getElementById('chatIdInput').value.trim();
+  if (!url) return;
+  
+  var btn = document.getElementById('parseBtn');
+  var result = document.getElementById('result');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>解析中...';
+  result.className = 'result show';
+  result.innerHTML = '<div style="color:#888">正在解析链接...</div>';
+  
+  fetch('/admin/api/parse-link?api_key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: url, chat_id: chatId })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    btn.disabled = false;
+    btn.textContent = '解析';
+    
+    if (d.ok && d.data && d.data.length) {
+      var html = '';
+      d.data.forEach(function(item) {
+        if (item.ok) {
+          html += '<div class="result-item">' +
+            (item.type === 'video' ? '' : '<img src="' + item.url + '" onerror="this.style.display=\'none\'">') +
+            '<div class="info">' +
+              '<div class="name">' + (item.filename || 'media') + '</div>' +
+              '<div class="url">' + item.url + '</div>' +
+              '<span class="platform platform-' + item.platform + '">' + item.platform.toUpperCase() + '</span>' +
+              (item.dbId ? ' <span style="color:#00ff88;font-size:12px">#' + item.dbId + '</span>' : '') +
+            '</div>' +
+          '</div>';
+          // 添加到历史
+          history.unshift({
+            url: url,
+            platform: item.platform,
+            ok: true,
+            time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+          });
+        } else {
+          html += '<div style="color:#ff4444;padding:8px">❌ ' + item.platform + ': ' + (item.error || '解析失败') + '</div>';
+          history.unshift({
+            url: url,
+            platform: item.platform,
+            ok: false,
+            time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+          });
+        }
+      });
+      result.className = 'result show success';
+      result.innerHTML = html;
+      // 保存历史
+      localStorage.setItem('parse_history', JSON.stringify(history.slice(0, 50)));
+      renderHistory();
+    } else {
+      result.className = 'result show error';
+      result.innerHTML = '<div style="color:#ff4444">❌ ' + (d.error || '解析失败') + '</div>';
+    }
+  })
+  .catch(function(e) {
+    btn.disabled = false;
+    btn.textContent = '解析';
+    result.className = 'result show error';
+    result.innerHTML = '<div style="color:#ff4444">❌ 请求失败: ' + e.message + '</div>';
+  });
+}
+
+function saveConfig() {
+  var url = document.getElementById('cobaltUrl').value.trim();
+  if (!url) return;
+  
+  var status = document.getElementById('configStatus');
+  status.style.display = 'block';
+  status.className = 'status';
+  status.textContent = '保存中...';
+  
+  fetch('/admin/api/settings/cobalt?api_key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: url })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.ok) {
+      status.className = 'status ok';
+      status.textContent = '✅ 配置已保存';
+    } else {
+      status.className = 'status err';
+      status.textContent = '❌ ' + (d.error || '保存失败');
+    }
+  })
+  .catch(function(e) {
+    status.className = 'status err';
+    status.textContent = '❌ 请求失败: ' + e.message;
+  });
+}
+</script>
+</body>
+</html>

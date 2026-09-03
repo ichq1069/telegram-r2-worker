@@ -24,11 +24,12 @@ import { handleWebhook, ensureWebhook, handleAdminWebhookStatus, handleAdminWebh
 
 
 
-import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserManageFromR2, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
+import { handleAdminFromR2, handleAdminGuideFromR2, handleUserFromR2, handleUserManageFromR2, handleJxPage, handleUserLogin, handleDocs, handleDashboard } from './src/pages.js';
 
 import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
 import { mysqlFailoverGet, mysqlRows, mysqlGet, mysqlExec } from './src/mysql.js';
+import { handleParseLink, handleGetCobaltConfig, handleSaveCobaltConfig } from './src/parser.js';
 
 
 
@@ -67,6 +68,8 @@ export default {
       return handleGalleryData(request, env);
     }
     if (m === 'GET' && p === '/admin') return handleAdminFromR2(env);
+    // 链接解析页（管理员专用）
+    if (m === 'GET' && p === '/jx') return handleJxPage(env);
     // 用户门户（普通用户用 key + key-pass 登录，查看密钥统计 + 生成公开接口 URL）
     if (m === 'GET' && p === '/user') return handleUserFromR2(env);
     if (m === 'GET' && p === '/user-manage') return handleUserManageFromR2(env);
@@ -281,6 +284,10 @@ export default {
     if (m === 'GET' && p === '/admin/api/settings/webhook') return isAdmin ? handleAdminGetWebhook(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/webhook') return isAdmin ? handleAdminSaveWebhook(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/webhook/test') return isAdmin ? handleAdminWebhookTest(request, env) : json({ok:false,error:'Unauthorized'},401);
+    // 链接解析配置（cobalt API）
+    if (m === 'GET' && p === '/admin/api/settings/cobalt') return isAdmin ? handleGetCobaltConfig(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/settings/cobalt') return isAdmin ? handleSaveCobaltConfig(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/parse-link') return isAdmin ? handleParseLink(request, env) : json({ok:false,error:'Unauthorized'},401);
     // 快捷回复键盘配置 / 广播（main_menu）
     if (m === 'GET' && p === '/admin/api/settings/main-menu') return isAdmin ? handleAdminGetMainMenu(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/main-menu') return isAdmin ? handleAdminSaveMainMenu(request, env) : json({ok:false,error:'Unauthorized'},401);

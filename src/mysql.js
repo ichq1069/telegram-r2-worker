@@ -68,7 +68,8 @@ const MYSQL_TABLES = [
     media_group_id TEXT DEFAULT '',
     receipt_msg_id INTEGER DEFAULT 0,
     deleted_at TEXT,
-    view_count INTEGER DEFAULT 0
+    view_count INTEGER DEFAULT 0,
+    source_platform TEXT DEFAULT ''
   )`,
   `CREATE TABLE IF NOT EXISTS random_pool (
     id INTEGER PRIMARY KEY AUTO_INCREMENT,

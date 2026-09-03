@@ -11,6 +11,7 @@ import { getBotUsername, getProxyMode } from "./api.js";
 import { dualInsertFiles, dualUpdateFiles } from "./mysql.js";
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg, isBatchCommand, startManualBatch, isManualBatchActive, finalizeManualBatch, getManualBatchStatus } from "./batch.js";
 import { fireWebhook } from "./events.js";
+import { isSocialLink, extractSocialLinks, parseAndStore } from "./parser.js";
 // ==================== WEBHOOK ====================
 
 // 记录 webhook 投递日志（成功/失败），供后台「最近10次」弹窗查看
@@ -339,6 +340,48 @@ export async function processUpdateCore(update, env, waitFn) {
       const p = handleXStatusAsync(xlink, chatId, msgId, date, env).catch(e => log.error('x async:', e.message));
       if (waitFn) waitFn(p); else p;
       return { ok: true, queued: true, xlink: true };
+    }
+  }
+
+  // Instagram/YouTube/TikTok links: parse via cobalt API, download & store
+  if (msg && msg.text && isSocialLink(msg.text)) {
+    const links = extractSocialLinks(msg.text);
+    if (links.length > 0) {
+      const chatId = String(msg.chat.id);
+      const msgId = String(msg.message_id);
+      const from = msg.from || {};
+      const date = msg.date ? new Date(msg.date * 1000) : new Date();
+      // 去重
+      if (env.D1_DB) {
+        try {
+          const dup = await env.D1_DB.prepare('SELECT id FROM files WHERE chat_id=? AND message_id=? AND deleted_at IS NULL LIMIT 1').bind(chatId, msgId).first();
+          if (dup) return { ok: true, duplicate: true };
+        } catch (e) {}
+      }
+      // 异步解析每个链接
+      for (const link of links) {
+        const p = parseAndStore(link.url, chatId, msgId, {
+          id: from.id || 0,
+          username: from.username || '',
+          fullName: [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown'
+        }, env, { date, platform: link.platform, chatTitle: msg.chat.title || msg.chat.username || '' })
+          .then(r => {
+            if (r.ok && env.TG_BOT_TOKEN) {
+              fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: chatId,
+                  text: '✅ ' + link.platform.toUpperCase() + ' 内容已保存\n' + (r.filename || '') + '\n' + r.url,
+                  disable_web_page_preview: false
+                })
+              }).catch(() => {});
+            }
+          })
+          .catch(e => log.error('social parse error:', e.message));
+        if (waitFn) waitFn(p); else p;
+      }
+      return { ok: true, queued: true, social: true };
     }
   }
 
