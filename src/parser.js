@@ -90,18 +90,49 @@ async function callCobaltApi(url, env) {
     }
     
     if (data.status === 'tunnel' || data.status === 'redirect') {
-      // cobalt 返回的是重定向 URL，需要下载
       return { ok: true, url: data.url, filename: data.filename || '', type: 'redirect' };
     }
     
     if (data.status === 'stream') {
-      // 流式下载
       return { ok: true, url: data.url, filename: data.filename || '', type: 'stream' };
     }
     
     return { ok: false, error: 'unknown_response' };
   } catch (e) {
     log.error('callCobaltApi error:', e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
+// 检测是否为图片链接（pbs.twimg.com）
+function isTwitterImage(url) {
+  return /pbs\.twimg\.com\/media\//i.test(url);
+}
+
+// 检测是否为视频链接（video.twimg.com）
+function isTwitterVideo(url) {
+  return /video\.twimg\.com\//i.test(url);
+}
+
+// 直接下载图片到 R2（不经过 cobalt）
+async function downloadImageDirect(imageUrl, env, date) {
+  try {
+    const resp = await fetch(imageUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    if (!resp.ok) return { ok: false, error: 'image_download_http_' + resp.status };
+    
+    const ct = resp.headers.get('content-type') || 'image/jpeg';
+    const ext = guessExt(ct, 'image');
+    const dp = date.getFullYear() + '/' + String(date.getMonth() + 1).padStart(2, '0');
+    const key = dp + '/' + genHash() + '.' + ext;
+    
+    const url = await putR2Stream(key, resp.body, ct, env, COLD_STORAGE_CLASS);
+    if (!url) return { ok: false, error: 'r2_upload_failed' };
+    
+    return { ok: true, url, key, contentType: ct, filename: key };
+  } catch (e) {
+    log.error('downloadImageDirect error:', e.message);
     return { ok: false, error: e.message };
   }
 }
@@ -134,19 +165,32 @@ export async function parseAndStore(link, chatId, msgId, from, env, options = {}
   const date = options.date || new Date();
   const platform = options.platform || 'unknown';
   
-  // 1. 调用 cobalt API
+  // 对于 X/Twitter 链接，使用 syndication API（支持图片和视频）
+  if (platform === 'twitter') {
+    log('X/Twitter link detected, using syndication API:', link);
+    const result = await parseXWithSyndication(link, chatId, msgId, from, env, date, options);
+    return result;
+  }
+  
+  // 对于 Instagram 图片，直接下载不经过 cobalt
+  if (platform === 'instagram' && /instagram\.com\/p\//i.test(link)) {
+    log('Instagram post detected, trying direct download:', link);
+    // Instagram 帖子可能包含多张图片，先尝试 cobalt
+  }
+  
+  // 其他平台使用 cobalt API
   const result = await callCobaltApi(link, env);
   if (!result.ok) {
     return { ok: false, error: result.error, link };
   }
   
-  // 2. 下载并存储到 R2
+  // 下载并存储到 R2
   const stored = await downloadAndStore(result.url, result.filename, env, date);
   if (!stored.ok) {
     return { ok: false, error: stored.error, link };
   }
   
-  // 3. 入库 D1
+  // 入库 D1
   let dbId = null;
   if (env.D1_DB) {
     try {
@@ -179,7 +223,7 @@ export async function parseAndStore(link, chatId, msgId, from, env, options = {}
     }
   }
   
-  // 4. 触发 webhook 通知
+  // 触发 webhook
   fireWebhook(env, 'file_imported', {
     id: dbId, url: stored.url, file_name: stored.filename,
     file_type: stored.contentType?.includes('video') ? 'video' : 'photo',
@@ -187,13 +231,106 @@ export async function parseAndStore(link, chatId, msgId, from, env, options = {}
   }).catch(() => {});
   
   return {
-    ok: true,
-    dbId,
-    url: stored.url,
-    filename: stored.filename,
+    ok: true, dbId, url: stored.url, filename: stored.filename,
     type: stored.contentType?.includes('video') ? 'video' : 'photo',
     platform
   };
+}
+
+// 使用 syndication API 解析 X/Twitter 链接（支持图片和视频）
+async function parseXWithSyndication(link, chatId, msgId, from, env, date, options) {
+  const tid = /status\/(\d+)/.exec(link)?.[1];
+  if (!tid) return { ok: false, error: 'invalid_x_url', link };
+  
+  try {
+    const r = await fetch('https://cdn.syndication.twimg.com/tweet-result?id=' + tid + '&lang=zh');
+    if (!r.ok) return { ok: false, error: 'syndication_api_' + r.status, link };
+    
+    const j = await r.json();
+    const media = [];
+    
+    // 视频：选择最高码率的 mp4
+    if (j?.video?.variants?.length) {
+      let best = null;
+      for (const v of j.video.variants) {
+        if (v.content_type === 'video/mp4' && (!best || (v.bitrate || 0) > (best.bitrate || 0))) best = v;
+      }
+      if (best?.url) media.push({ type: 'video', url: best.url, name: 'xvideo_' + tid + '.mp4' });
+    }
+    
+    // 图片
+    if (j?.photos?.length) {
+      for (let p = 0; p < j.photos.length; p++) {
+        const pu = j.photos[p].url;
+        if (pu) media.push({ type: 'photo', url: pu, name: 'ximg_' + tid + '_' + (p + 1) + '.jpg' });
+      }
+    }
+    
+    if (!media.length) return { ok: false, error: 'no_media_found', link };
+    
+    // 下载并存储每个媒体文件
+    const results = [];
+    const dp = date.getFullYear() + '/' + String(date.getMonth() + 1).padStart(2, '0');
+    
+    for (const item of media) {
+      try {
+        const dl = await fetch(item.url);
+        if (!dl.ok) continue;
+        
+        const ct = item.type === 'video' ? 'video/mp4' : (dl.headers.get('content-type') || 'image/jpeg');
+        const ext = guessExt(ct, item.name);
+        const key = dp + '/' + genHash() + '.' + ext;
+        const url = await putR2Stream(key, dl.body, ct, env, COLD_STORAGE_CLASS);
+        if (!url) continue;
+        
+        // 入库 D1
+        let dbId = null;
+        if (env.D1_DB) {
+          try {
+            const r = await env.D1_DB.prepare(
+              'INSERT INTO files (storage_key,r2_url,md5_hash,processing_state,chat_id,chat_title,chat_type,chat_username,user_id,username,full_name,telegram_file_id,file_name,file_size,file_type,mime_type,width,height,caption,message_id,created_at,source_platform) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)'
+            ).bind(
+              key, url, '', 'completed',
+              chatId || '', options.chatTitle || 'X', 'private', '',
+              from?.id || 0, from?.username || '', from?.fullName || '',
+              '', item.name, 0, item.type, ct, 0, 0, link, msgId || '', date.toISOString(),
+              'twitter'
+            ).run();
+            dbId = r.meta?.last_row_id;
+            
+            // 双写 MySQL
+            dualInsertFiles(env, {
+              storage_key: key, r2_url: url, chat_id: chatId || '',
+              chat_title: options.chatTitle || 'X', chat_type: 'private', chat_username: '',
+              user_id: from?.id || 0, username: from?.username || '', full_name: from?.fullName || '',
+              telegram_file_id: '', file_name: item.name, file_size: 0,
+              file_type: item.type, mime_type: ct, width: 0, height: 0,
+              caption: link, message_id: msgId || '', md5_hash: '',
+              processing_state: 'completed', created_at: date.toISOString(),
+              tags: '', group_ref: '', media_group_id: '', level: 'pt', is_private: 0, deleted_at: null
+            }).catch(e => console.error('dualInsertFiles error:', e.message));
+          } catch (e) {
+            log.error('parseXWithSyndication D1 insert error:', e.message);
+          }
+        }
+        
+        // 触发 webhook
+        fireWebhook(env, 'file_imported', {
+          id: dbId, url, file_name: item.name,
+          file_type: item.type, file_size: 0, chat_id: chatId || '', source: 'parser'
+        }).catch(() => {});
+        
+        results.push({ ok: true, dbId, url, filename: item.name, type: item.type, platform: 'twitter' });
+      } catch (e) {
+        log.error('parseXWithSyndication media save error:', e.message);
+      }
+    }
+    
+    return results.length > 0 ? { ok: true, data: results } : { ok: false, error: 'all_media_failed', link };
+  } catch (e) {
+    log.error('parseXWithSyndication error:', e.message);
+    return { ok: false, error: e.message, link };
+  }
 }
 
 // 批量解析多个链接
@@ -228,7 +365,17 @@ export async function handleParseLink(request, env) {
       chatTitle: '手动解析'
     });
     
-    return json({ ok: true, data: results });
+    // 展平结果（X/Twitter 可能返回嵌套数组）
+    const flatResults = [];
+    for (const r of results) {
+      if (r.ok && r.data && Array.isArray(r.data)) {
+        flatResults.push(...r.data);
+      } else {
+        flatResults.push(r);
+      }
+    }
+    
+    return json({ ok: true, data: flatResults });
   } catch (e) {
     return json({ ok: false, error: e.message }, 500);
   }
