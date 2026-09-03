@@ -344,8 +344,6 @@ export async function parseAndStoreBatch(links, chatId, msgId, from, env, option
   }
   return results;
 }
-  return results;
-}
 
 // 解析 API 端点（供 jx.html 调用）
 export async function handleParseLink(request, env) {
