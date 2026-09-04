@@ -685,6 +685,9 @@ var job = null;                       // { pageUrl,title,tags,level,kw,ext,mb, i
 var run = { running: false, paused: false, ctl: null };
 function pendCount() { return job ? job.items.filter(function(i) { return i.st === 'pend'; }).length : 0; }
 
+// 服务端成功态返回 status:'added'（历史曾用 'ok'），统一规范为前端内部成功态 'ok'
+function normSt(st) { return (st === 'added' || st === 'ok') ? 'ok' : st; }
+
 function persistJob() {
   try {
     if (job) localStorage.setItem(JOB_KEY, JSON.stringify(job));
@@ -709,10 +712,11 @@ function updateResumeBtn() {
 }
 function rowClsOf(it) {
   if (it.busy) return { ico: '<span class="loading"></span>', cls: '', why: '下载发送中…' };
-  if (it.st === 'ok') return { ico: '✓', cls: 'ok', why: it.reason || '#' + (it.id || '') };
-  if (it.st === 'exists') return { ico: '↺', cls: 'skip', why: it.reason || '已存在' };
-  if (it.st === 'ignored') return { ico: '–', cls: 'skip', why: it.reason || '忽略' };
-  if (it.st === 'failed') return { ico: '✗', cls: 'fail', why: it.reason || '失败' };
+  var st = normSt(it.st);
+  if (st === 'ok') return { ico: '✓', cls: 'ok', why: it.reason || '#' + (it.id || '') };
+  if (st === 'exists') return { ico: '↺', cls: 'skip', why: it.reason || '已存在' };
+  if (st === 'ignored') return { ico: '–', cls: 'skip', why: it.reason || '忽略' };
+  if (st === 'failed') return { ico: '✗', cls: 'fail', why: it.reason || '失败' };
   return { ico: '…', cls: '', why: '等待中' };
 }
 function failedItems() { return job ? job.items.filter(function(i) { return i.st === 'failed'; }) : []; }
@@ -732,7 +736,7 @@ function renderResultRows() {
 }
 function batchSummaryHtml() {
   var c = { ok: 0, exists: 0, ignored: 0, failed: 0 };
-  job.items.forEach(function(i) { if (c[i.st] != null) c[i.st]++; });
+  job.items.forEach(function(i) { var s = normSt(i.st); if (c[s] != null) c[s]++; });
   var parts = ['<b>' + c.ok + '</b> 成功'];
   if (c.exists) parts.push('<span class="skip">' + c.exists + '</span> 已存在');
   if (c.ignored) parts.push('<span class="skip">' + c.ignored + '</span> 忽略');
@@ -821,7 +825,7 @@ function updateProg() {
   var urlEl = document.getElementById('scProgUrl');
   var stats = [];
   var c = { ok: 0, exists: 0, ignored: 0, failed: 0 };
-  job.items.forEach(function(i) { if (c[i.st] != null && i.st !== 'pend') c[i.st]++; });
+  job.items.forEach(function(i) { var s = normSt(i.st); if (c[s] != null && s !== 'pend') c[s]++; });
   if (c.ok) stats.push('<b>' + c.ok + '</b>成功');
   if (c.exists) stats.push('<span style="color:#eab308">' + c.exists + '</span>已存在');
   if (c.ignored) stats.push('<span style="color:#eab308">' + c.ignored + '</span>忽略');
@@ -880,7 +884,7 @@ async function processOne(it) {
     var d = await api('POST', '/admin/api/scrape/grab_one', body, 0, ctl.signal);
     if (!d.ok || !d.data) { it.st = 'failed'; it.reason = (d && d.error) || '服务端异常'; }
     else {
-      it.st = d.data.status || 'failed';
+      it.st = normSt(d.data.status) || 'failed';
       it.reason = d.data.reason || '';
       it.id = d.data.id;
       if (it.st === 'failed' && !it.reason) it.reason = '未知错误';
@@ -959,6 +963,8 @@ function handleStoredJobAfterAnalyze(pageUrl) {
   try { saved = JSON.parse(localStorage.getItem(JOB_KEY) || 'null'); } catch (e) {}
   if (saved && Array.isArray(saved.items) && saved.pageUrl === pageUrl && saved.items.some(function(i) { return i.st === 'pend'; })) {
     job = saved;
+    // 兼容历史存下来的 added/ok 成功态：统一归一化，避免旧任务被显示成「等待中」
+    job.items.forEach(function(it) { it.st = normSt(it.st); });
     // 历史任务未带序号：按原顺序补 seq
     job.items.forEach(function(it, i) { if (!it.seq) it.seq = i + 1; });
     // 把已存任务的标签同步到只读展示框
