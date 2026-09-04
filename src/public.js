@@ -2,6 +2,7 @@
 // 幻灯片页（/show）、Show groups（节目单）、画廊瀑布流、公开 JSON API、公开上传、Random pool。
 // 依赖 worker.js（fireWebhook/getAutoPoolTags/importFileToPool/extractFileInfo，循环 import，运行时调用安全）。
 import { json, log, invalidateStatsCache } from "./util.js";
+import { ensureTablesOnce } from "./db.js";
 import { cnShift, cnTodayStr, cnNowISO, LEVEL_RANK, sanitizeLevel, levelFilter, clampInt, randHex, hashKeyPass, genApiKey, genShortKey, genRedeemCode, splitTags, fileExtOf } from "./core.js";
 import { lastUploadError, putR2, putR2Stream, fileTok } from "./telegram.js";
 import { fireWebhook, getAutoPoolTags, importFileToPool } from "./events.js";
@@ -2358,12 +2359,20 @@ export async function handleAdminScrapeGrab(request, env) {
     if (!b || !Array.isArray(b.urls) || !b.urls.length) return json({ ok: false, error: 'urls required' }, 400);
     const urls = b.urls.map(function(x) { return String(x).trim(); }).filter(function(x) { return /^https?:\/\//i.test(x); }).slice(0, 40);
     if (!urls.length) return json({ ok: false, error: 'url must be http(s)' }, 400);
+    if (env.D1_DB) { try { await ensureTablesOnce(env.D1_DB); } catch (e) {} }
     const groupId = await getUploadGroupId(env);
     if (!groupId) return json({ ok: false, error: '尚未配置上传群组：请到「运维 → 用户上传配置」设置默认绑定群组' }, 400);
-    const tags = (b.tags || []).map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
+    // 容错：tags 可能是数组或逗号分隔字符串
+    const tags = Array.isArray(b.tags) ? b.tags.map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',')
+      : String(b.tags || '').split(/[,，;；]/).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
     const title = String(b.title || '').slice(0, 200);
-    const isPrivate = b.is_private ? 1 : 0;
-    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const u = new URL(request.url);
+    const uOrigin = u.origin;
+    // vvip = 私密内容：入库级别选 vvip 即直接进私密库（random_pool is_private=1），不在 Tele 文件库默认展示
+    const rawLevel = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : (rawLevel === 'vvip' ? 1 : 0);
+    const level = isPrivate ? 'vvip' : rawLevel;
+    const toPool = isPrivate ? 1 : 0;
     const referer = b.ref ? String(b.ref).trim() : '';
     // 忽略规则
     const ignoreKws = String(b.ignore_kw || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
@@ -2407,9 +2416,9 @@ export async function handleAdminScrapeGrab(request, env) {
         if (buf.byteLength > maxBytes) { row.ok = false; row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; ignored++; results.push(row); continue; }
         const bytes = new Uint8Array(buf);
         const name = scrapeImageName(url, MIME_EXT[ct] || '', title);
-        const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate, pageUrl: referer || '', originalUrl: url });
+        const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer || '', originalUrl: url });
         if (!res2.ok) { row.error = res2.error; }
-        else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; added++; }
+        else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; row.private = !!isPrivate; added++; }
       } catch (e) { row.error = e.message; }
       results.push(row);
     }
@@ -2421,19 +2430,54 @@ export async function handleAdminScrapeGrab(request, env) {
 // Body: { url, title, tags, level, is_private, caption, ref, ignore_kw, ignore_ext, max_mb }
 // 逐张请求（前端可做进度/暂停/断点续传）。返回 data.status:
 //   added=成功 / exists=库里已有(original_url 命中，跳过) / ignored=命中忽略规则 / failed=失败(reason)
+// i.postimg.cc/<code>/<name>.jpg 多指压缩展示图；到 postimg.cc/<code> 详情页找 ?dl=1 原图直链（原图 code 可能与展示 code 不同）
+async function resolvePostimgOriginal(url) {
+  let u;
+  try { u = new URL(url); } catch (e) { return url; }
+  if (!/^i\.postimg\.cc$/i.test(u.hostname)) return url;
+  if (u.searchParams.has('dl')) return url;
+  const seg = u.pathname.split('/').filter(Boolean);
+  if (!seg.length) return url;
+  try {
+    const r = await fetch('https://postimg.cc/' + encodeURIComponent(seg[0]), { headers: { 'User-Agent': BROWSER_UA }, redirect: 'follow' });
+    if (!r.ok) return url;
+    const html = await r.text();
+    const re = /https?:\/\/i\.postimg\.cc\/[A-Za-z0-9]+\/[A-Za-z0-9._~%+-]+(?:\?[A-Za-z0-9=&_%.-]*)?/g;
+    const picks = [];
+    let m;
+    while ((m = re.exec(html))) picks.push(m[0]);
+    let best = '';
+    for (const p of picks) { if (p.indexOf('?dl=1') >= 0) { best = p; break; } }
+    if (!best) {
+      for (const p of picks) {
+        try { const pu = new URL(p); if ((pu.pathname.split('/').filter(Boolean)[0] || '') !== seg[0]) { best = p; break; } } catch (e) {}
+      }
+    }
+    return best || url;
+  } catch (e) { return url; }
+}
+
 export async function handleAdminScrapeGrabOne(request, env) {
   try {
     const b = await request.json().catch(() => null);
     const url = b && b.url ? String(b.url).trim() : '';
     if (!/^https?:\/\//i.test(url)) return json({ ok: true, data: { url: url, status: 'failed', reason: 'url 必须为 http(s)' } });
+    if (env.D1_DB) { try { await ensureTablesOnce(env.D1_DB); } catch (e) {} }
     const groupId = await getUploadGroupId(env);
     if (!groupId) return json({ ok: true, data: { url: url, status: 'failed', reason: '尚未配置上传群组：请到「运维 → 用户上传配置」设置' } });
     if (!env.TG_BOT_TOKEN) return json({ ok: true, data: { url: url, status: 'failed', reason: 'TG_BOT_TOKEN 未配置' } });
     const fail = (reason) => json({ ok: true, data: { url: url, status: 'failed', reason: reason } });
-    const tags = (b.tags || []).map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
+    // 容错：tags 可能是数组（旧接口约定）或逗号分隔字符串（scrape.html 传 job.tags）
+    const tags = Array.isArray(b.tags) ? b.tags.map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',')
+      : String(b.tags || '').split(/[,，;；]/).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
     const title = String(b.title || '').slice(0, 200);
-    const isPrivate = b.is_private ? 1 : 0;
-    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const u = new URL(request.url);
+    const uOrigin = u.origin;
+    // vvip = 私密内容：入库级别选 vvip 即直接进私密库（random_pool is_private=1），不在 Tele 文件库默认展示
+    const rawLevel = sanitizeLevel(b.level);
+    const isPrivate = b.is_private ? 1 : (rawLevel === 'vvip' ? 1 : 0);
+    const level = isPrivate ? 'vvip' : rawLevel;
+    const toPool = isPrivate ? 1 : 0;
     const referer = b.ref ? String(b.ref).trim() : '';
     const caption = b.caption != null ? b.caption : title;
     const ignoreKws = String(b.ignore_kw || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
@@ -2456,7 +2500,9 @@ export async function handleAdminScrapeGrabOne(request, env) {
       if (referer) fh['Referer'] = referer;
       const dcookie = String(b.cookie || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
       if (dcookie) { fh['User-Agent'] = BROWSER_UA; fh['Cookie'] = dcookie; }
-      const res = await fetch(url, { headers: fh, redirect: 'follow' });
+      // i.postimg.cc 直链多为压缩展示图：自动解析详情页升级为 ?dl=1 原图（失败则回退原链）
+      const fetchUrl = await resolvePostimgOriginal(url);
+      const res = await fetch(fetchUrl, { headers: fh, redirect: 'follow' });
       if (!res.ok) return fail('下载失败（HTTP ' + res.status + '）');
       const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
       const cl = parseInt(res.headers.get('content-length') || '0', 10);
@@ -2469,9 +2515,9 @@ export async function handleAdminScrapeGrabOne(request, env) {
       if (buf.byteLength > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
       const bytes = new Uint8Array(buf);
       const name = scrapeImageName(url, ctExt || '', title);
-      const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: level, isPrivate: isPrivate, pageUrl: referer, originalUrl: url });
+      const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer, originalUrl: url });
       if (!res2.ok) return fail(res2.error);
-      return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id, name: name } });
+      return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate } });
     } catch (e) { return fail(e.message); }
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }

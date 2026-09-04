@@ -525,6 +525,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
               <option value="r2">已入库 R2</option>
               <option value="proxy">仅代理(不入R2)</option>
             </select>
+            <label class="chk-inline" style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer" title="勾选后列表包含私密内容（vvip 直传/私密库文件）；默认隐藏"><input type="checkbox" id="fileShowPrivate" style="accent-color:var(--primary)">含私密(vvip)</label>
             <button class="btn btn-primary" id="fileSearchBtn">搜索</button>
             <button class="btn btn-ghost" id="btnSelAll">全选本页</button>
             <button class="btn btn-ghost" id="btnClearSel" style="display:none">取消选择</button>
@@ -1662,6 +1663,8 @@ function init() {
   // 工具栏按钮
   document.getElementById("fileSearchBtn").addEventListener("click", function() { loadFiles(1); });
   document.getElementById("fileSearch").addEventListener("keydown", function(e) { if (e.key === "Enter") loadFiles(1); });
+  var spEl = document.getElementById("fileShowPrivate");
+  if (spEl) spEl.addEventListener("change", function() { loadFiles(1); });
   document.getElementById("fileTags").addEventListener("keydown", function(e) { if (e.key === "Enter") loadFiles(1); });
   document.getElementById("createKeyBtn").addEventListener("click", function() { createKey(); });
   // 接口生成器控件
@@ -5981,11 +5984,13 @@ async function loadFiles(page) {
   var tp = document.getElementById("fileType").value;
   var ps2 = document.getElementById("filePoolState") ? document.getElementById("filePoolState").value : "";
   var src = document.getElementById("fileSource") ? document.getElementById("fileSource").value : "";
+  var sp = document.getElementById("fileShowPrivate") ? document.getElementById("fileShowPrivate").checked : false;
   var u = "/admin/api/files?page=" + page + "&page_size=18";
   if (kw) u += "&keyword=" + encodeURIComponent(kw);
   if (tp) u += "&type=" + tp;
   if (ps2) u += "&pool_state=" + ps2;
   if (src) u += "&source=" + src;
+  if (sp) u += "&show_private=1";
   var tg = document.getElementById("fileTags").value.trim();
   if (tg) u += "&tags=" + encodeURIComponent(tg);
   u += "&state=completed";

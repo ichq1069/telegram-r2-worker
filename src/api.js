@@ -98,8 +98,11 @@ export async function lazyTransferToR2(env, id, f, dlUrl) {
   } catch (e) { console.error('lazyTransferToR2:', e.message); }
 }
 
-export async function handleFiles(request, env) {
+export async function handleFiles(request, env, opts) {
   const u = new URL(request.url);
+  const isAdminCtx = !!(opts && opts.admin);
+  // 私密内容（is_private=1，等同 vvip）默认不展示；仅管理员显式 show_private=1 时可见
+  const showPrivate = isAdminCtx && u.searchParams.get('show_private') === '1';
   const pg = clampInt(u.searchParams.get('page') || '1', 1, 1);
   const ps = clampInt(u.searchParams.get('page_size') || '20', 20, 1, 100);
   const tp = u.searchParams.get('type') || '';
@@ -114,6 +117,7 @@ export async function handleFiles(request, env) {
   const src = u.searchParams.get('source') || '';
   const off = (pg - 1) * ps;
   let w = 'WHERE f.deleted_at IS NULL'; const p = [];
+  if (!showPrivate) { w += ' AND f.is_private = 0'; }
   if (tp) { w += ' AND f.file_type=?'; p.push(tp); }
   if (ci) { w += ' AND f.chat_id=?'; p.push(ci); }
   if (ui) { w += ' AND f.user_id=?'; p.push(parseInt(ui)); }

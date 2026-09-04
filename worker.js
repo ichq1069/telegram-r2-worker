@@ -143,7 +143,7 @@ export default {
     if (m === 'POST' && p === '/admin/api/commands') return isAdmin ? handleAdminAddCommand(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'PATCH' && p === '/admin/api/commands') return isAdmin ? handleAdminUpdateCommand(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/commands') return isAdmin ? handleAdminDeleteCommand(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'GET' && p === '/admin/api/files') return isAdmin ? handleFiles(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/files') return isAdmin ? handleFiles(request, env, { admin: true }) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/files') return isAdmin ? handleDeleteFile(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/files/upload') return isAdmin ? handleAdminFilesUpload(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/files/upload-tg') return isAdmin ? handleAdminFilesUploadTg(request, env) : json({ok:false,error:'Unauthorized'},401);
@@ -411,7 +411,7 @@ export default {
     const apiKey = request.headers.get('X-API-Key') || url.searchParams.get('api_key');
     if (!apiKey || apiKey !== env.API_KEY) return json({ ok: false, error: 'Unauthorized' }, 401);
 
-    if (m === 'GET' && p === '/api/files') return handleFiles(request, env);
+    if (m === 'GET' && p === '/api/files') return handleFiles(request, env, { admin: false });
     if (m === 'GET' && p === '/api/file') return handleFile(request, env);
     if (m === 'GET' && p === '/api/stats') return handleStats(env);
     if (m === 'GET' && p === '/api/by-chat') return handleByChat(request, env);

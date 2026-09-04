@@ -82,6 +82,7 @@ a.link { color: #00d4ff; text-decoration: none; }
       <div class="field"><label>标签（逗号分隔，可选）</label><input type="text" id="scTags" placeholder="风景,美女"></div>
       <div class="field"><label>入库级别</label><select id="scLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
     </div>
+    <div style="font-size:11px;color:#8a8aa8;margin:-6px 0 4px">入库级别选 <b>vvip</b> = 私密内容：直传后自动进入<b>私密库</b>（random_pool is_private=1，仅 vvip 密钥可访问），不显示在 Tele 文件库列表；管理后台 Tele 文件页可勾选「含私密(vvip)」查看。</div>
     <div class="ign">
       <span class="ig-label">规则组</span>
       <select id="scRuleGroup" class="ign-sel" title="忽略规则按域名分组：拾取某页面时自动套用匹配域名的规则组，匹配不到则用「默认」"></select>
@@ -108,7 +109,7 @@ a.link { color: #00d4ff; text-decoration: none; }
       <button class="btn ghost" id="scSelAll">全选</button>
       <button class="btn ghost" id="scSelNone">全不选</button>
       <button class="btn ghost" id="scSelSmall" title="只勾选前 20 张">只选前 20 张</button>
-      <button class="btn primary" id="scGrabBtn" disabled>直传选中到 Tele 库</button>
+      <button class="btn primary" id="scGrabBtn" disabled title="vvip 级别将直传并自动进入私密库">直传选中（vvip 自动入私密库）</button>
       <button class="btn ghost" id="scResumeBtn" style="display:none" title="继续处理上次未完成的图片">续传剩余 <span id="scResumeN">0</span> 张</button>
       <button class="btn ghost" id="scAbandonBtn" style="display:none" title="放弃上次未完成的批量任务，重新开始">放弃旧任务</button>
     </div>
