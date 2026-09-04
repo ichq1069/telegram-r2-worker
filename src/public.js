@@ -2239,7 +2239,8 @@ export async function handleAdminScrapeAnalyze(request, env) {
 }
 
 // 抓取勾选的图片并直传群入库 files：POST /admin/api/scrape/grab
-// Body: { urls:[...], title, tags, level, is_private, caption }  (单个请求上限 40 张)
+// Body: { urls:[...], title, tags, level, is_private, caption, ref, ignore_kw, ignore_ext, max_mb }
+//   单个请求上限 40 张；ignore_kw=链接含关键词忽略；ignore_ext=扩展名/格式忽略；max_mb=单张上限（缺省 30）
 export async function handleAdminScrapeGrab(request, env) {
   try {
     const b = await request.json().catch(() => null);
@@ -2253,11 +2254,31 @@ export async function handleAdminScrapeGrab(request, env) {
     const isPrivate = b.is_private ? 1 : 0;
     const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
     const referer = b.ref ? String(b.ref).trim() : '';
+    // 忽略规则
+    const ignoreKws = String(b.ignore_kw || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
+    const ignoreExts = String(b.ignore_ext || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
+    let maxBytes = SCRAPE_MAX_BYTES;
+    if (b.max_mb) { const mb = Number(b.max_mb); if (mb > 0 && mb <= 30) maxBytes = Math.round(mb * 1024 * 1024); }
+    const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/x-icon': 'ico', 'image/tiff': 'tiff' };
     const results = [];
     let added = 0;
+    let ignored = 0;
     for (const url of urls) {
-      const row = { url: url, ok: false, error: '' };
+      const row = { url: url, ok: false, ignored: false, error: '' };
       try {
+        const low = url.toLowerCase();
+        let ignoreReason = '';
+        // 链接包含关键词 → 忽略（不发请求）
+        for (const kw of ignoreKws) {
+          if (low.indexOf(kw) >= 0) { ignoreReason = '链接含「' + kw + '」'; break; }
+        }
+        // 扩展名匹配 → 忽略
+        if (!ignoreReason) {
+          let ext = '';
+          try { const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); ext = seg.indexOf('.') >= 0 ? seg.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') : ''; } catch (e) {}
+          if (ext && ignoreExts.indexOf(ext) >= 0) ignoreReason = '已忽略格式 .' + ext;
+        }
+        if (ignoreReason) { row.ok = false; row.ignored = true; row.error = ignoreReason; ignored++; results.push(row); continue; }
         const fh = { 'User-Agent': TG_UA };
         // 带 Referer 下载：部分图床/反盗链站点校验来源页
         if (referer) fh['Referer'] = referer;
@@ -2265,15 +2286,19 @@ export async function handleAdminScrapeGrab(request, env) {
         if (!res.ok) { row.error = '下载失败（HTTP ' + res.status + '）'; results.push(row); continue; }
         const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
         const cl = parseInt(res.headers.get('content-length') || '0', 10);
-        if (cl > SCRAPE_MAX_BYTES) { row.error = '图片过大（>30MB）'; results.push(row); continue; }
+        if (cl > maxBytes) { row.ok = false; row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; ignored++; results.push(row); continue; }
+        // 格式校验：仅收图片
+        const ctExt = MIME_EXT[ct] || '';
+        if (!/^image\//.test(ct)) { row.ok = false; row.ignored = true; row.error = '非图片格式（' + (ct || '未知') + '）'; ignored++; results.push(row); continue; }
+        if (ignoreExts.indexOf(ctExt) >= 0) { row.ok = false; row.ignored = true; row.error = '已忽略格式 .' + (ctExt || ct); ignored++; results.push(row); continue; }
         const buf = await res.arrayBuffer();
         if (!buf || !buf.byteLength) { row.error = '空响应'; results.push(row); continue; }
-        if (buf.byteLength > SCRAPE_MAX_BYTES) { row.error = '图片过大（>30MB）'; results.push(row); continue; }
+        if (buf.byteLength > maxBytes) { row.ok = false; row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; ignored++; results.push(row); continue; }
         const bytes = new Uint8Array(buf);
         let name = '';
         try { const pu = new URL(url); name = decodeURIComponent(pu.pathname.split('/').pop() || ''); } catch (e) {}
         if (!name || name.indexOf('.') < 0) {
-          const extMap = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg' };
+          const extMap = MIME_EXT;
           const ext = extMap[ct] || 'jpg';
           name = 'img_' + String(Math.random()).slice(2, 10) + '.' + ext;
         }
@@ -2284,7 +2309,7 @@ export async function handleAdminScrapeGrab(request, env) {
       } catch (e) { row.error = e.message; }
       results.push(row);
     }
-    return json({ ok: true, data: { added: added, failed: results.length - added, results: results } });
+    return json({ ok: true, data: { added: added, failed: results.length - added - ignored, ignored: ignored, results: results } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

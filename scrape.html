@@ -28,6 +28,10 @@ input:focus { border-color: #00d4ff; }
 .opts { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 .opts .field { flex: 1; min-width: 160px; }
 .opts label { display: block; font-size: 12px; color: #8a8aa8; margin-bottom: 4px; }
+.ign { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+.ign .ig-label { font-size: 12px; color: #8a8aa8; white-space: nowrap; }
+.ign input[type=text] { flex: 1; min-width: 150px; }
+.ign input[type=number] { flex: 0 0 auto; width: 100px; }
 select { background: #0f1020; color: #e8e8f8; border: 1px solid #3a3c5a; border-radius: 8px; padding: 9px 10px; width: 100%; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-top: 14px; }
 .cand { position: relative; background: #0f1020; border: 1px solid #3a3c5a; border-radius: 8px; overflow: hidden; }
@@ -43,6 +47,7 @@ select { background: #0f1020; color: #e8e8f8; border: 1px solid #3a3c5a; border-
 .result-item .rk { width: 20px; text-align: center; color: #666; }
 .result-item .ok { color: #00ff88; }
 .result-item .fail { color: #ff6666; }
+.result-item .skip { color: #eab308; }
 .result-item .u { flex: 1; word-break: break-all; color: #aaa; }
 .sum { margin-top: 10px; font-size: 13px; }
 a.link { color: #00d4ff; text-decoration: none; }
@@ -67,14 +72,21 @@ a.link { color: #00d4ff; text-decoration: none; }
       <div class="field"><label>标签（逗号分隔，可选）</label><input type="text" id="scTags" placeholder="风景,美女"></div>
       <div class="field"><label>入库级别</label><select id="scLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
     </div>
+    <div class="ign">
+      <span class="ig-label">忽略规则</span>
+      <input type="text" id="scIgKw" placeholder="链接含以下内容则忽略（逗号分隔，如 logo,icon,avatar,1px）">
+      <input type="text" id="scIgExt" placeholder="忽略格式（如 svg,bmp,ico）" value="svg">
+      <input type="number" id="scIgMb" placeholder="单张上限MB" value="10" min="1" max="30">
+    </div>
     <div class="toolbar">
       <span class="count">共 <span id="scCount">0</span> 张 · 已选 <span id="scSelCount">0</span> 张</span>
       <button class="btn ghost" id="scSelAll">全选</button>
       <button class="btn ghost" id="scSelNone">全不选</button>
-      <button class="btn ghost" id="scSelSmall" title="只勾选每张候选的首图候选">只选每页前 20 张</button>
+      <button class="btn ghost" id="scSelSmall" title="只勾选前 20 张">只选前 20 张</button>
       <button class="btn primary" id="scGrabBtn" disabled>直传选中到 Tele 库</button>
     </div>
     <div class="grid" id="scGrid"></div>
+    <div class="sum" id="scSum" style="display:none"></div>
     <div class="status" id="scGrabStatus"></div>
     <div id="scResult"></div>
     <div style="margin-top:12px;font-size:12px;color:#8a8aa8">勾选图片将作为 document 消息发送到「上传群」，按返回 file_id 入库（source=代理），可在 <a class="link" href="/admin#files" target="_blank">admin → Tele 文件</a> 查看。需先在 admin「运维 → 用户上传配置」设置上传群组。</div>
@@ -117,7 +129,12 @@ function api(method, path, body, timeoutMs) {
     opts.signal = ctl.signal;
     setTimeout(function() { ctl.abort(); }, timeoutMs);
   }
-  return fetch(url, opts).then(function(r) { return r.json(); });
+  return fetch(url, opts).then(function(r) {
+    return r.text().then(function(t) {
+      try { return JSON.parse(t); }
+      catch (e) { return { ok: false, error: '服务响应异常（HTTP ' + r.status + '）' }; }
+    });
+  });
 }
 
 function setStatus(id, text, ok) {
@@ -149,6 +166,8 @@ function analyze() {
       setStatus('scStatus', '页面解析成功：找到 ' + cands.length + ' 张候选图片，勾选后点「直传选中到 Tele 库」', 1);
       document.getElementById('scGrabStatus').textContent = '';
       document.getElementById('scResult').innerHTML = '';
+      var sumEl = document.getElementById('scSum');
+      if (sumEl) sumEl.style.display = 'none';
       if (!cands.length) setStatus('scStatus', '页面解析完成，但没有找到可用图片', 0);
     })
     .catch(function(e) { setLoading(btn, false, '拾取图片'); setStatus('scStatus', '请求失败: ' + e.message, 0); });
@@ -188,38 +207,64 @@ function updateSelCount() {
 
 function grab() {
   var urls = selectedUrls();
-  if (!urls.length) return;
+  var st = document.getElementById('scGrabStatus');
+  var sum = document.getElementById('scSum');
+  if (!urls.length) {
+    st.className = 'status err';
+    st.textContent = '未勾选任何图片：请先在全选/候选图上打勾';
+    if (sum) sum.style.display = 'none';
+    return;
+  }
   var btn = document.getElementById('scGrabBtn');
   setLoading(btn, true, '直传中...');
   var title = document.getElementById('scTitle').value.trim();
   var tags = document.getElementById('scTags').value.trim();
   var level = document.getElementById('scLevel').value;
   var pageUrl = document.getElementById('scUrl').value.trim();
-  var st = document.getElementById('scGrabStatus');
+  var ignoreKw = document.getElementById('scIgKw').value.trim();
+  var ignoreExt = document.getElementById('scIgExt').value.trim();
+  var maxMb = parseInt(document.getElementById('scIgMb').value, 10);
+  if (!(maxMb > 0)) maxMb = 30;
   st.className = 'status';
   st.innerHTML = '<span class="loading"></span>正在逐张下载并发送到群（' + urls.length + ' 张，可能需要一会儿）...';
   document.getElementById('scResult').innerHTML = '';
+  if (sum) sum.style.display = 'none';
   // 长任务：总超时放宽到 10 分钟
-  api('POST', '/admin/api/scrape/grab', { urls: urls, title: title, tags: tags, level: level, ref: pageUrl }, 600000)
+  api('POST', '/admin/api/scrape/grab', { urls: urls, title: title, tags: tags, level: level, ref: pageUrl, ignore_kw: ignoreKw, ignore_ext: ignoreExt, max_mb: maxMb }, 600000)
     .then(function(d) {
       setLoading(btn, false, '直传选中到 Tele 库');
       if (!d.ok) { st.className = 'status err'; st.textContent = d.error || '直传失败'; return; }
-      st.className = 'status ok';
-      st.textContent = '直传完成：成功 ' + (d.data.added || 0) + ' 张' + (d.data.failed ? '，失败 ' + d.data.failed + ' 张' : '');
+      var added = d.data.added || 0;
+      var failed = d.data.failed || 0;
+      var ignoredN = d.data.ignored || 0;
+      st.className = 'status ' + (added > 0 ? 'ok' : 'err');
+      var msg = '直传完成：成功 ' + added + ' 张';
+      if (ignoredN) msg += '，忽略 ' + ignoredN + ' 张';
+      if (failed) msg += '，失败 ' + failed + ' 张';
+      if (!added && !ignoredN && !failed) msg = '直传完成：没有需要处理的图片';
+      st.textContent = msg;
+      if (sum) {
+        sum.innerHTML = '<b>' + added + '</b> 成功 · <span class="skip">' + ignoredN + '</span> 忽略 · <span class="fail">' + failed + '</span> 失败（共勾选 ' + urls.length + ' 张）';
+        sum.style.display = 'block';
+      }
       var rows = (d.data && d.data.results) || [];
       var h = rows.map(function(r, i) {
+        var ico, cls, why;
+        if (r.ignored) { ico = '–'; cls = 'skip'; why = r.error || '忽略'; }
+        else if (r.ok) { ico = '✓'; cls = 'ok'; why = '#' + (r.id || ''); }
+        else { ico = '✗'; cls = 'fail'; why = r.error || '失败'; }
         return '<div class="result-item"><span class="rk">' + (i + 1) + '</span>' +
-          '<span class="' + (r.ok ? 'ok' : 'fail') + '">' + (r.ok ? '✓' : '✗') + '</span>' +
+          '<span class="' + cls + '">' + ico + '</span>' +
           '<span class="u">' + escStr(r.url) + '</span>' +
-          (r.ok ? '<span style="color:#8a8aa8">#' + (r.id || '') + '</span>' : '<span class="fail">' + escStr(r.error || '') + '</span>') +
-          '</div>';
+          '<span class="' + cls + '" style="white-space:nowrap">' + escStr(why) + '</span></div>';
       }).join('');
       document.getElementById('scResult').innerHTML = h;
-      if (d.data.added) {
-        document.getElementById('scResult').innerHTML += '<div class="sum">入库 ' + d.data.added + ' 张到 Tele 库（代理直传）。<a class="link" href="/admin#files" target="_blank">去 admin 查看 →</a></div>';
+      if (added) {
+        document.getElementById('scResult').innerHTML += '<div class="sum">入库 ' + added + ' 张到 Tele 库（代理直传）。<a class="link" href="/admin#files" target="_blank">去 admin 查看 →</a></div>';
       }
+      st.scrollIntoView({ behavior: 'smooth', block: 'start' });
     })
-    .catch(function(e) { setLoading(btn, false, '直传选中到 Tele 库'); st.className = 'status err'; st.textContent = '请求失败或超时: ' + e.message; });
+    .catch(function(e) { setLoading(btn, false, '直传选中到 Tele 库'); st.className = 'status err'; st.textContent = '请求失败或超时: ' + (e && e.message ? e.message : e); });
 }
 
 document.getElementById('scAnalyzeBtn').addEventListener('click', analyze);
