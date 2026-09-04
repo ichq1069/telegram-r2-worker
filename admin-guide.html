@@ -99,7 +99,7 @@ td code { white-space: nowrap; }
     <div class="logo">B</div>
     <div>
       <h1>管理员使用手册</h1>
-      <p>Telegram 图库 Bot · 后台功能全面说明（21 个功能模块）</p>
+      <p>Telegram 图库 Bot · 后台功能全面说明（20 个功能模块）</p>
     </div>
     <button class="back" onclick="location.href='/admin'">返回管理后台</button>
   </div>
@@ -132,13 +132,12 @@ td code { white-space: nowrap; }
     <a href="#s17">17. 轮播展示</a>
     <a href="#s18">18. 机器人命令</a>
     <a href="#s19">19. Bot API</a>
-    <a href="#s20">20. 链接解析</a>
-    <a href="#s21">21. 网页图片直传</a>
+    <a href="#s20">20. 网页图片直传</a>
     <div class="nav-grp">系统</div>
-    <a href="#s22">22. R2 文件</a>
-    <a href="#s23">23. 运维工具</a>
-    <a href="#s24">24. 公开 API</a>
-    <a href="#s25">25. 部署与版本</a>
+    <a href="#s21">21. R2 文件</a>
+    <a href="#s22">22. 运维工具</a>
+    <a href="#s23">23. 公开 API</a>
+    <a href="#s24">24. 部署与版本</a>
   </nav>
 
   <div class="content">
@@ -153,7 +152,7 @@ td code { white-space: nowrap; }
         <li><b>查看状态</b>：登录后默认进入「概览」，可看到 D1 数据库、R2 存储、Worker 运行与 Webhook 状态。</li>
         <li><b>日常维护</b>：Tele 群里的文件会自动入库并转存，管理员的日常工作主要是「快速打标」给文件分类、在「共享库」维护对外展示的图片。</li>
       </ol>
-      <div class="note blue"><b>导航结构</b>：后台左侧侧栏按 <b>概览</b> / <b>文件</b> / <b>素材库</b> / <b>接口</b> / <b>Bot 配置</b> / <b>系统</b> 六组排列，共 <b>21 个功能标签页</b>。本手册按编号逐一说明。</div>
+      <div class="note blue"><b>导航结构</b>：后台左侧侧栏按 <b>概览</b> / <b>文件</b> / <b>素材库</b> / <b>接口</b> / <b>Bot 配置</b> / <b>系统</b> 六组排列，共 <b>20 个功能标签页</b>。本手册按编号逐一说明。</div>
     </div>
 
     <!-- 2 级别体系 -->
@@ -422,16 +421,9 @@ POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</pre
       <div class="note green"><b>点按钮 = 发消息</b>：快捷键盘的按钮是纯文本按钮，点按等价于输入对应文字。</div>
     </div>
 
-    <!-- 20 链接解析 -->
+    <!-- 20 网页图片直传 -->
     <div class="section" id="s20">
-      <h2><span class="no">20</span>链接解析</h2>
-      <p class="desc"><code>/jx</code> 页面：粘贴短链或分享链接，自动解析出最终跳转地址。</p>
-      <p>支持 <code>xhslink.cn</code>、<code>tieba.baidu.com</code> 等短链重定向。解析后可复制直链或跳转到网页图片直传。</p>
-    </div>
-
-    <!-- 21 网页图片直传 -->
-    <div class="section" id="s21">
-      <h2><span class="no">21</span>网页图片直传</h2>
+      <h2><span class="no">20</span>网页图片直传</h2>
       <p class="desc"><code>/scrape</code> 页面：粘贴任意网页链接，自动抓取页面图片，勾选后直传入库。</p>
       <h3>基本流程</h3>
       <ol>
@@ -452,9 +444,9 @@ POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</pre
       <div class="note blue"><b>403 下载兜底</b>：系统会按「浏览器 UA + 图床 Referer」→「TG UA」→「纯浏览器 UA」多级重试，自动应对小红书、微博等站点的防盗链。</div>
     </div>
 
-    <!-- 22 R2 文件 -->
-    <div class="section" id="s22">
-      <h2><span class="no">22</span>R2 文件</h2>
+    <!-- 21 R2 文件 -->
+    <div class="section" id="s21">
+      <h2><span class="no">21</span>R2 文件</h2>
       <p class="desc">直接浏览 R2 存储桶中的文件，支持层级目录浏览、删除、清理孤儿对象。</p>
       <ul>
         <li><b>目录浏览</b>：按文件夹层级查看 R2 中所有对象，支持分页。</li>
@@ -464,9 +456,9 @@ POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</pre
       </ul>
     </div>
 
-    <!-- 23 运维工具 -->
-    <div class="section" id="s23">
-      <h2><span class="no">23</span>运维工具</h2>
+    <!-- 22 运维工具 -->
+    <div class="section" id="s22">
+      <h2><span class="no">22</span>运维工具</h2>
       <p class="desc">数据安全、告警、通知与运行模式，全部在「运维」标签页。</p>
       <h3>D1 数据备份</h3>
       <p>「立即备份到 R2」把数据库快照存到 R2 的 <code>backups/</code> 目录，自动保留最近 20 份；或「导出并下载」直接拉到本地。可查看备份列表、删除旧备份。建议定期备份。</p>
@@ -495,9 +487,9 @@ POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</pre
       <p>选择免费版（10GB 存储 + 100 万 A 类 + 1000 万 B 类 / 月）或付费版（不限按量计费），用于概览页配额与超限提醒。A 类 = 写入（上传/转存），B 类 = 读取（访问直链）。</p>
     </div>
 
-    <!-- 24 公开 API -->
-    <div class="section" id="s24">
-      <h2><span class="no">24</span>公开 API</h2>
+    <!-- 23 公开 API -->
+    <div class="section" id="s23">
+      <h2><span class="no">23</span>公开 API</h2>
       <p class="desc">面向第三方对接的接口汇总。</p>
       <h3>鉴权</h3>
       <p>请求头 <code>X-API-Key: your_key</code> 或参数 <code>?api_key=your_key</code>（密钥在后台「密钥管理」页生成，级别决定可见内容）。</p>
@@ -528,9 +520,9 @@ POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</pre
       <p>完整参数说明见 <code>GET /docs</code>（API Docs 页）。</p>
     </div>
 
-    <!-- 25 部署与版本 -->
-    <div class="section" id="s25">
-      <h2><span class="no">25</span>部署与版本</h2>
+    <!-- 24 部署与版本 -->
+    <div class="section" id="s24">
+      <h2><span class="no">24</span>部署与版本</h2>
       <p class="desc">代码如何上线，版本号如何变化。</p>
       <h3>自动部署</h3>
       <p>推送 <code>main</code> 分支即触发 GitHub Actions：语法检查 → wrangler 部署 Worker → 写入 Secrets（<code>TG_BOT_TOKEN</code> / <code>API_KEY</code> / <code>CF_API_TOKEN</code>）→ 二次部署 → 自动注入后台版本号 → 上传 <code>admin.html</code>、<code>admin-guide.html</code>、<code>scrape.html</code>、<code>user.html</code>、<code>user-manage.html</code>、<code>jx.html</code> 等到 R2。</p>

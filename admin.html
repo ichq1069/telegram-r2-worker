@@ -1183,40 +1183,6 @@ https://example.com/b.jpg"></textarea></div>
       </div>
     </div>
 
-    <!-- 链接解析 -->
-    <div class="panel" id="panel-jx">
-      <div class="card">
-        <div class="card-title"><span class="dot" style="background:#8b5cf6"></span>链接解析 <span style="font-size:11px;color:var(--text-secondary);font-weight:400">解析 Instagram/X/YouTube/TikTok 等链接，自动下载媒体并入库</span></div>
-        <div class="fb">
-          <div class="fr" style="flex:1;margin:0"><label>粘贴链接</label><input class="inp" id="jxUrl" placeholder="https://www.instagram.com/p/xxx 或 https://x.com/xxx/status/xxx"></div>
-          <button class="btn btn-primary" id="jxParseBtn">解析并入库</button>
-        </div>
-        <div id="jxResult" style="margin-top:12px;font-size:12px"></div>
-      </div>
-      <div class="card">
-        <div class="card-title"><span class="dot" style="background:#f59e0b"></span>Cobalt API 配置</div>
-        <div class="fb">
-          <div class="fr" style="flex:1;margin:0"><label>API 地址</label><input class="inp" id="jxCobaltUrl" placeholder="http://84.247.129.220:9002"></div>
-          <button class="btn btn-primary" id="jxCobaltSaveBtn">保存</button>
-        </div>
-        <div style="font-size:11px;color:var(--text-secondary);margin-top:6px">当前 VPS 部署的 cobalt Docker 实例地址</div>
-      </div>
-      <div class="card">
-        <div class="card-title"><span class="dot"></span>批量解析</div>
-        <div class="fb">
-          <div class="fr" style="flex:1;margin:0"><label>每行一个链接</label><textarea class="inp" id="jxBatchUrls" rows="5" placeholder="https://instagram.com/p/xxx&#10;https://x.com/yyy/status/zzz&#10;https://youtube.com/watch?v=aaa" style="resize:vertical"></textarea></div>
-          <button class="btn btn-primary" id="jxBatchParseBtn">批量解析</button>
-        </div>
-        <div id="jxBatchResult" style="margin-top:12px;font-size:12px"></div>
-      </div>
-      <div class="card" style="background:linear-gradient(90deg,#00c48f14,transparent)">
-        <div class="fbs">
-          <div style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:#00c48f"></span><span style="font-weight:600;font-size:14px">需要解析普通网页里的图片（直传群入库）？</span></div>
-          <button class="btn btn-primary" id="jxGoScrape" style="background:#00c48f">去「网页拾取」→</button>
-        </div>
-      </div>
-    </div>
-
     <!-- 网页图片拾取（独立面板） -->
     <div class="panel" id="panel-scrape">
       <div class="card">
@@ -1224,7 +1190,7 @@ https://example.com/b.jpg"></textarea></div>
           <div class="card-title" style="margin-bottom:0"><span class="dot" style="background:#00c48f"></span>网页拾取（直传群入库） <span style="font-size:11px;color:var(--text-secondary);font-weight:400">输入含图网页链接 → 自动拾取 &lt;img&gt;/CSS 背景/懒加载图片 → 勾选后直传群并写入 Tele 库（代理存储，不占 R2）</span></div>
           <a href="/scrape" target="_blank" rel="noopener" style="font-size:12px;color:var(--primary);white-space:nowrap">新窗口打开 →</a>
         </div>
-        <iframe id="jxScrapeFrame" style="width:100%;height:780px;border:1px solid var(--border);border-radius:10px;background:#fff" title="网页图片直传"></iframe>
+        <iframe id="scrapeFrame" style="width:100%;height:780px;border:1px solid var(--border);border-radius:10px;background:#fff" title="网页图片直传"></iframe>
       </div>
     </div>
 
@@ -1563,7 +1529,7 @@ function toast(msg, ok) {
 }
 
 // 初始化
-var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","jx","scrape","r2files","ops"];
+var allTabNames = ["stats","users","files","unsaved","trash","pool","private","quicktag","tags","gen","keys","keyusers","redeem","logs","show","cmds","api","scrape","r2files","ops"];
 function switchTab(name) {
   var panels = document.querySelectorAll(".panel");
   var tabs = document.querySelectorAll("#tabBar .tab");
@@ -1593,7 +1559,6 @@ function switchTab(name) {
   if (name === "cmds") loadCmds();
   if (name === "ops") loadOpsPage();
   if (name === "r2files") loadR2Files();
-  if (name === "jx") loadJxConfig();
   window.scrollTo(0, 0);
 }
 
@@ -1604,7 +1569,7 @@ function init() {
     { label: "文件", items: [["files","Tele文件","📁"],["unsaved","未转存","⏳"],["trash","回收站","🗑"]] },
     { label: "素材库", items: [["pool","共享库","📚"],["private","私密库","🔒"],["quicktag","快速打标","⚡"],["tags","标签库","🏷"]] },
     { label: "接口", items: [["gen","接口生成","🔗"],["keys","密钥管理","🔑"],["keyusers","密钥用户","👤"],["redeem","兑换码","🎟"],["logs","调用日志","📈"]] },
-    { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"],["jx","链接解析","🔗"],["scrape","网页拾取","🖼"]] },
+    { label: "Bot 配置", items: [["show","轮播展示","🖼"],["cmds","机器人命令","⚙"],["api","Bot API","🤖"],["scrape","网页拾取","🖼"]] },
     { label: "系统", items: [["r2files","R2文件","🗄"],["ops","运维工具","🛠"]] }
   ];
   var tabBar = document.getElementById("tabBar");
@@ -1698,12 +1663,6 @@ function init() {
   }
   bindStoreTabs("privateStoreTabs", ["local", "tg", "zup", "pi", "link"]);
   bindStoreTabs("fileStoreTabs", ["local", "tg", "link"]);
-
-  // 「链接解析」/「网页拾取」内嵌的网页图片拾取页（带 admin api_key，避免重复登录）
-  var jxFrame = document.getElementById("jxScrapeFrame");
-  if (jxFrame && AK) jxFrame.src = OR + "/scrape?api_key=" + encodeURIComponent(AK);
-  var goScrape = document.getElementById("jxGoScrape");
-  if (goScrape) goScrape.addEventListener("click", function() { switchTab("scrape"); });
 
   initQuickTagUI();
 
@@ -6743,54 +6702,6 @@ function r2fGoToPage(target, prefix, cursor) {
   });
 }
 
-// 链接解析功能
-async function loadJxConfig() {
-  var r = await api("GET", "/admin/api/settings/cobalt");
-  if (r.ok && r.data) {
-    document.getElementById("jxCobaltUrl").value = r.data.url || "";
-  }
-}
-
-document.getElementById("jxParseBtn").addEventListener("click", async function() {
-  var url = document.getElementById("jxUrl").value.trim();
-  if (!url) { toast("请输入链接", 0); return; }
-  this.disabled = true; this.textContent = "解析中...";
-  var r = await api("POST", "/admin/api/parse-link", { url: url });
-  this.disabled = false; this.textContent = "解析并入库";
-  if (r.ok) {
-    document.getElementById("jxResult").innerHTML = '<div style="padding:10px;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0">✅ ' + escStr(r.message || "解析成功") + (r.file_id ? ' · ID: ' + r.file_id : '') + '</div>';
-    document.getElementById("jxUrl").value = "";
-    toast("解析成功", 1);
-  } else {
-    document.getElementById("jxResult").innerHTML = '<div style="padding:10px;background:#fef2f2;border-radius:8px;border:1px solid #fecaca">❌ ' + escStr(r.error || "解析失败") + '</div>';
-    toast(r.error || "解析失败", 0);
-  }
-});
-
-document.getElementById("jxCobaltSaveBtn").addEventListener("click", async function() {
-  var url = document.getElementById("jxCobaltUrl").value.trim();
-  if (!url) { toast("请输入 API 地址", 0); return; }
-  var r = await api("POST", "/admin/api/settings/cobalt", { url: url });
-  if (r.ok) toast("保存成功", 1); else toast(r.error || "保存失败", 0);
-});
-
-document.getElementById("jxBatchParseBtn").addEventListener("click", async function() {
-  var text = document.getElementById("jxBatchUrls").value.trim();
-  if (!text) { toast("请输入链接", 0); return; }
-  var urls = text.split("\n").map(function(s){ return s.trim(); }).filter(Boolean);
-  if (urls.length === 0) { toast("请输入链接", 0); return; }
-  this.disabled = true; this.textContent = "解析中... (0/" + urls.length + ")";
-  var results = [], ok = 0, fail = 0;
-  for (var i = 0; i < urls.length; i++) {
-    this.textContent = "解析中... (" + (i + 1) + "/" + urls.length + ")";
-    var r = await api("POST", "/admin/api/parse-link", { url: urls[i] });
-    if (r.ok) { ok++; results.push('✅ ' + escStr(urls[i])); }
-    else { fail++; results.push('❌ ' + escStr(urls[i]) + ': ' + escStr(r.error || "失败")); }
-  }
-  this.disabled = false; this.textContent = "批量解析";
-  document.getElementById("jxBatchResult").innerHTML = '<div style="padding:10px;background:#f8fafc;border-radius:8px;border:1px solid var(--border)"><div style="margin-bottom:8px;font-weight:600">完成：' + ok + ' 成功，' + fail + ' 失败</div>' + results.join("<br>") + '</div>';
-  toast("批量解析完成: " + ok + " 成功, " + fail + " 失败", ok > 0);
-});
 
 async function loadR2Files(cursor) {
   r2fBootstrap();
