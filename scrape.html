@@ -114,7 +114,7 @@ a.link { color: #00d4ff; text-decoration: none; }
       <input type="number" id="scIgMb" placeholder="单张上限MB" value="10" min="1" max="30">
       <span class="ign-hint" id="scRulesHint">规则已保存</span>
     </div>
-    <div style="font-size:11px;color:#8a8aa8;margin-top:2px">忽略规则按「规则组」管理，不同网页可以各用各的组合：输入后自动保存到<b>当前生效的组</b>（顶部下拉可看到是哪个组、也能切换编辑别的组）；同一域名再次打开自动沿用，匹配不到时用「默认」规则组。规则对「拾取解析」和「直传」同时生效（命中即不解析/不入库），保存在本机浏览器。</div>
+    <div style="font-size:11px;color:#8a8aa8;margin-top:2px">忽略规则按「规则组」管理，不同网页可以各用各的组合：输入后自动保存到<b>当前生效的组</b>（顶部下拉可看到是哪个组、也能切换编辑别的组）；同一域名再次打开自动沿用，匹配不到时用「默认」规则组。规则对「拾取解析」和「直传」同时生效（命中即不解析/不入库）。规则组<b>存到云端数据库</b>：本页保存自动同步，任何浏览器/设备打开同一 API Key 都会拉到同一套规则组；离线或网络失败时自动回退用本机缓存。</div>
     <div class="ign">
       <span class="ig-label">站点Cookie</span>
       <input type="password" id="scCookie" autocomplete="off" spellcheck="false" placeholder="粘贴该站登录 Cookie（浏览器 F12 → Network 任意请求头里整段复制）">
@@ -350,12 +350,13 @@ function updateSelCount() {
   document.getElementById('scGrabBtn').disabled = n === 0;
 }
 
-// ===== 忽略规则组（按域名自动匹配；解析/直传双生效；保存在本机）=====
+// ===== 忽略规则组（按域名自动匹配；解析/直传双生效；本机缓存 + 云端 D1 同步）=====
 // ruleGroups: [{ key:'*'|'tieba.baidu.com'|'baidu.com', name, kw, ext, mb }]
 // 匹配规则：URL 主机名 === key，或以 '.' + key 结尾（父域覆盖子域）；'*' = 默认组兜底
 var GROUPS_KEY = 'scrapeRuleGroups';
 var ruleGroups = [];
 var rulesHintTimer = null;
+var groupSyncTimer = null;   // 云端上传 debounce
 
 function readRules() {
   return {
@@ -371,8 +372,36 @@ function applyRules(r) {
   if (r.mb > 0) document.getElementById('scIgMb').value = r.mb;
 }
 function groupNameOf(key) { return key === '*' ? '默认（所有页面）' : key; }
+function defaultGroupObj(key) {
+  return { key: key || '*', name: groupNameOf(key || '*'), kw: '', ext: 'svg', mb: 10 };
+}
+// 云端上传（防抖）：把当前全量规则组保存到后端 D1 settings，跨设备共享
+function scheduleGroupCloudSync() {
+  if (!API_KEY) return;
+  clearTimeout(groupSyncTimer);
+  groupSyncTimer = setTimeout(pushGroupsToCloud, 1200);
+}
+function pushGroupsToCloud() {
+  if (!API_KEY || !ruleGroups.length) return;
+  return api('POST', '/admin/api/scrape/rule-groups', { groups: ruleGroups }, 20000)
+    .then(function(d) {
+      if (d && d.ok) groupFlash('已同步到云端');
+      else groupFlash('云端同步失败，已存本机');
+      return d;
+    })
+    .catch(function() { groupFlash('云端同步失败，已存本机'); });
+}
+function groupFlash(msg) {
+  var h = document.getElementById('scRulesHint');
+  if (!h) return;
+  h.textContent = msg;
+  h.style.opacity = '1';
+  clearTimeout(rulesHintTimer);
+  rulesHintTimer = setTimeout(function() { h.style.opacity = '0'; }, 1600);
+}
 function saveGroups() {
   try { localStorage.setItem(GROUPS_KEY, JSON.stringify(ruleGroups)); } catch (e) {}
+  scheduleGroupCloudSync();
 }
 function defaultGroup() {
   for (var i = 0; i < ruleGroups.length; i++) { if (ruleGroups[i].key === '*') return ruleGroups[i]; }
@@ -496,6 +525,37 @@ function createGroup() {
 function initRuleGroups() {
   loadGroups();
   activateGroupForUrl(firstHttpOf(document.getElementById('scUrl').value));
+  pullGroupsFromCloud();
+}
+// 从云端拉取全量规则组并与本地合并：云端同名组优先（跨设备最新），本地独有组保留并立即回推云端。
+function pullGroupsFromCloud() {
+  if (!API_KEY) return;
+  api('GET', '/admin/api/scrape/rule-groups', null, 20000)
+    .then(function(d) {
+      if (!d || !d.ok || !d.data) return;
+      var cloud = Array.isArray(d.data.groups) ? d.data.groups : [];
+      var cloudMap = {};
+      var had = false;
+      cloud.forEach(function(g) { if (g && g.key) { cloudMap[g.key] = g; had = true; } });
+      var keys = {};
+      var merged = [];
+      var addedLocal = false;
+      // 先放云端全量（权威），再补本地云端没有的组（防止本机未及同步的新建组丢失，并立刻回推）
+      cloud.forEach(function(g) { if (g && g.key && !keys[g.key]) { keys[g.key] = 1; merged.push(g); } });
+      ruleGroups.forEach(function(g) {
+        if (g && g.key && !keys[g.key]) { keys[g.key] = 1; merged.push(g); addedLocal = true; }
+      });
+      if (!merged.some(function(g) { return g.key === '*'; })) merged.unshift(defaultGroupObj('*'));
+      ruleGroups = merged;
+      try { localStorage.setItem(GROUPS_KEY, JSON.stringify(ruleGroups)); } catch (e) {}
+      refreshGroupSelect();
+      var url = firstHttpOf(document.getElementById('scUrl').value);
+      if (url) { var g = matchGroupFor(url); refreshGroupSelect(g.key); applyRules(g); }
+      else { var dg = defaultGroup(); refreshGroupSelect(dg.key); applyRules(dg); }
+      // 云端是空的（首次使用）或本机有新组还没上传：把现状推上去
+      if (!had || addedLocal) scheduleGroupCloudSync();
+    })
+    .catch(function() { /* 拉取失败：保留本机缓存使用，saveGroups 仍会尝试推云端 */ });
 }
 // 本地直链过滤（与后端一致的忽略规则：关键词/扩展名）
 function localFilterUrls(list) {

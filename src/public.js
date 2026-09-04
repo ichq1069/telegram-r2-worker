@@ -2229,6 +2229,77 @@ export function extractPageImages(html, baseUrl) {
 const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const TIEBA_WAP_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1';
 
+// 按图片域名推断下载时的 Referer（图床/防盗链站只认自家页面来源，页面抓取的 ref 传给它会被 403）
+// 规则：图片 host 等于 key，或以 '.' + key 结尾。未知域名返回 ''（不强制加 Referer，避免误伤公开图床）
+const IMG_REFERER_HINTS = [
+  { key: 'xiaohongshu.com', ref: 'https://www.xiaohongshu.com/' },
+  { key: 'xhscdn.com', ref: 'https://www.xiaohongshu.com/' },
+  { key: 'tiebapic.baidu.com', ref: 'https://tieba.baidu.com/' },
+  { key: 'baidu.com', ref: 'https://www.baidu.com/' },
+  { key: 'bing.com', ref: 'https://www.bing.com/' },
+  { key: 'zhihu.com', ref: 'https://www.zhihu.com/' },
+  { key: 'pixiv.net', ref: 'https://www.pixiv.net/' },
+  { key: 'weibo.com', ref: 'https://weibo.com/' },
+  { key: 'weibo.cn', ref: 'https://weibo.cn/' },
+  { key: 'douban.com', ref: 'https://www.douban.com/' },
+  { key: 'zhimg.com', ref: 'https://www.zhihu.com/' },
+  { key: 'sinaimg.cn', ref: 'https://weibo.com/' }
+];
+function refererHintForImage(imageUrl) {
+  let h = '';
+  try { h = String(new URL(imageUrl).hostname).toLowerCase(); } catch (e) { return ''; }
+  for (const it of IMG_REFERER_HINTS) {
+    if (h === it.key || h.indexOf('.' + it.key) >= 0) return it.ref;
+  }
+  return '';
+}
+// 下载图片：多级重试规避源站 403/反爬（小红书/微博等常拦 bot UA 或校验 Referer）。
+// 依次尝试：①当前 UA+原 Referer → ②浏览器 UA+图床 Hint Referer → ③纯浏览器 UA → ④TG UA（兜底）。
+// 仅对 !ok 且状态 403/404/4xx 或抛错时进入下一档；返回 { res, tried }（res 为最后一次响应）。
+async function fetchImageWithFallbacks(imageUrl, givenReferer, cookieStr) {
+  const hintRef = refererHintForImage(imageUrl);
+  const givenRef = String(givenReferer || '').trim();
+  const dcookie = String(cookieStr || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
+  const tryList = [];
+  // 1) 带 Cookie 时只有浏览器 UA+Cookie 能过（先试；失败再试不含 Cookie 档）
+  if (dcookie) {
+    tryList.push({ 'User-Agent': BROWSER_UA, 'Referer': hintRef || givenRef || '', 'Cookie': dcookie });
+    tryList.push({ 'User-Agent': BROWSER_UA, 'Cookie': dcookie });
+  }
+  // 2) 调用方给的原 Referer
+  if (givenRef) tryList.push({ 'User-Agent': TG_UA, 'Referer': givenRef });
+  // 3) 图床 Hint Referer
+  if (hintRef && hintRef !== givenRef) tryList.push({ 'User-Agent': BROWSER_UA, 'Referer': hintRef });
+  if (hintRef && hintRef !== givenRef) tryList.push({ 'User-Agent': TG_UA, 'Referer': hintRef });
+  // 4) 浏览器 UA
+  if (givenRef) tryList.push({ 'User-Agent': BROWSER_UA, 'Referer': givenRef });
+  tryList.push({ 'User-Agent': BROWSER_UA });
+  // 5) TG UA 兜底
+  tryList.push({ 'User-Agent': TG_UA });
+  const seen = new Set();
+  const attempts = [];
+  for (const hd of tryList) {
+    const sig = (hd['User-Agent'] || '') + '|' + (hd['Referer'] || '') + '|' + (hd['Cookie'] || '');
+    if (seen.has(sig)) continue;
+    seen.add(sig);
+    attempts.push(hd);
+    if (attempts.length >= 5) break;
+  }
+  let last = null;
+  let lastErr = null;
+  for (const hd of attempts) {
+    try {
+      const resp = await fetch(imageUrl, { headers: hd, redirect: 'follow' });
+      last = resp;
+      if (resp.ok) return { res: resp, tried: attempts };
+      // 403/429/5xx 等继续试下一档；明确成功才返回
+      await resp.arrayBuffer().catch(function() {});
+    } catch (e) { lastErr = e; }
+  }
+  if (!last) throw lastErr || new Error('网络请求失败');
+  return { res: last, tried: attempts };
+}
+
 function tiebaThreadKz(raw) {
   try {
     const u = new URL(raw);
@@ -2399,10 +2470,8 @@ export async function handleAdminScrapeGrab(request, env) {
           if (ext && ignoreExts.indexOf(ext) >= 0) ignoreReason = '已忽略格式 .' + ext;
         }
         if (ignoreReason) { row.ok = false; row.ignored = true; row.error = ignoreReason; ignored++; results.push(row); continue; }
-        const fh = { 'User-Agent': TG_UA };
-        // 带 Referer 下载：部分图床/反盗链站点校验来源页
-        if (referer) fh['Referer'] = referer;
-        const res = await fetch(url, { headers: fh, redirect: 'follow' });
+        const dl = await fetchImageWithFallbacks(url, referer, '');
+        const res = dl.res;
         if (!res.ok) { row.error = '下载失败（HTTP ' + res.status + '）'; results.push(row); continue; }
         const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
         const cl = parseInt(res.headers.get('content-length') || '0', 10);
@@ -2497,13 +2566,12 @@ export async function handleAdminScrapeGrabOne(request, env) {
       let ext = '';
       try { const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); ext = seg.indexOf('.') >= 0 ? seg.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') : ''; } catch (e) {}
       if (ext && ignoreExts.indexOf(ext) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '已忽略格式 .' + ext } });
-      const fh = { 'User-Agent': TG_UA };
-      if (referer) fh['Referer'] = referer;
       const dcookie = String(b.cookie || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
-      if (dcookie) { fh['User-Agent'] = BROWSER_UA; fh['Cookie'] = dcookie; }
       // i.postimg.cc 直链多为压缩展示图：自动解析详情页升级为 ?dl=1 原图（失败则回退原链）
       const fetchUrl = await resolvePostimgOriginal(url);
-      const res = await fetch(fetchUrl, { headers: fh, redirect: 'follow' });
+      // 多级请求头重试：带原 Referer / 图床 Hint / 浏览器 UA 逐档尝试，规避小红书等 403
+      const dl = await fetchImageWithFallbacks(fetchUrl, referer, dcookie);
+      const res = dl.res;
       if (!res.ok) return fail('下载失败（HTTP ' + res.status + '）');
       const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
       const cl = parseInt(res.headers.get('content-length') || '0', 10);
@@ -3265,3 +3333,55 @@ export async function handleUserQuota(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ==================== scrape 忽略规则组云端同步（D1 settings，全局共享） ====================
+// 存储键：scrape_rule_groups = JSON 数组 [{key,name,kw,ext,mb}]。
+// 规则组含「默认（*）」时 key='*'；保存前兜底确保存在。用于让 scrape 页在不同浏览器/设备共享同一套忽略规则。
+const SCRAPE_RULE_GROUPS_KEY = 'scrape_rule_groups';
+function cleanRuleGroupList(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const g of list) {
+    if (!g || typeof g !== 'object') continue;
+    const key = String(g.key || '').trim().slice(0, 200);
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      key: key,
+      name: String(g.name != null && g.name !== '' ? g.name : (key === '*' ? '默认（所有页面）' : key)).trim().slice(0, 200),
+      kw: String(g.kw || '').trim().slice(0, 4000),
+      ext: String(g.ext != null ? g.ext : 'svg').trim().slice(0, 500),
+      mb: clampInt(g.mb, 10, 1, 30)
+    });
+  }
+  return out;
+}
+// GET /admin/api/scrape/rule-groups → { ok, data: { groups, ts } }
+export async function handleAdminScrapeRuleGroupsGet(env) {
+  try {
+    let groups = [];
+    if (env.D1_DB) {
+      try {
+        const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key=?").bind(SCRAPE_RULE_GROUPS_KEY).first();
+        if (r && r.value) { const p = JSON.parse(r.value); if (Array.isArray(p)) groups = p; }
+      } catch (e) {}
+    }
+    return json({ ok: true, data: { groups: cleanRuleGroupList(groups) } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+// POST /admin/api/scrape/rule-groups  Body: { groups:[...] } → 全量覆盖保存
+export async function handleAdminScrapeRuleGroupsSave(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const groups = cleanRuleGroupList(b && b.groups);
+    if (!env.D1_DB) return json({ ok: false, error: 'D1 不可用' }, 500);
+    // 确保至少存在默认组兜底
+    if (!groups.some(function(g) { return g.key === '*'; })) {
+      groups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 });
+    }
+    await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+      .bind(SCRAPE_RULE_GROUPS_KEY, JSON.stringify(groups)).run();
+    return json({ ok: true, data: { groups: groups } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
