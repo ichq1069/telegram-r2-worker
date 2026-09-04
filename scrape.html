@@ -33,6 +33,8 @@ input:focus { border-color: #00d4ff; }
 .ign input[type=text] { flex: 1; min-width: 150px; }
 .ign input[type=number] { flex: 0 0 auto; width: 100px; }
 select { background: #0f1020; color: #e8e8f8; border: 1px solid #3a3c5a; border-radius: 8px; padding: 9px 10px; width: 100%; }
+.ign .ign-sel { flex: 0 0 auto; width: 230px; }
+.ign button { flex: 0 0 auto; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-top: 14px; }
 .cand { position: relative; background: #0f1020; border: 1px solid #3a3c5a; border-radius: 8px; overflow: hidden; }
 .cand .ph { position: relative; display: block; width: 100%; height: 110px; background: #22243c; overflow: hidden; }
@@ -51,12 +53,19 @@ select { background: #0f1020; color: #e8e8f8; border: 1px solid #3a3c5a; border-
 .result-item .u { flex: 1; word-break: break-all; color: #aaa; }
 .sum { margin-top: 10px; font-size: 13px; }
 a.link { color: #00d4ff; text-decoration: none; }
+.ign-hint { font-size: 11px; color: #00ff88; opacity: 0; transition: opacity .6s; white-space: nowrap; }
+.progwrap { margin: 12px 0 4px; }
+.progbar { height: 8px; border-radius: 6px; background: #262a4a; overflow: hidden; }
+.prog { height: 100%; width: 0%; border-radius: 6px; background: linear-gradient(90deg, #0072ff, #00d4ff); transition: width .3s; }
+.proginfo { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; color: #9a9ab5; }
+.proginfo b { color: #fff; }
+.progurl { flex: 1; word-break: break-all; color: #00d4ff; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>🖼 网页图片直传</h1>
-  <div class="sub">输入包含图片的网页链接，自动拾取 <b>&lt;img&gt;</b>、CSS <b>background</b>、懒加载（data-src）等图片；勾选后把原图发送到「上传群」并写入 Tele 库（代理存储，不占 R2）。</div>
+  <div class="sub">输入包含图片的网页链接，自动拾取 <b>&lt;img&gt;</b>、CSS <b>background</b>、懒加载（data-src）等图片；勾选后把原图发送到「上传群」并写入 Tele 库（代理存储，不占 R2）。<b>忽略规则</b>在拾取/直传两阶段同时生效，已入库图片自动跳过，批量过程可随时暂停续传。</div>
 
   <div class="card">
     <div class="input-group">
@@ -64,6 +73,7 @@ a.link { color: #00d4ff; text-decoration: none; }
       <button class="btn primary" id="scAnalyzeBtn">拾取图片</button>
     </div>
     <div class="status" id="scStatus"></div>
+    <div style="font-size:11px;color:#8a8aa8;margin-top:6px">整页解析被目标网站拦截（如贴吧返回安全验证）时，可直接在输入框<b>粘贴多条图片直链</b>（每行一条，如 tiebapic.baidu.com 以 .jpg/.png/.webp 结尾的链接），工具会把它们当作候选图片列出并直传。</div>
   </div>
 
   <div class="card" id="candCard" style="display:none">
@@ -73,23 +83,48 @@ a.link { color: #00d4ff; text-decoration: none; }
       <div class="field"><label>入库级别</label><select id="scLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
     </div>
     <div class="ign">
-      <span class="ig-label">忽略规则</span>
+      <span class="ig-label">规则组</span>
+      <select id="scRuleGroup" class="ign-sel" title="忽略规则按域名分组：拾取某页面时自动套用匹配域名的规则组，匹配不到则用「默认」"></select>
+      <button class="btn ghost" id="scBindGroupBtn" title="把当前规则另存为一套只对该网页域名生效的规则组">绑定本页域名</button>
+      <button class="btn ghost" id="scNewGroupBtn" title="基于当前规则新建一套规则组，可指定匹配的域名（如 baidu.com）">新建规则组…</button>
+    </div>
+    <div class="ign">
+      <span class="ig-label">忽略内容</span>
       <input type="text" id="scIgKw" placeholder="链接含以下内容则忽略（逗号分隔，如 logo,icon,avatar,1px）">
       <input type="text" id="scIgExt" placeholder="忽略格式（如 svg,bmp,ico）" value="svg">
       <input type="number" id="scIgMb" placeholder="单张上限MB" value="10" min="1" max="30">
+      <span class="ign-hint" id="scRulesHint">规则已保存</span>
     </div>
+    <div style="font-size:11px;color:#8a8aa8;margin-top:2px">忽略规则按「规则组」管理，不同网页可以各用各的组合：输入后自动保存到<b>当前生效的组</b>（顶部下拉可看到是哪个组、也能切换编辑别的组）；同一域名再次打开自动沿用，匹配不到时用「默认」规则组。规则对「拾取解析」和「直传」同时生效（命中即不解析/不入库），保存在本机浏览器。</div>
+    <div class="ign">
+      <span class="ig-label">站点Cookie</span>
+      <input type="password" id="scCookie" autocomplete="off" spellcheck="false" placeholder="粘贴该站登录 Cookie（浏览器 F12 → Network 任意请求头里整段复制）">
+      <button class="btn ghost" id="scCkClearBtn" title="清除当前域名保存的 Cookie">清除</button>
+      <span class="ign-hint" id="scCkHint" style="color:#00d4ff"></span>
+    </div>
+    <div style="font-size:11px;color:#8a8aa8;margin-top:2px">页面被拦截（如贴吧返回「百度安全验证」、只回 11KB 空壳）时，填上该站 Cookie 即可绕开：拾取会自动改走贴吧 WAP 服务端渲染页并还原原图直链（tiebapic 原图免 Cookie 可下载），直传时<b>同源/同品牌域名</b>的图片也会带上该 Cookie。按域名分站保存在本机浏览器，仅随本次拾取/直传请求携带，后端不落库。</div>
     <div class="toolbar">
       <span class="count">共 <span id="scCount">0</span> 张 · 已选 <span id="scSelCount">0</span> 张</span>
       <button class="btn ghost" id="scSelAll">全选</button>
       <button class="btn ghost" id="scSelNone">全不选</button>
       <button class="btn ghost" id="scSelSmall" title="只勾选前 20 张">只选前 20 张</button>
       <button class="btn primary" id="scGrabBtn" disabled>直传选中到 Tele 库</button>
+      <button class="btn ghost" id="scResumeBtn" style="display:none" title="继续处理上次未完成的图片">续传剩余 <span id="scResumeN">0</span> 张</button>
+      <button class="btn ghost" id="scAbandonBtn" style="display:none" title="放弃上次未完成的批量任务，重新开始">放弃旧任务</button>
+    </div>
+    <div class="progwrap" id="scProgWrap" style="display:none">
+      <div class="progbar"><div class="prog" id="scProg" style="width:0%"></div></div>
+      <div class="proginfo">
+        <span id="scProgStats"></span>
+        <span class="progurl" id="scProgUrl"></span>
+        <button class="btn ghost" id="scPauseBtn" style="display:none">暂停</button>
+      </div>
     </div>
     <div class="grid" id="scGrid"></div>
     <div class="sum" id="scSum" style="display:none"></div>
     <div class="status" id="scGrabStatus"></div>
     <div id="scResult"></div>
-    <div style="margin-top:12px;font-size:12px;color:#8a8aa8">勾选图片将作为 document 消息发送到「上传群」，按返回 file_id 入库（source=代理），可在 <a class="link" href="/admin#files" target="_blank">admin → Tele 文件</a> 查看。需先在 admin「运维 → 用户上传配置」设置上传群组。</div>
+    <div style="margin-top:12px;font-size:12px;color:#8a8aa8">图片会作为<b>照片</b>（jpg/png/webp &lt;10MB）或<b>文件</b>消息发送到「上传群」，按返回 file_id 入库（source=代理），可在 <a class="link" href="/admin#files" target="_blank">admin → Tele 文件</a> 查看。需先在 admin「运维 → 用户上传配置」设置上传群组。</div>
   </div>
 </div>
 
@@ -120,11 +155,12 @@ function imgErr(img) {
   if (holder) holder.classList.add('ph-fail');
 }
 
-function api(method, path, body, timeoutMs) {
+function api(method, path, body, timeoutMs, signal) {
   var url = OR + path + '?api_key=' + encodeURIComponent(API_KEY);
   var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
-  if (timeoutMs) {
+  if (signal) opts.signal = signal;
+  else if (timeoutMs) {
     var ctl = new AbortController();
     opts.signal = ctl.signal;
     setTimeout(function() { ctl.abort(); }, timeoutMs);
@@ -148,13 +184,43 @@ function setLoading(btn, on, label) {
 }
 
 function analyze() {
-  var url = document.getElementById('scUrl').value.trim();
-  if (!/^https?:\/\//i.test(url)) { setStatus('scStatus', '请输入 http(s) 网页链接', 0); return; }
+  var uVal = document.getElementById('scUrl').value.trim();
+  // 解析前先自动切到与网址域名匹配的规则组，并按域名加载该站 Cookie
+  activateGroupForUrl(firstHttpOf(uVal));
+  syncCookieField();
+  var tokens = uVal.split(/[\r\n,，;；]+/).map(function(s) { return s.trim(); }).filter(Boolean);
+  var httpOnes = tokens.filter(function(t) { return /^https?:\/\//i.test(t); });
+  var imgOnes = httpOnes.filter(function(t) { return /\.(?:jpg|jpeg|png|gif|webp|avif|bmp|ico|svg|tif|tiff)(?:\?|#|$)/i.test(t); });
+  // 批量直链模式：输入里含多个链接时不再请求页面，直接把图片直链作为候选
+  if (httpOnes.length > 1) {
+    var candList = localFilterUrls(imgOnes.length ? imgOnes : httpOnes);
+    cands = candList;
+    document.getElementById('scTitle').value = document.getElementById('scTitle').value.trim();
+    var card = document.getElementById('candCard');
+    card.style.display = '';
+    renderGrid();
+    stopRunning();
+    clearLocalJob();
+    hideProg();
+    document.getElementById('scResult').innerHTML = '';
+    document.getElementById('scSum').style.display = 'none';
+    document.getElementById('scGrabStatus').textContent = '';
+    var msg;
+    if (!cands.length) msg = '未识别出可用图片：请粘贴以 .jpg/.png/.webp/.gif 等图片格式结尾的直链（每行一条）';
+    else msg = '直链识别成功：共 ' + cands.length + ' 张候选（已按忽略规则过滤），勾选后点「直传选中到 Tele 库」';
+    setStatus('scStatus', msg, cands.length ? 1 : 0);
+    return;
+  }
+  var url = uVal;
+  if (!/^https?:\/\//i.test(url)) { setStatus('scStatus', '请输入 http(s) 网页链接；若页面解析不到图，可一次粘贴多条图片直链', 0); return; }
   var btn = document.getElementById('scAnalyzeBtn');
   setLoading(btn, true, '拾取中...');
   setStatus('scStatus', '正在抓取页面并提取图片...', 1);
   document.getElementById('candCard').style.display = 'none';
-  api('POST', '/admin/api/scrape/analyze', { url: url }, 60000)
+  var rules = readRules();
+  var payload = { url: url, ignore_kw: rules.kw, ignore_ext: rules.ext };
+  if (ckVal()) payload.cookie = ckVal();
+  api('POST', '/admin/api/scrape/analyze', payload, 60000)
     .then(function(d) {
       setLoading(btn, false, '拾取图片');
       if (!d.ok) { setStatus('scStatus', d.error || '拾取失败', 0); return; }
@@ -163,12 +229,19 @@ function analyze() {
       var card = document.getElementById('candCard');
       card.style.display = '';
       renderGrid();
-      setStatus('scStatus', '页面解析成功：找到 ' + cands.length + ' 张候选图片，勾选后点「直传选中到 Tele 库」', 1);
+      var rawN = (d.data && d.data.total) || cands.length;
+      var filteredN = (d.data && d.data.filtered) || 0;
+      var msg;
+      if (!cands.length) msg = '页面解析完成：共提取 ' + rawN + ' 张，全部被忽略规则过滤（' + filteredN + ' 张），请调整忽略关键词/格式后重新拾取';
+      else msg = '页面解析成功：找到 ' + cands.length + ' 张候选图片（提取 ' + rawN + ' 张，忽略规则过滤 ' + filteredN + ' 张），勾选后点「直传选中到 Tele 库」';
+      setStatus('scStatus', msg, cands.length ? 1 : 0);
       document.getElementById('scGrabStatus').textContent = '';
       document.getElementById('scResult').innerHTML = '';
       var sumEl = document.getElementById('scSum');
-      if (sumEl) sumEl.style.display = 'none';
-      if (!cands.length) setStatus('scStatus', '页面解析完成，但没有找到可用图片', 0);
+      if (sumEl) { sumEl.style.display = 'none'; sumEl.innerHTML = ''; }
+      stopRunning();
+      hideProg();
+      handleStoredJobAfterAnalyze(url);
     })
     .catch(function(e) { setLoading(btn, false, '拾取图片'); setStatus('scStatus', '请求失败: ' + e.message, 0); });
 }
@@ -205,66 +278,427 @@ function updateSelCount() {
   document.getElementById('scGrabBtn').disabled = n === 0;
 }
 
-function grab() {
+// ===== 忽略规则组（按域名自动匹配；解析/直传双生效；保存在本机）=====
+// ruleGroups: [{ key:'*'|'tieba.baidu.com'|'baidu.com', name, kw, ext, mb }]
+// 匹配规则：URL 主机名 === key，或以 '.' + key 结尾（父域覆盖子域）；'*' = 默认组兜底
+var GROUPS_KEY = 'scrapeRuleGroups';
+var ruleGroups = [];
+var rulesHintTimer = null;
+
+function readRules() {
+  return {
+    kw: document.getElementById('scIgKw').value.trim(),
+    ext: document.getElementById('scIgExt').value.trim(),
+    mb: parseInt(document.getElementById('scIgMb').value, 10) || 30
+  };
+}
+function applyRules(r) {
+  if (!r) return;
+  document.getElementById('scIgKw').value = r.kw || '';
+  if (r.ext != null) document.getElementById('scIgExt').value = r.ext;
+  if (r.mb > 0) document.getElementById('scIgMb').value = r.mb;
+}
+function groupNameOf(key) { return key === '*' ? '默认（所有页面）' : key; }
+function saveGroups() {
+  try { localStorage.setItem(GROUPS_KEY, JSON.stringify(ruleGroups)); } catch (e) {}
+}
+function defaultGroup() {
+  for (var i = 0; i < ruleGroups.length; i++) { if (ruleGroups[i].key === '*') return ruleGroups[i]; }
+  var g = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 };
+  ruleGroups.unshift(g);
+  return g;
+}
+function groupByKey(key) {
+  for (var i = 0; i < ruleGroups.length; i++) { if (ruleGroups[i].key === key) return ruleGroups[i]; }
+  return null;
+}
+function loadGroups() {
+  try {
+    var s = localStorage.getItem(GROUPS_KEY);
+    if (s) { ruleGroups = JSON.parse(s); if (!Array.isArray(ruleGroups)) ruleGroups = []; }
+  } catch (e) { ruleGroups = []; }
+  if (!ruleGroups.length) {
+    // 迁移旧的单条规则到「默认」组
+    var def = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 };
+    try {
+      var o = JSON.parse(localStorage.getItem('scrapeRules') || 'null');
+      if (o) { def.kw = o.kw || ''; if (o.ext != null) def.ext = o.ext; if (o.mb > 0) def.mb = o.mb; }
+    } catch (e) {}
+    ruleGroups.push(def);
+  }
+  if (!groupByKey('*')) ruleGroups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 });
+}
+function firstHttpOf(str) {
+  var parts = String(str || '').split(/[\r\n,，;；]+/);
+  for (var i = 0; i < parts.length; i++) {
+    var t = parts[i].trim();
+    if (/^https?:\/\//i.test(t)) return t;
+  }
+  return '';
+}
+function hostOf(url) {
+  try { return (new URL(url)).hostname.toLowerCase(); } catch (e) { return ''; }
+}
+// 找匹配当前 URL 的组：最长匹配优先（精确/父域），否则默认组
+function matchGroupFor(url) {
+  var h = hostOf(url);
+  var best = null;
+  for (var i = 0; i < ruleGroups.length; i++) {
+    var g = ruleGroups[i];
+    if (g.key === '*') continue;
+    var k = String(g.key).toLowerCase();
+    if (!h || !(h === k || h.indexOf('.' + k) >= 0)) continue;
+    if (!best || k.length > String(best.key).length) best = g;
+  }
+  return best || defaultGroup();
+}
+function refreshGroupSelect(autoKey) {
+  var sel = document.getElementById('scRuleGroup');
+  var cur = sel.value;
+  var opts = '';
+  ruleGroups.forEach(function(g) {
+    opts += '<option value="' + escStr(g.key) + '">' + escStr(g.name || groupNameOf(g.key)) + '</option>';
+  });
+  sel.innerHTML = opts;
+  var want = autoKey || cur || '*';
+  var found = false;
+  for (var i = 0; i < sel.options.length; i++) {
+    if (sel.options[i].value === want) { sel.selectedIndex = i; found = true; break; }
+  }
+  if (!found) { for (var j = 0; j < sel.options.length; j++) { if (sel.options[j].value === '*') { sel.selectedIndex = j; break; } } }
+}
+// 页面解析时自动切换到匹配当前网址的规则组（手动选择编辑别的组时会被重新吸附到匹配组）
+function activateGroupForUrl(url) {
+  var g = matchGroupFor(url);
+  refreshGroupSelect(g.key);
+  applyRules(g);
+  return g;
+}
+function selectedGroup() {
+  var sel = document.getElementById('scRuleGroup');
+  var key = sel ? (sel.value || '*') : '*';
+  return groupByKey(key) || defaultGroup();
+}
+// 保存当前输入到「选中的组」，并提示归属
+function flashRulesHint() {
+  var g = selectedGroup();
+  g.kw = document.getElementById('scIgKw').value.trim();
+  g.ext = document.getElementById('scIgExt').value.trim();
+  g.mb = parseInt(document.getElementById('scIgMb').value, 10) || 30;
+  saveGroups();
+  var h = document.getElementById('scRulesHint');
+  if (!h) return;
+  h.textContent = '已保存到规则组「' + (g.name || groupNameOf(g.key)) + '」';
+  h.style.opacity = '1';
+  clearTimeout(rulesHintTimer);
+  rulesHintTimer = setTimeout(function() { h.style.opacity = '0'; }, 1600);
+}
+// 把当前规则复制到「匹配当前网页域名」的组（已存在则更新）
+function bindCurrentDomain() {
+  var url = firstHttpOf(document.getElementById('scUrl').value) || (cands && cands[0]) || '';
+  var h = hostOf(url);
+  if (!h) { alert('请先在输入框填入网页或图片链接，才能确定要绑定的域名'); return; }
+  var src = selectedGroup();
+  var g = groupByKey(h);
+  if (!g) { g = { key: h, name: h, kw: '', ext: 'svg', mb: 10 }; ruleGroups.push(g); }
+  g.kw = src.kw; g.ext = src.ext; g.mb = src.mb;
+  saveGroups();
+  refreshGroupSelect(h);
+  applyRules(g);
+  flashRulesHint();
+}
+// 基于当前规则新建一组，可自定义匹配域名（父域可覆盖多个子站）
+function createGroup() {
+  var input = prompt('输入该规则组匹配的域名（可留空 = 默认所有页面；如 baidu.com 同时覆盖 tieba.baidu.com、tiebac.baidu.com 等）。\n若只需绑定当前网页域名，直接点「绑定本页域名」即可。', hostOf(firstHttpOf(document.getElementById('scUrl').value) || ''));
+  if (input === null) return;
+  var key = String(input || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./, '').split('/')[0].split(/[:?#]/)[0].toLowerCase() || '*';
+  var src = selectedGroup();
+  var g = groupByKey(key);
+  if (!g) { g = { key: key, name: key === '*' ? '默认（所有页面）' : key, kw: '', ext: 'svg', mb: 10 }; ruleGroups.push(g); }
+  g.kw = src.kw; g.ext = src.ext; g.mb = src.mb;
+  saveGroups();
+  refreshGroupSelect(key);
+  applyRules(g);
+  flashRulesHint();
+}
+function initRuleGroups() {
+  loadGroups();
+  activateGroupForUrl(firstHttpOf(document.getElementById('scUrl').value));
+}
+// 本地直链过滤（与后端一致的忽略规则：关键词/扩展名）
+function localFilterUrls(list) {
+  var r = readRules();
+  var kws = r.kw.split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
+  var exts = r.ext.split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
+  var seen = {};
+  var out = [];
+  list.forEach(function(u) {
+    if (seen[u]) return;
+    seen[u] = 1;
+    var low = String(u).toLowerCase();
+    for (var i = 0; i < kws.length; i++) { if (low.indexOf(kws[i]) >= 0) return; }
+    var m = low.match(/\.([a-z0-9]{1,8})(?:\?.*)?$/);
+    var e = m ? m[1] : '';
+    if (e && exts.indexOf(e) >= 0) return;
+    out.push(u);
+  });
+  return out;
+}
+
+// ===== 站点 Cookie（仅用于绕开反爬拦截；按域名分站存本机，随请求携带不落库）=====
+var SITE_CK_KEY = 'siteCookies';       // { 'tieba.baidu.com': 'BDUSS=...; ...' }
+function ckStore() {
+  try { var s = JSON.parse(localStorage.getItem(SITE_CK_KEY) || '{}'); return s && typeof s === 'object' ? s : {}; } catch (e) { return {}; }
+}
+function ckHost() { return hostOf(firstHttpOf(document.getElementById('scUrl').value)); }
+function ckVal() { var el = document.getElementById('scCookie'); return el ? el.value.trim() : ''; }
+function ckHint(host, extra) {
+  var h = document.getElementById('scCkHint');
+  if (!h) return;
+  h.textContent = extra ? extra + ' · ' + host : (host ? '将用于 ' + host : '输入后自动按当前域名保存');
+}
+function saveCk(host, v) {
+  if (!host) return;
+  var s = ckStore();
+  if (!v) delete s[host];
+  else s[host] = v;
+  try { localStorage.setItem(SITE_CK_KEY, JSON.stringify(s)); } catch (e) {}
+}
+// 把输入框内容对应当前域名加载/清除占位提示（拾取解析与页面初始化时调用）
+function syncCookieField() {
+  var host = ckHost();
+  var el = document.getElementById('scCookie');
+  if (!el) return;
+  var s = ckStore();
+  el.value = (host && s[host]) ? s[host] : '';
+  el.placeholder = host ? ('粘贴 ' + host + ' 的登录 Cookie（如贴吧被安全验证拦截时）') : '粘贴该站登录 Cookie（浏览器 F12 → Network 任意请求头里整段复制）';
+  ckHint(host, (host && s[host]) ? '已保存' : '');
+}
+// 图片直传时是否给该图源带 Cookie：同域/互为子域/同顶级品牌域（末两段相同，如 tiebapic vs tieba.baidu.com）
+function cookieForGrab(imgUrl, pageUrl, cookie) {
+  if (!cookie) return '';
+  var a = hostOf(pageUrl), b = hostOf(imgUrl);
+  if (!a || !b) return '';
+  if (a === b || a.indexOf('.' + b) >= 0 || b.indexOf('.' + a) >= 0) return cookie;
+  var la = a.split('.'), lb = b.split('.');
+  if (la.length >= 2 && lb.length >= 2 && la[la.length - 2] === lb[lb.length - 2] && la[la.length - 1] === lb[lb.length - 1]) return cookie;
+  return '';
+}
+
+// ===== 批量直传任务（单张请求 + 进度条 + 暂停/续传，状态保留在本机可断点重来）=====
+var JOB_KEY = 'scrapeJob';
+var job = null;                       // { pageUrl,title,tags,level,kw,ext,mb, items:[{u,st,reason,id}] }
+var run = { running: false, paused: false, ctl: null };
+function pendCount() { return job ? job.items.filter(function(i) { return i.st === 'pend'; }).length : 0; }
+
+function persistJob() {
+  try {
+    if (job) localStorage.setItem(JOB_KEY, JSON.stringify(job));
+    else localStorage.removeItem(JOB_KEY);
+  } catch (e) {}
+}
+function clearLocalJob() { job = null; persistJob(); }
+function hideProg() {
+  document.getElementById('scProgWrap').style.display = 'none';
+  document.getElementById('scPauseBtn').style.display = 'none';
+  document.getElementById('scPauseBtn').textContent = '暂停';
+  updateResumeBtn();
+}
+function updateResumeBtn() {
+  var pendN = pendCount();
+  var rb = document.getElementById('scResumeBtn');
+  var showResume = !run.running && !run.paused && pendN > 0;
+  rb.style.display = showResume ? '' : 'none';
+  document.getElementById('scResumeN').textContent = pendN;
+  var ab = document.getElementById('scAbandonBtn');
+  ab.style.display = (!run.running && pendN > 0) ? '' : 'none';
+}
+function rowClsOf(it) {
+  if (it.busy) return { ico: '<span class="loading"></span>', cls: '', why: '下载发送中…' };
+  if (it.st === 'ok') return { ico: '✓', cls: 'ok', why: it.reason || '#' + (it.id || '') };
+  if (it.st === 'exists') return { ico: '↺', cls: 'skip', why: it.reason || '已存在' };
+  if (it.st === 'ignored') return { ico: '–', cls: 'skip', why: it.reason || '忽略' };
+  if (it.st === 'failed') return { ico: '✗', cls: 'fail', why: it.reason || '失败' };
+  return { ico: '…', cls: '', why: '等待中' };
+}
+function renderResultRows() {
+  if (!job) return;
+  var rows = job.items.map(function(it, i) {
+    var r = rowClsOf(it);
+    var extra = it.st === 'failed' ? ' title="双击重试该张"' : '';
+    return '<div class="result-item" data-i="' + i + '"' + extra + '>' +
+      '<span class="rk">' + (i + 1) + '</span>' +
+      '<span class="' + r.cls + '">' + r.ico + '</span>' +
+      '<span class="u">' + escStr(it.u) + '</span>' +
+      '<span class="' + r.cls + '" style="white-space:nowrap">' + escStr(r.why) + '</span></div>';
+  }).join('');
+  document.getElementById('scResult').innerHTML = rows;
+}
+function batchSummaryHtml() {
+  var c = { ok: 0, exists: 0, ignored: 0, failed: 0 };
+  job.items.forEach(function(i) { if (c[i.st] != null) c[i.st]++; });
+  var parts = ['<b>' + c.ok + '</b> 成功'];
+  if (c.exists) parts.push('<span class="skip">' + c.exists + '</span> 已存在');
+  if (c.ignored) parts.push('<span class="skip">' + c.ignored + '</span> 忽略');
+  if (c.failed) parts.push('<span class="fail">' + c.failed + '</span> 失败');
+  parts.push('<a class="link" href="/admin#files" target="_blank">去 admin 查看 →</a>');
+  return '本轮：' + parts.join(' · ');
+}
+function updateProg() {
+  if (!job) { hideProg(); return; }
+  var total = job.items.length;
+  var pend = pendCount();
+  var done = total - pend;
+  var pct = total ? Math.round(done / total * 100) : 100;
+  var st = document.getElementById('scProgStats');
+  var urlEl = document.getElementById('scProgUrl');
+  var stats = [];
+  var c = { ok: 0, exists: 0, ignored: 0, failed: 0 };
+  job.items.forEach(function(i) { if (c[i.st] != null && i.st !== 'pend') c[i.st]++; });
+  if (c.ok) stats.push('<b>' + c.ok + '</b>成功');
+  if (c.exists) stats.push('<span style="color:#eab308">' + c.exists + '</span>已存在');
+  if (c.ignored) stats.push('<span style="color:#eab308">' + c.ignored + '</span>忽略');
+  if (c.failed) stats.push('<span style="color:#ff6666">' + c.failed + '</span>失败');
+  st.innerHTML = '处理 <b>' + done + '/' + total + '</b> · ' + (stats.join(' ') || '待开始');
+  urlEl.textContent = '';
+  if (run.running) {
+    var cur = job.items.filter(function(i) { return i.busy; })[0];
+    if (cur) urlEl.textContent = cur.u;
+  } else if (run.paused) {
+    urlEl.textContent = '已暂停 · 可点「续传剩余 ' + pend + ' 张」继续';
+  } else if (pend > 0) {
+    urlEl.textContent = '已中断 · 剩余 ' + pend + ' 张可随时续传';
+  }
+  var wrap = document.getElementById('scProgWrap');
+  if (run.running || run.paused || pend > 0) wrap.style.display = '';
+  else wrap.style.display = 'none';
+  document.getElementById('scProg').style.width = pct + '%';
+  var pb = document.getElementById('scPauseBtn');
+  pb.style.display = (run.running || run.paused) ? '' : 'none';
+  pb.textContent = run.paused ? '继续' : '暂停';
+  var sumEl = document.getElementById('scSum');
+  var isFinal = !run.running && !run.paused && job.items.length && pend === 0;
+  if (isFinal) {
+    sumEl.style.display = 'block';
+    sumEl.innerHTML = batchSummaryHtml();
+    var sts = document.getElementById('scGrabStatus');
+    if (sts) { sts.className = 'status ' + (c.failed ? 'err' : 'ok'); sts.textContent = '直传结束：成功 ' + c.ok + ' 张' + (c.failed ? '，失败 ' + c.failed + ' 张' : '') + '。图片已作为照片/文档发送到上传群并写入 Tele 库。'; }
+  } else if (!run.running && !run.paused) {
+    sumEl.style.display = 'none';
+  }
+  updateResumeBtn();
+}
+function stopRunning() {
+  if (run.ctl) { try { run.ctl.abort(); } catch (e) {} run.ctl = null; }
+  run.running = false;
+  run.paused = false;
+}
+function setBusyUI(on) {
+  var list = ['scGrabBtn', 'scAnalyzeBtn', 'scSelAll', 'scSelNone', 'scSelSmall'];
+  list.forEach(function(id) { var el = document.getElementById(id); if (el) el.disabled = on; });
+  document.getElementById('scGrabBtn').disabled = on || selectedUrls().length === 0;
+}
+async function processOne(it) {
+  it.busy = true;
+  renderResultRows();
+  updateProg();
+  var ctl = new AbortController();
+  run.ctl = ctl;
+  var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 240000);
+  var body = { url: it.u, title: job.title, tags: job.tags, level: job.level, ref: job.pageUrl, ignore_kw: job.kw, ignore_ext: job.ext, max_mb: job.mb };
+  var gc = cookieForGrab(it.u, job.pageUrl, ckVal());
+  if (gc) body.cookie = gc;
+  try {
+    var d = await api('POST', '/admin/api/scrape/grab_one', body, 0, ctl.signal);
+    if (!d.ok || !d.data) { it.st = 'failed'; it.reason = (d && d.error) || '服务端异常'; }
+    else {
+      it.st = d.data.status || 'failed';
+      it.reason = d.data.reason || '';
+      it.id = d.data.id;
+      if (it.st === 'failed' && !it.reason) it.reason = '未知错误';
+    }
+  } catch (e) {
+    it.st = run.paused ? 'pend' : 'pend';
+    it.reason = '已中断，可续传';
+  } finally {
+    clearTimeout(timer);
+    if (run.ctl === ctl) run.ctl = null;
+    it.busy = false;
+  }
+  renderResultRows();
+  persistJob();
+  updateProg();
+}
+async function runLoop() {
+  run.running = true;
+  run.paused = false;
+  setBusyUI(true);
+  updateProg();
+  while (run.running && !run.paused) {
+    var idx = -1;
+    for (var i = 0; i < job.items.length; i++) { if (job.items[i].st === 'pend') { idx = i; break; } }
+    if (idx < 0) break;
+    await processOne(job.items[idx]);
+  }
+  run.running = false;
+  if (pendCount() > 0) run.paused = true;
+  else run.paused = false;
+  setBusyUI(false);
+  updateProg();
+  updateResumeBtn();
+  renderResultRows();
+}
+function beginBatch() {
+  if (run.running) { setStatus('scGrabStatus', '上一轮还在处理中，可先点「暂停」再操作', 0); return; }
+  if (run.paused || pendCount() > 0) { setStatus('scGrabStatus', '存在未完成的直传任务（剩余 ' + pendCount() + ' 张），请先点「续传剩余 ' + pendCount() + ' 张」处理完；如需全部重来请重新「拾取图片」', 0); return; }
   var urls = selectedUrls();
-  var st = document.getElementById('scGrabStatus');
-  var sum = document.getElementById('scSum');
   if (!urls.length) {
-    st.className = 'status err';
-    st.textContent = '未勾选任何图片：请先在全选/候选图上打勾';
-    if (sum) sum.style.display = 'none';
+    setStatus('scGrabStatus', '未勾选任何图片：请先在全选/候选图上打勾', 0);
     return;
   }
-  var btn = document.getElementById('scGrabBtn');
-  setLoading(btn, true, '直传中...');
-  var title = document.getElementById('scTitle').value.trim();
-  var tags = document.getElementById('scTags').value.trim();
-  var level = document.getElementById('scLevel').value;
-  var pageUrl = document.getElementById('scUrl').value.trim();
-  var ignoreKw = document.getElementById('scIgKw').value.trim();
-  var ignoreExt = document.getElementById('scIgExt').value.trim();
-  var maxMb = parseInt(document.getElementById('scIgMb').value, 10);
-  if (!(maxMb > 0)) maxMb = 30;
-  st.className = 'status';
-  st.innerHTML = '<span class="loading"></span>正在逐张下载并发送到群（' + urls.length + ' 张，可能需要一会儿）...';
+  job = {
+    pageUrl: document.getElementById('scUrl').value.trim(),
+    title: document.getElementById('scTitle').value.trim(),
+    tags: document.getElementById('scTags').value.trim(),
+    level: document.getElementById('scLevel').value,
+    kw: document.getElementById('scIgKw').value.trim(),
+    ext: document.getElementById('scIgExt').value.trim(),
+    mb: parseInt(document.getElementById('scIgMb').value, 10) || 30,
+    items: urls.map(function(u) { return { u: u, st: 'pend', reason: '', id: null }; })
+  };
+  persistJob();
+  document.getElementById('scSum').style.display = 'none';
   document.getElementById('scResult').innerHTML = '';
-  if (sum) sum.style.display = 'none';
-  // 长任务：总超时放宽到 10 分钟
-  api('POST', '/admin/api/scrape/grab', { urls: urls, title: title, tags: tags, level: level, ref: pageUrl, ignore_kw: ignoreKw, ignore_ext: ignoreExt, max_mb: maxMb }, 600000)
-    .then(function(d) {
-      setLoading(btn, false, '直传选中到 Tele 库');
-      if (!d.ok) { st.className = 'status err'; st.textContent = d.error || '直传失败'; return; }
-      var added = d.data.added || 0;
-      var failed = d.data.failed || 0;
-      var ignoredN = d.data.ignored || 0;
-      st.className = 'status ' + (added > 0 ? 'ok' : 'err');
-      var msg = '直传完成：成功 ' + added + ' 张';
-      if (ignoredN) msg += '，忽略 ' + ignoredN + ' 张';
-      if (failed) msg += '，失败 ' + failed + ' 张';
-      if (!added && !ignoredN && !failed) msg = '直传完成：没有需要处理的图片';
-      st.textContent = msg;
-      if (sum) {
-        sum.innerHTML = '<b>' + added + '</b> 成功 · <span class="skip">' + ignoredN + '</span> 忽略 · <span class="fail">' + failed + '</span> 失败（共勾选 ' + urls.length + ' 张）';
-        sum.style.display = 'block';
-      }
-      var rows = (d.data && d.data.results) || [];
-      var h = rows.map(function(r, i) {
-        var ico, cls, why;
-        if (r.ignored) { ico = '–'; cls = 'skip'; why = r.error || '忽略'; }
-        else if (r.ok) { ico = '✓'; cls = 'ok'; why = '#' + (r.id || ''); }
-        else { ico = '✗'; cls = 'fail'; why = r.error || '失败'; }
-        return '<div class="result-item"><span class="rk">' + (i + 1) + '</span>' +
-          '<span class="' + cls + '">' + ico + '</span>' +
-          '<span class="u">' + escStr(r.url) + '</span>' +
-          '<span class="' + cls + '" style="white-space:nowrap">' + escStr(why) + '</span></div>';
-      }).join('');
-      document.getElementById('scResult').innerHTML = h;
-      if (added) {
-        document.getElementById('scResult').innerHTML += '<div class="sum">入库 ' + added + ' 张到 Tele 库（代理直传）。<a class="link" href="/admin#files" target="_blank">去 admin 查看 →</a></div>';
-      }
-      st.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    })
-    .catch(function(e) { setLoading(btn, false, '直传选中到 Tele 库'); st.className = 'status err'; st.textContent = '请求失败或超时: ' + (e && e.message ? e.message : e); });
+  updateProg();
+  runLoop();
+}
+function resumeJob() {
+  if (!job) return;
+  if (run.running || run.paused) { run.paused = false; if (!run.running) runLoop(); return; }
+  var page = document.getElementById('scUrl').value.trim();
+  if (job.pageUrl && page && job.pageUrl !== page) {
+    setStatus('scGrabStatus', '当前链接与上次任务不一致，请先重新「拾取图片」', 0);
+    return;
+  }
+  if (pendCount() === 0) { updateResumeBtn(); return; }
+  document.getElementById('candCard').style.display = '';
+  updateProg();
+  renderResultRows();
+  runLoop();
+}
+function handleStoredJobAfterAnalyze(pageUrl) {
+  var saved = null;
+  try { saved = JSON.parse(localStorage.getItem(JOB_KEY) || 'null'); } catch (e) {}
+  if (saved && Array.isArray(saved.items) && saved.pageUrl === pageUrl && saved.items.some(function(i) { return i.st === 'pend'; })) {
+    job = saved;
+    if (pendCount() > 0) {
+      setStatus('scStatus', '检测到上次未完成的直传任务（剩余 ' + pendCount() + ' 张），可直接点「续传剩余 ' + pendCount() + ' 张」继续，已入库图片会自动跳过不重复发送', 1);
+      renderResultRows();
+      updateProg();
+    }
+  } else {
+    clearLocalJob();
+  }
 }
 
 document.getElementById('scAnalyzeBtn').addEventListener('click', analyze);
@@ -294,7 +728,55 @@ document.getElementById('scSelSmall').addEventListener('click', function() {
   }
   updateSelCount();
 });
-document.getElementById('scGrabBtn').addEventListener('click', grab);
+document.getElementById('scGrabBtn').addEventListener('click', beginBatch);
+document.getElementById('scPauseBtn').addEventListener('click', function() {
+  if (run.running && !run.paused) { run.paused = true; if (run.ctl) { try { run.ctl.abort(); } catch (e) {} } updateProg(); }
+  else if (run.paused) { resumeJob(); }
+});
+document.getElementById('scResumeBtn').addEventListener('click', resumeJob);
+document.getElementById('scAbandonBtn').addEventListener('click', function() {
+  if (run.ctl) { try { run.ctl.abort(); } catch (e) {} run.ctl = null; }
+  run.running = false;
+  run.paused = false;
+  clearLocalJob();
+  hideProg();
+  document.getElementById('scResult').innerHTML = '';
+  document.getElementById('scSum').style.display = 'none';
+  setStatus('scGrabStatus', '已放弃旧任务，可重新勾选图片后直传', 1);
+});
+document.getElementById('scResult').addEventListener('dblclick', function(e) {
+  if (run.running || run.paused || !job) return;
+  var row = e.target.closest('.result-item');
+  if (!row) return;
+  var it = job.items[Number(row.getAttribute('data-i'))];
+  if (!it || it.st !== 'failed') return;
+  it.st = 'pend';
+  it.reason = '';
+  persistJob();
+  renderResultRows();
+  updateProg();
+});
+document.getElementById('scIgKw').addEventListener('input', flashRulesHint);
+document.getElementById('scIgExt').addEventListener('input', flashRulesHint);
+document.getElementById('scIgMb').addEventListener('input', flashRulesHint);
+document.getElementById('scRuleGroup').addEventListener('change', function() {
+  applyRules(selectedGroup());
+});
+document.getElementById('scBindGroupBtn').addEventListener('click', bindCurrentDomain);
+document.getElementById('scNewGroupBtn').addEventListener('click', createGroup);
+document.getElementById('scCookie').addEventListener('change', function() {
+  var host = ckHost();
+  saveCk(host, ckVal());
+  ckHint(host, ckVal() ? '已保存' : '');
+});
+document.getElementById('scCkClearBtn').addEventListener('click', function() {
+  var host = ckHost();
+  saveCk(host, '');
+  document.getElementById('scCookie').value = '';
+  ckHint(host, '');
+});
+initRuleGroups();
+syncCookieField();
 </script>
 </body>
 </html>

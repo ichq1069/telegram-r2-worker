@@ -2046,17 +2046,23 @@ async function getUploadGroupId(env) {
   } catch (e) { return ''; }
 }
 
-// 把字节作为 document 发送到 upload_group_id 群（官方 Bot API，保证 file_id 全局可用）
-async function tgSendDocumentToGroup(env, groupId, bytes, name, ct, caption) {
+// 把字节作为 photo（小图，群里直接显示图片）或 document（大图/其他格式）发送到 upload_group_id 群
+// （官方 Bot API，保证 file_id 全局可用）。photo 仅支持 Telegram 压缩前 <=10MB 的图片。
+async function tgSendMediaToGroup(env, groupId, bytes, name, ct, caption, asPhoto) {
+  const endpoint = asPhoto ? 'sendPhoto' : 'sendDocument';
+  const field = asPhoto ? 'photo' : 'document';
   const fd = new FormData();
   fd.append('chat_id', String(groupId));
-  fd.append('document', new Blob([bytes], { type: ct }), String(name).slice(0, 200));
+  fd.append(field, new Blob([bytes], { type: ct }), String(name).slice(0, 200));
   if (caption) fd.append('caption', String(caption).slice(0, 1024));
-  const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendDocument', { method: 'POST', body: fd });
+  const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/' + endpoint, { method: 'POST', body: fd });
   const j = await resp.json().catch(() => ({ ok: false, description: 'Telegram response not JSON' }));
-  if (!j.ok || !j.result) return { ok: false, error: j.description || 'Telegram sendDocument failed' };
-  const doc = j.result.document;
-  return { ok: true, fileId: doc && doc.file_id ? doc.file_id : '', messageId: j.result.message_id || 0, chatId: j.result.chat && j.result.chat.id ? j.result.chat.id : String(groupId) };
+  if (!j.ok || !j.result) return { ok: false, error: j.description || ('Telegram ' + endpoint + ' failed') };
+  const med = asPhoto ? j.result.photo : j.result.document;
+  let fid = '';
+  if (asPhoto && Array.isArray(med) && med.length) fid = med[med.length - 1].file_id || '';
+  else if (med && med.file_id) fid = med.file_id;
+  return { ok: true, fileId: fid || '', messageId: j.result.message_id || 0, chatId: j.result.chat && j.result.chat.id ? j.result.chat.id : String(groupId) };
 }
 
 // 核心：直传群 + 落库 files（proxy 代理行）。返回 { ok, id, url, fileType, fileId, messageId, error }
@@ -2068,7 +2074,10 @@ async function tgProxySave(env, opts) {
   const o = opts || {};
   const info = tgExtInfo(o.name);
   const caption = (o.caption != null ? o.caption : '') || (o.title || '');
-  const sent = await tgSendDocumentToGroup(env, groupId, o.bytes, o.name, info.ct, caption || undefined);
+  // 常见图片格式且 <10MB → 用 sendPhoto（群里直接显示为照片）；其余走 sendDocument
+  const PHOTO_MAX = 10 * 1024 * 1024;
+  const asPhoto = info.fileType === 'photo' && ['jpg', 'jpeg', 'png', 'webp'].indexOf(info.ext) !== -1 && o.bytes && o.bytes.byteLength <= PHOTO_MAX;
+  const sent = await tgSendMediaToGroup(env, groupId, o.bytes, o.name, info.ct, caption || undefined, asPhoto);
   if (!sent.ok) return { ok: false, error: sent.error };
   if (!sent.fileId) return { ok: false, error: 'Telegram 未返回 file_id' };
   const now = cnNowISO();
@@ -2214,30 +2223,130 @@ export function extractPageImages(html, baseUrl) {
   return out;
 }
 
-// 解析页面并返回候选图片：POST /admin/api/scrape/analyze  Body: { url }
+// 解析页面并返回候选图片：POST /admin/api/scrape/analyze  Body: { url, ignore_kw, ignore_ext }
+// 忽略规则在解析阶段即生效（链接含关键词 / 扩展名命中时剔除，count 返回过滤后的张数）
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const TIEBA_WAP_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1';
+
+function tiebaThreadKz(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.hostname !== 'tieba.baidu.com') return '';
+    const m = u.pathname.match(/^\/p\/(\d+)/);
+    return m ? m[1] : '';
+  } catch (e) { return ''; }
+}
+// 贴吧 WAP 缩略图 URL 里带 src= 参数指向原图（forum/pic/item/hash.jpg），此处还原成可直接下载的原图直链
+function tiebaOriginalUrls(html) {
+  const txt = String(html).replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+  const re = /src=(https?%3A%2F%2F[^&"'\s<>]+)/gi;
+  const seen = new Set();
+  const out = [];
+  let m;
+  while ((m = re.exec(txt))) {
+    let d = '';
+    try { d = decodeURIComponent(m[1]); } catch (e) { continue; }
+    let href = '';
+    try {
+      const u = new URL(/^http:\/\//.test(d) ? 'https://' + d.slice(7) : d);
+      if (!/tiebapic\.baidu\.com$/i.test(u.hostname)) continue;
+      if (!/^\/forum\/pic\/item\//i.test(u.pathname)) continue;
+      href = u.href;
+    } catch (e) { continue; }
+    if (seen.has(href)) continue;
+    seen.add(href);
+    out.push(href.replace(/\/+$/, ''));
+  }
+  return out;
+}
+// 贴吧帖子页/正文对服务端抓取会回 百度安全验证；带上用户登录 Cookie 后改走 WAP 服务端渲染页抽原图
+async function tryTiebaWap(raw, cookie) {
+  const kz = tiebaThreadKz(raw);
+  if (!kz || !cookie) return null;
+  const hdrs = { 'User-Agent': TIEBA_WAP_UA, 'Referer': 'https://tieba.baidu.com/', 'Cookie': cookie };
+  try {
+    const res = await fetch('https://tieba.baidu.com/mo/q/m?kz=' + kz + '&pn=1', { headers: hdrs, redirect: 'follow' });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const urls = tiebaOriginalUrls(html);
+    if (!urls.length) return null;
+    const t = String((html.match(/<title[^>]*>([^<]*)<\/title>/i) || [null, ''])[1]).trim();
+    return { title: (t || '').slice(0, 200), urls: urls };
+  } catch (e) { return null; }
+}
+
 export async function handleAdminScrapeAnalyze(request, env) {
   try {
     const b = await request.json().catch(() => null);
     const raw = b && b.url ? String(b.url).trim() : '';
     if (!raw || !/^https?:\/\//i.test(raw)) return json({ ok: false, error: '请输入 http(s) 链接' }, 400);
+    const cookie = String((b && b.cookie) || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
+    const ignoreKws = String((b && b.ignore_kw) || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
+    const ignoreExts = String((b && b.ignore_ext) || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
     let html = '';
     let directImage = false;
-    try {
-      const res = await fetch(raw, { headers: { 'User-Agent': TG_UA }, redirect: 'follow' });
-      if (!res.ok) return json({ ok: false, error: '页面抓取失败（HTTP ' + res.status + '）' }, 502);
-      const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
-      if (ct.indexOf('image/') === 0) {
-        // 输入本身是一张图片直链：直接作为唯一候选
-        html = '';
-        directImage = true;
-      } else {
-        html = await res.text();
+    let title = '';
+    let rawUrls = null;
+    // 贴吧：带 Cookie 时走 WAP 服务端渲染页抽原图
+    const tiebaWap = await tryTiebaWap(raw, cookie);
+    if (tiebaWap) {
+      title = tiebaWap.title;
+      rawUrls = tiebaWap.urls;
+    } else {
+      try {
+        const fh = { 'User-Agent': cookie ? BROWSER_UA : TG_UA };
+        if (cookie) fh['Cookie'] = cookie;
+        const res = await fetch(raw, { headers: fh, redirect: 'follow' });
+        if (!res.ok) return json({ ok: false, error: '页面抓取失败（HTTP ' + res.status + '）' }, 502);
+        const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+        if (ct.indexOf('image/') === 0) {
+          // 输入本身是一张图片直链：直接作为唯一候选
+          html = '';
+          directImage = true;
+        } else {
+          html = await res.text();
+        }
+      } catch (e) { return json({ ok: false, error: '页面抓取失败：' + e.message }, 502); }
+      title = directImage ? raw : (String((html.match(/<title[^>]*>([^<]*)<\/title>/i) || [null, ''])[1]).trim().slice(0, 200) || raw);
+      rawUrls = directImage ? [raw] : extractPageImages(html, raw);
+    }
+    // 解析阶段过滤：链接携带的内容命中忽略关键词/格式时，直接不再返回该候选
+    const kept = [];
+    let ignoredN = 0;
+    for (const u of rawUrls) {
+      const low = String(u).toLowerCase();
+      let hit = '';
+      for (const kw of ignoreKws) {
+        if (low.indexOf(kw) >= 0) { hit = '关键词「' + kw + '」'; break; }
       }
-    } catch (e) { return json({ ok: false, error: '页面抓取失败：' + e.message }, 502); }
-    const title = directImage ? raw : (String((html.match(/<title[^>]*>([^<]*)<\/title>/i) || [null, ''])[1]).trim().slice(0, 200) || raw);
-    const urls = directImage ? [raw] : extractPageImages(html, raw);
-    return json({ ok: true, data: { url: raw, title: title, count: urls.length, images: urls } });
+      if (!hit) {
+        const mm = String(u).match(/\.([a-zA-Z0-9]{1,8})(?:\?.*)?$/);
+        const ext = mm ? mm[1].toLowerCase() : '';
+        if (ext && ignoreExts.indexOf(ext) !== -1) hit = '格式 .' + ext;
+      }
+      if (hit) ignoredN++;
+      else kept.push(u);
+    }
+    return json({ ok: true, data: { url: raw, title: title, count: kept.length, total: rawUrls.length, filtered: ignoredN, images: kept } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 抓取图片的入库文件名：标题（优先）+ 原文件名主干 + 扩展名，便于在群里/列表按标题辨识
+function scrapeImageName(url, mimeExt, title) {
+  const clean = function(s, max) { return String(s == null ? '' : s).replace(/[\\/:*?"<>|\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max || 60); };
+  let stem = '';
+  let ext = '';
+  try {
+    const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+    const dot = seg.lastIndexOf('.');
+    if (dot > 0) { stem = seg.slice(0, dot); ext = seg.slice(dot + 1).replace(/[^a-zA-Z0-9]/g, '').toLowerCase(); }
+    else if (seg) stem = seg;
+  } catch (e) {}
+  if (!ext) ext = String(mimeExt || '').toLowerCase() || 'jpg';
+  const base = clean(title, 60) || clean(stem, 60) || 'image';
+  const parts = [base];
+  if (stem && stem !== base) parts.push(clean(stem, 36));
+  return parts.join('-').replace(/\s+/g, '-').replace(/-+/g, '-').slice(0, 120) + '.' + ext;
 }
 
 // 抓取勾选的图片并直传群入库 files：POST /admin/api/scrape/grab
@@ -2297,14 +2406,7 @@ export async function handleAdminScrapeGrab(request, env) {
         if (!buf || !buf.byteLength) { row.error = '空响应'; results.push(row); continue; }
         if (buf.byteLength > maxBytes) { row.ok = false; row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; ignored++; results.push(row); continue; }
         const bytes = new Uint8Array(buf);
-        let name = '';
-        try { const pu = new URL(url); name = decodeURIComponent(pu.pathname.split('/').pop() || ''); } catch (e) {}
-        if (!name || name.indexOf('.') < 0) {
-          const extMap = MIME_EXT;
-          const ext = extMap[ct] || 'jpg';
-          name = 'img_' + String(Math.random()).slice(2, 10) + '.' + ext;
-        }
-        name = String(name).replace(/[\\/:*?"<>|]/g, '_');
+        const name = scrapeImageName(url, MIME_EXT[ct] || '', title);
         const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate, pageUrl: referer || '', originalUrl: url });
         if (!res2.ok) { row.error = res2.error; }
         else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; added++; }
@@ -2312,6 +2414,65 @@ export async function handleAdminScrapeGrab(request, env) {
       results.push(row);
     }
     return json({ ok: true, data: { added: added, failed: results.length - added - ignored, ignored: ignored, results: results } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 单张抓取直传：POST /admin/api/scrape/grab_one
+// Body: { url, title, tags, level, is_private, caption, ref, ignore_kw, ignore_ext, max_mb }
+// 逐张请求（前端可做进度/暂停/断点续传）。返回 data.status:
+//   added=成功 / exists=库里已有(original_url 命中，跳过) / ignored=命中忽略规则 / failed=失败(reason)
+export async function handleAdminScrapeGrabOne(request, env) {
+  try {
+    const b = await request.json().catch(() => null);
+    const url = b && b.url ? String(b.url).trim() : '';
+    if (!/^https?:\/\//i.test(url)) return json({ ok: true, data: { url: url, status: 'failed', reason: 'url 必须为 http(s)' } });
+    const groupId = await getUploadGroupId(env);
+    if (!groupId) return json({ ok: true, data: { url: url, status: 'failed', reason: '尚未配置上传群组：请到「运维 → 用户上传配置」设置' } });
+    if (!env.TG_BOT_TOKEN) return json({ ok: true, data: { url: url, status: 'failed', reason: 'TG_BOT_TOKEN 未配置' } });
+    const fail = (reason) => json({ ok: true, data: { url: url, status: 'failed', reason: reason } });
+    const tags = (b.tags || []).map(String).map(function(t) { return t.trim(); }).filter(Boolean).join(',');
+    const title = String(b.title || '').slice(0, 200);
+    const isPrivate = b.is_private ? 1 : 0;
+    const level = isPrivate ? 'vvip' : sanitizeLevel(b.level);
+    const referer = b.ref ? String(b.ref).trim() : '';
+    const caption = b.caption != null ? b.caption : title;
+    const ignoreKws = String(b.ignore_kw || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
+    const ignoreExts = String(b.ignore_ext || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
+    let maxBytes = SCRAPE_MAX_BYTES;
+    if (b.max_mb) { const mb = Number(b.max_mb); if (mb > 0 && mb <= 30) maxBytes = Math.round(mb * 1024 * 1024); }
+    const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/x-icon': 'ico', 'image/tiff': 'tiff' };
+    try {
+      // 已入库去重：同一 original_url 不再重复发送
+      const dup = await env.D1_DB.prepare('SELECT id FROM files WHERE original_url = ? LIMIT 1').bind(url).first();
+      if (dup) return json({ ok: true, data: { url: url, status: 'exists', reason: '已存在（files #' + dup.id + '）', id: dup.id } });
+      const low = url.toLowerCase();
+      for (const kw of ignoreKws) {
+        if (low.indexOf(kw) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '链接含「' + kw + '」' } });
+      }
+      let ext = '';
+      try { const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); ext = seg.indexOf('.') >= 0 ? seg.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') : ''; } catch (e) {}
+      if (ext && ignoreExts.indexOf(ext) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '已忽略格式 .' + ext } });
+      const fh = { 'User-Agent': TG_UA };
+      if (referer) fh['Referer'] = referer;
+      const dcookie = String(b.cookie || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
+      if (dcookie) { fh['User-Agent'] = BROWSER_UA; fh['Cookie'] = dcookie; }
+      const res = await fetch(url, { headers: fh, redirect: 'follow' });
+      if (!res.ok) return fail('下载失败（HTTP ' + res.status + '）');
+      const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+      const cl = parseInt(res.headers.get('content-length') || '0', 10);
+      if (cl > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
+      const ctExt = MIME_EXT[ct] || '';
+      if (!/^image\//.test(ct)) return json({ ok: true, data: { url: url, status: 'ignored', reason: '非图片格式（' + (ct || '未知') + '）' } });
+      if (ignoreExts.indexOf(ctExt) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '已忽略格式 .' + (ctExt || ct) } });
+      const buf = await res.arrayBuffer();
+      if (!buf || !buf.byteLength) return fail('空响应');
+      if (buf.byteLength > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
+      const bytes = new Uint8Array(buf);
+      const name = scrapeImageName(url, ctExt || '', title);
+      const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: level, isPrivate: isPrivate, pageUrl: referer, originalUrl: url });
+      if (!res2.ok) return fail(res2.error);
+      return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id, name: name } });
+    } catch (e) { return fail(e.message); }
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
