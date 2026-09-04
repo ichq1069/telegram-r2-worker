@@ -2159,7 +2159,7 @@ export async function handleAdminPoolUploadTg(request, env) {
 
 // 从页面提取候选图片 URL（保留 HTML 顺序，去重，上限 300）
 export function extractPageImages(html, baseUrl) {
-  const out = [], seen = new Set();
+  const out = [], idxByKey = new Map();
   const add = (raw) => {
     if (!raw) return;
     let v = String(raw).replace(/&amp;/g, '&').replace(/&#0*38;/gi, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&#x2f;/gi, '/').trim();
@@ -2167,8 +2167,12 @@ export function extractPageImages(html, baseUrl) {
     const abs = normUrl(v, baseUrl);
     if (!abs) return;
     const c = canonImgUrl(abs);
-    if (seen.has(c) || out.length >= 300) return;
-    seen.add(c);
+    // 去重键：协议无关（http/https 同图只留一条）+ 主机名忽略大小写；路径/查询保留原文
+    const key = c.replace(/^https?:\/\//i, 'https://').replace(/^(https:\/\/[^/]*)/i, function(s) { return s.toLowerCase(); });
+    const ex = idxByKey.get(key);
+    if (ex !== undefined) { if (/^https:\/\//i.test(c) && /^http:\/\//i.test(out[ex])) out[ex] = c; return; }
+    if (out.length >= 300) return;
+    idxByKey.set(key, out.length);
     out.push(c);
   };
   const pickAttr = (tag, attrs) => {

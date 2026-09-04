@@ -228,7 +228,7 @@ function fragmentImgUrls(txt) {
   return out;
 }
 function enterDirectCandidates(list) {
-  var candList = localFilterUrls(list);
+  var candList = dedupCands(localFilterUrls(list));
   cands = candList;
   document.getElementById('scTitle').value = document.getElementById('scTitle').value.trim();
   document.getElementById('candCard').style.display = '';
@@ -266,21 +266,59 @@ function copyScr() {
 }
 
 function analyze() {
-  var uVal = document.getElementById('scUrl').value.trim();
-  // 解析前先自动切到与网址域名匹配的规则组，并按域名加载该站 Cookie
-  activateGroupForUrl(firstHttpOf(uVal));
-  syncCookieField();
-  var tokens = uVal.split(/[\r\n,，;；]+/).map(function(s) { return s.trim(); }).filter(Boolean);
-  var plainHttp = tokens.filter(function(t) { return /^https?:\/\//i.test(t); });
-  // 直接粘贴从浏览器复制出的 <img data-src="..." src="..."> 片段时，抽取其中图片直链当候选
-  var pulled = /(<img\b|data-src\s*=|src\s*=\s*")/i.test(uVal) ? fragmentImgUrls(uVal) : [];
+  var rawText = document.getElementById('scUrl').value.trim();
+  // 粘贴的是从浏览器复制出的 <img data-src="..." src="..."> 片段：抽取其中图片直链当候选
+  var pulled = /(<img\b|data-src\s*=|src\s*=\s*")/i.test(rawText) ? fragmentImgUrls(rawText) : [];
   if (pulled.length) { enterDirectCandidates(pulled); return; }
-  var httpOnes = plainHttp;
-  var imgOnes = httpOnes.filter(function(t) { return /\.(?:jpg|jpeg|png|gif|webp|avif|bmp|ico|svg|tif|tiff)(?:\?|#|$)/i.test(t); });
-  // 批量直链模式：输入里含多个链接时不再请求页面，直接把图片直链作为候选
-  if (httpOnes.length > 1) { enterDirectCandidates(imgOnes.length ? imgOnes : httpOnes); return; }
-  var url = uVal;
-  if (!/^https?:\/\//i.test(url)) { setStatus('scStatus', '请输入 http(s) 网页链接；若页面解析不到图，可一次粘贴多条图片直链', 0); return; }
+  // 从整段文本抽取所有 http(s) 链接（兼容整段分享文案里夹一条链接、标题/引导语等非链接内容自动忽略）
+  var urlAll = distinctHttp(rawText);
+  var imgOnes = urlAll.filter(isDirectImg);
+  // 多条纯图片直链 → 批量候选（不再请求页面）
+  if (urlAll.length > 1 && imgOnes.length === urlAll.length) { enterDirectCandidates(urlAll); return; }
+  var nonImg = urlAll.filter(function(u) { return !isDirectImg(u); });
+  if (urlAll.length === 1 || nonImg.length === 1) {
+    var target = urlAll.length === 1 ? urlAll[0] : nonImg[0];
+    if (isDirectImg(target)) { enterDirectCandidates([target]); return; }
+    activateGroupForUrl(target);
+    syncCookieField(hostOf(target));
+    runPageAnalyze(target);
+    return;
+  }
+  if (!urlAll.length) { setStatus('scStatus', '未识别到 http(s) 链接：请粘贴网页链接；页面解析不到图时可一次粘贴多条图片直链', 0); return; }
+  setStatus('scStatus', '检测到多个网址（多条图片直链请各占一行；整段分享文案请只保留目标链接）', 0);
+}
+
+function isDirectImg(u) { return /\.(?:jpg|jpeg|png|gif|webp|avif|bmp|ico|svg|tif|tiff)(?:\?|#|$)/i.test(u); }
+
+// 从任意文本中抽出互不相同的 http(s) 链接（剔除尾部中英文句读等非 URL 字符）
+function distinctHttp(str) {
+  var out = [];
+  var re = /\bhttps?:\/\/[^\s\u4e00-\u9fff"'<>()]+/gi;
+  var m;
+  while ((m = re.exec(String(str || '')))) {
+    var t = String(m[0]).trim().replace(/[.,;:!?、。，；：！？…）】\u2026]+$/g, '');
+    if (t && out.indexOf(t) < 0) out.push(t);
+  }
+  return out;
+}
+
+// 候选去重：协议无关（http/https 同图只留一条，保留先出现者；后到的 https 可顶替 http）
+function imgKey(u) { return String(u).replace(/^https?:\/\//i, 'https://').replace(/^(https:\/\/[^/]*)/i, function(s) { return s.toLowerCase(); }); }
+function dedupCands(list) {
+  var idx = {}, out = [];
+  (list || []).forEach(function(u) {
+    var k = imgKey(u);
+    if (idx[k] !== undefined) {
+      if (/^https:\/\//i.test(u) && /^http:\/\//i.test(out[idx[k]])) out[idx[k]] = u;
+      return;
+    }
+    idx[k] = out.length;
+    out.push(u);
+  });
+  return out;
+}
+
+function runPageAnalyze(url) {
   // 贴吧帖子整页解析只能拿到防盗链占位图，引导改用桌面版全图直链粘贴
   if (/^https?:\/\/(?:[a-z0-9-]+\.)*tieba\.baidu\.com\/(?:p|mo\/q\/m)/i.test(url)) {
     setStatus('scStatus', tiebaGuideHtml(url), 1);
@@ -296,7 +334,7 @@ function analyze() {
     .then(function(d) {
       setLoading(btn, false, '拾取图片');
       if (!d.ok) { setStatus('scStatus', d.error || '拾取失败', 0); return; }
-      cands = (d.data && d.data.images) || [];
+      cands = dedupCands((d.data && d.data.images) || []);
       document.getElementById('scTitle').value = decodeEnt(d.data && d.data.title);
       var card = document.getElementById('candCard');
       card.style.display = '';
@@ -597,8 +635,8 @@ function saveCk(host, v) {
   try { localStorage.setItem(SITE_CK_KEY, JSON.stringify(s)); } catch (e) {}
 }
 // 把输入框内容对应当前域名加载/清除占位提示（拾取解析与页面初始化时调用）
-function syncCookieField() {
-  var host = ckHost();
+function syncCookieField(host) {
+  if (!host) host = ckHost();
   var el = document.getElementById('scCookie');
   if (!el) return;
   var s = ckStore();
