@@ -242,7 +242,7 @@ var previewIndex = 0;
 // Auth check
 if (!AK) { AK = new URLSearchParams(location.search).get('api_key') || ''; }
 if (AK) localStorage.setItem('user_api_key', AK);
-if (!AK) { location.href = '/user.html'; }
+if (!AK) { location.href = '/user'; }
 
 // Toast
 function toast(msg, ok) {
@@ -436,27 +436,67 @@ function upUrl(tags) {
   return OR + '/api/v1/user/upload' + (tags ? '?tags=' + encodeURIComponent(tags) : '');
 }
 
-async function uploadAll(tags) {
-  var status = document.getElementById('uploadStatus');
-  var okN = 0;
-  var fails = [];
-  for (var i = 0; i < upQueue.length; i++) {
-    var it = upQueue[i];
-    if (it.status === 'ok' || it.status === 'uploading') continue;
-    status.textContent = '正在上传 ' + (i + 1) + '/' + upQueue.length + '：' + it.name;
-    it.status = 'uploading';
-    renderUpGrid();
+// 并行上传工具：单文件上传（带 90s 超时，单文件失败不影响其它文件），多文件受限并发
+var UPLOAD_CONC = 3;
+var _uploadChain = Promise.resolve();
+
+function uploadOneReq(it, tags) {
+  return new Promise(function(resolve) {
     var fd = new FormData();
     fd.append('files', it.file);
-    try {
-      var r = await fetch(upUrl(tags), { method: 'POST', headers: { 'X-API-Key': AK }, body: fd });
-      var data = await r.json();
-      var res = (data.ok && data.data && data.data.results) || [];
-      if (res[0] && !res[0].error) { it.status = 'ok'; okN++; }
-      else { it.status = 'err'; it.err = (res[0] && res[0].error) || data.error || '未知错误'; fails.push(it.name + ': ' + it.err); }
-    } catch (e) { it.status = 'err'; it.err = e.message; fails.push(it.name + ': ' + e.message); }
-    renderUpGrid();
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var opts = { method: 'POST', headers: { 'X-API-Key': AK }, body: fd };
+    if (ctrl) { opts.signal = ctrl.signal; setTimeout(function() { ctrl.abort(); }, 90000); }
+    fetch(upUrl(tags), opts)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var res = (data.ok && data.data && data.data.results) || [];
+        if (res[0] && !res[0].error) { it.status = 'ok'; it.err = ''; resolve(null); }
+        else { var er = (res[0] && res[0].error) || data.error || '未知错误'; it.status = 'err'; it.err = er; resolve(er); }
+      })
+      .catch(function(e) {
+        var er = (ctrl && e && e.name === 'AbortError') ? '上传超时' : ((e && e.message) || '未知错误');
+        it.status = 'err'; it.err = er; resolve(er);
+      });
+  });
+}
+
+// 串行入口：多次点选/拖拽时排队依次批量并行（避免两批任务重复抢同一文件）
+function uploadAll(tags) {
+  _uploadChain = _uploadChain.then(function() { return doUploadBatch(tags); }).catch(function() {});
+}
+
+async function doUploadBatch(tags) {
+  var status = document.getElementById('uploadStatus');
+  var waitItems = [];
+  for (var i = 0; i < upQueue.length; i++) {
+    var it0 = upQueue[i];
+    if (it0.status !== 'ok' && it0.status !== 'uploading') waitItems.push(it0);
   }
+  var total = waitItems.length;
+  if (!total) { status.textContent = ''; return; }
+  for (var i = 0; i < waitItems.length; i++) waitItems[i].status = 'uploading';
+  renderUpGrid();
+  var okN = 0, fails = [], done = 0, idx = 0, running = 0;
+  status.textContent = '正在并行上传 ' + done + '/' + total + ' ...';
+  await new Promise(function(resolve) {
+    function launch() {
+      while (running < UPLOAD_CONC && idx < waitItems.length) {
+        var it = waitItems[idx++]; running++;
+        (function(item) {
+          uploadOneReq(item, tags).then(function(err) {
+            running--; done++;
+            if (!err) okN++; else fails.push(item.name + ': ' + err);
+            status.textContent = '正在并行上传 ' + done + '/' + total + (fails.length ? '，失败 ' + fails.length : '') + ' ...';
+            renderUpGrid();
+            if (running === 0 && idx >= waitItems.length) resolve(); else launch();
+          });
+        })(it);
+      }
+    }
+    launch();
+  });
+  renderUpGrid();
   status.textContent = '上传完成：' + okN + ' 成功' + (fails.length ? '，' + fails.length + ' 失败（' + fails.join('；') + '）' : '');
   if (okN) {
     loadFiles(1);
@@ -555,7 +595,17 @@ document.addEventListener('DOMContentLoaded', function() {
     '# 随机获取\ncurl -H "X-API-Key: YOUR_KEY" "' + OR + '/api/v1/random?count=1"';
   document.getElementById('apiExamples').textContent = examples;
   
-  // ＋ 上传宫格：初始渲染（选择/拖拽事件在 renderUpGrid 内绑定）
+  // ＋ 上传宫格：input 每次 renderUpGrid 重建，选择/拖拽事件用容器委托绑定（参考 user.html）
+  var upGridEl = document.getElementById('upGrid');
+  if (upGridEl) {
+    upGridEl.addEventListener('change', function(e) {
+      var t = e.target;
+      if (t && t.id === 'fileInput' && t.files && t.files.length) {
+        pickUploads(t.files);
+        t.value = '';
+      }
+    });
+  }
   renderUpGrid();
   
   // Search
@@ -626,13 +676,13 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Back to user page (keep login)
   document.getElementById('backBtn').addEventListener('click', function() {
-    location.href = '/user.html';
+    location.href = '/user';
   });
 
   // Logout
   document.getElementById('logoutBtn').addEventListener('click', function() {
     localStorage.removeItem('user_api_key');
-    location.href = '/user.html';
+    location.href = '/user';
   });
 });
 </script>

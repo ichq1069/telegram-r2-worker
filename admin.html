@@ -1473,6 +1473,59 @@ document.getElementById("loginKey").addEventListener("keydown", function(e) {
 });
 
 // API 调用（带 20s 超时，网络挂起时不永久转圈）
+// 并行上传工具（多文件受限并发，单个文件失败/超时不影响其它，整体不会因一个堵塞而卡死）
+function readFileAsB64(f) {
+  return new Promise(function(resolve, reject) {
+    var rd = new FileReader();
+    rd.onload = function() { resolve(String(rd.result || "").split(",")[1] || ""); };
+    rd.onerror = function() { reject(new Error("读取失败：" + (f && f.name || "文件"))); };
+    rd.readAsDataURL(f);
+  });
+}
+function runParallelUpload(files, opts) {
+  var list = Array.prototype.slice.call(files);
+  var total = list.length;
+  if (!total) return Promise.resolve();
+  var st = opts.status || null, btn = opts.btn || null, oldText = opts.oldText || (btn ? btn.textContent : "");
+  var okCount = 0, failCount = 0, errMsg = "", done = 0, running = 0, idx = 0;
+  var conc = opts.conc || 3;
+  if (btn) { btn.disabled = true; btn.textContent = opts.busyText || "上传中..."; }
+  if (st) st.textContent = "正在上传 0/" + total + "（并行）...";
+  return new Promise(function(resolve) {
+    function launch() {
+      while (running < conc && idx < total) {
+        var cur = idx++, f = list[cur];
+        running++;
+        (function(ff) {
+          var task = Promise.resolve().then(function() {
+            if (opts.maxSize && ff.size > opts.maxSize) { throw new Error("超过大小上限"); }
+            return readFileAsB64(ff).then(function(b64) {
+              return api("POST", opts.path, opts.build ? opts.build(ff, b64) : { name: ff.name || "file.bin", data: b64 }, opts.timeoutMs || 120000);
+            });
+          });
+          task.then(function(r) {
+            if (r && r.ok) okCount++;
+            else { failCount++; if (!errMsg && r && r.error) errMsg = r.error; }
+          }, function(e) { failCount++; if (!errMsg) errMsg = (e && e.message) || "上传失败"; })
+          .then(function() {
+            running--; done++;
+            if (st) st.textContent = "正在上传 " + done + "/" + total + "（并行）..." + (failCount ? " 失败 " + failCount : "");
+            if (running === 0 && idx >= total) resolve(); else launch();
+          });
+        })(f);
+      }
+    }
+    launch();
+  }).then(function() {
+    if (st) st.textContent = "";
+    if (btn) { btn.disabled = false; btn.textContent = oldText; }
+    if (opts.inp) opts.inp.value = "";
+    var label = opts.label || "上传";
+    toast(label + "完成：成功 " + okCount + (failCount ? "，失败 " + failCount + (errMsg ? "（" + errMsg + "）" : "") : ""), failCount ? 0 : 1);
+    if (opts.refresh) opts.refresh();
+  });
+}
+
 function api(method, path, body, timeoutMs) {
   var sep = path.indexOf('?') >= 0 ? '&' : '?';
   var url = OR + path + sep + "api_key=" + encodeURIComponent(AK);
@@ -1716,31 +1769,15 @@ function init() {
     if (!files || !files.length) { toast("请先选择图片", 0); return; }
     var tags = document.getElementById("poolLocalTags").value.trim();
     var btn = poolLocalBtn, old = btn.textContent;
-    var st = document.getElementById("poolLocalStatus");
-    var total = files.length, done = 0, okCount = 0, failCount = 0;
-    btn.disabled = true; btn.textContent = "上传中...";
-    function next() {
-      if (done >= total) {
-        st.textContent = "";
-        btn.disabled = false; btn.textContent = old;
-        inp.value = "";
-        toast("上传完成：成功 " + okCount + " 张" + (failCount ? "，失败 " + failCount + " 张" : ""), failCount ? 0 : 1);
-        loadPool(); loadTagCloud();
-        return;
-      }
-      var f = files[done++];
-      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "图片");
-      if (f.size > 30 * 1024 * 1024) { failCount++; next(); return; }
-      var rd = new FileReader();
-      rd.onload = function() {
-        var b64 = String(rd.result || "").split(",")[1] || "";
-        api("POST", "/admin/api/pool/upload", { name: f.name || "image.jpg", data: b64, tags: tags, title: "", size: f.size, level: document.getElementById("poolAddLevel").value })
-          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("upload fail:", r.error); } next(); });
-      };
-      rd.onerror = function() { failCount++; next(); };
-      rd.readAsDataURL(f);
-    }
-    next();
+    runParallelUpload(files, {
+      btn: btn, oldText: old, busyText: "上传中...", inp: inp, label: "上传",
+      status: document.getElementById("poolLocalStatus"),
+      path: "/admin/api/pool/upload", maxSize: 30 * 1024 * 1024,
+      build: function(f, b64) {
+        return { name: f.name || "image.jpg", data: b64, tags: tags, title: "", size: f.size, level: document.getElementById("poolAddLevel").value };
+      },
+      refresh: function() { loadPool(); loadTagCloud(); }
+    });
   });
   var fileLocalBtn = document.getElementById("fileLocalUploadBtn");
   if (fileLocalBtn) fileLocalBtn.addEventListener("click", function() {
@@ -1749,31 +1786,15 @@ function init() {
     if (!files || !files.length) { toast("请先选择文件", 0); return; }
     var tags = document.getElementById("fileLocalTags").value.trim();
     var btn = fileLocalBtn, old = btn.textContent;
-    var st = document.getElementById("fileLocalStatus");
-    var total = files.length, done = 0, okCount = 0, failCount = 0;
-    btn.disabled = true; btn.textContent = "上传中...";
-    function next() {
-      if (done >= total) {
-        st.textContent = "";
-        btn.disabled = false; btn.textContent = old;
-        inp.value = "";
-        toast("上传完成：成功 " + okCount + " 个文件" + (failCount ? "，失败 " + failCount + " 个" : ""), failCount ? 0 : 1);
-        loadFiles(currentPage); loadTagCloud();
-        return;
-      }
-      var f = files[done++];
-      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "文件");
-      if (f.size > 30 * 1024 * 1024) { failCount++; next(); return; }
-      var rd = new FileReader();
-      rd.onload = function() {
-        var b64 = String(rd.result || "").split(",")[1] || "";
-        api("POST", "/admin/api/files/upload", { name: f.name || "file.bin", data: b64, tags: tags, title: "", size: f.size, level: document.getElementById("fileLocalLevel").value })
-          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("upload fail:", r.error); } next(); });
-      };
-      rd.onerror = function() { failCount++; next(); };
-      rd.readAsDataURL(f);
-    }
-    next();
+    runParallelUpload(files, {
+      btn: btn, oldText: old, busyText: "上传中...", inp: inp, label: "上传",
+      status: document.getElementById("fileLocalStatus"),
+      path: "/admin/api/files/upload", maxSize: 30 * 1024 * 1024,
+      build: function(f, b64) {
+        return { name: f.name || "file.bin", data: b64, tags: tags, title: "", size: f.size, level: document.getElementById("fileLocalLevel").value };
+      },
+      refresh: function() { loadFiles(currentPage); loadTagCloud(); }
+    });
   });
   var fileLinkBtn = document.getElementById("fileLinkImportBtn");
   if (fileLinkBtn) fileLinkBtn.addEventListener("click", function() {
@@ -1824,31 +1845,15 @@ function init() {
     var gallery = document.getElementById("piGallery").value.trim();
     var tags = document.getElementById("poolLocalTags").value.trim();
     var btn = piUploadBtn, old = btn.textContent;
-    var st = document.getElementById("piStatus");
-    var total = files.length, done = 0, okCount = 0, failCount = 0;
-    btn.disabled = true; btn.textContent = "上传中...";
-    function next() {
-      if (done >= total) {
-        st.textContent = "";
-        btn.disabled = false; btn.textContent = old;
-        inp.value = "";
-        toast("Postimages 上传完成：成功 " + okCount + " 张" + (failCount ? "，失败 " + failCount + " 张" : ""), failCount ? 0 : 1);
-        loadPool(); loadTagCloud();
-        return;
-      }
-      var f = files[done++];
-      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "图片");
-      if (f.size > 24 * 1024 * 1024) { failCount++; next(); return; }
-      var rd = new FileReader();
-      rd.onload = function() {
-        var b64 = String(rd.result || "").split(",")[1] || "";
-        api("POST", "/admin/api/pool/upload-postimages", { name: f.name || "image.jpg", data: b64, key: key, gallery: gallery, tags: tags, title: "", size: f.size, level: document.getElementById("poolAddLevel").value })
-          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("pi upload fail:", r.error); } next(); });
-      };
-      rd.onerror = function() { failCount++; next(); };
-      rd.readAsDataURL(f);
-    }
-    next();
+    runParallelUpload(files, {
+      btn: btn, oldText: old, busyText: "上传中...", inp: inp, label: "Postimages 上传",
+      status: document.getElementById("piStatus"),
+      path: "/admin/api/pool/upload-postimages", maxSize: 24 * 1024 * 1024,
+      build: function(f, b64) {
+        return { name: f.name || "image.jpg", data: b64, key: key, gallery: gallery, tags: tags, title: "", size: f.size, level: document.getElementById("poolAddLevel").value };
+      },
+      refresh: function() { loadPool(); loadTagCloud(); }
+    });
   });
   var scSave = document.getElementById("scSaveBtn");
   if (scSave) scSave.addEventListener("click", saveShowConfig);
@@ -1894,31 +1899,15 @@ function init() {
     if (!files || !files.length) { toast("请先选择图片", 0); return; }
     var tags = document.getElementById("privateLocalTags").value.trim();
     var btn = privateLocalBtn, old = btn.textContent;
-    var st = document.getElementById("privateLocalStatus");
-    var total = files.length, done = 0, okCount = 0, failCount = 0;
-    btn.disabled = true; btn.textContent = "上传中...";
-    function next() {
-      if (done >= total) {
-        st.textContent = "";
-        btn.disabled = false; btn.textContent = old;
-        inp.value = "";
-        toast("上传完成：成功 " + okCount + " 张" + (failCount ? "，失败 " + failCount + " 张" : ""), failCount ? 0 : 1);
-        loadPrivatePool(); loadTagCloud();
-        return;
-      }
-      var f = files[done++];
-      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "图片");
-      if (f.size > 30 * 1024 * 1024) { failCount++; next(); return; }
-      var rd = new FileReader();
-      rd.onload = function() {
-        var b64 = String(rd.result || "").split(",")[1] || "";
-        api("POST", "/admin/api/pool/upload", { name: f.name || "image.jpg", data: b64, tags: tags, title: "", size: f.size, is_private: 1 })
-          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("upload fail:", r.error); } next(); });
-      };
-      rd.onerror = function() { failCount++; next(); };
-      rd.readAsDataURL(f);
-    }
-    next();
+    runParallelUpload(files, {
+      btn: btn, oldText: old, busyText: "上传中...", inp: inp, label: "上传",
+      status: document.getElementById("privateLocalStatus"),
+      path: "/admin/api/pool/upload", maxSize: 30 * 1024 * 1024,
+      build: function(f, b64) {
+        return { name: f.name || "image.jpg", data: b64, tags: tags, title: "", size: f.size, is_private: 1 };
+      },
+      refresh: function() { loadPrivatePool(); loadTagCloud(); }
+    });
   });
   var privPiKeyInp = document.getElementById("privPiKey");
   if (privPiKeyInp) { try { privPiKeyInp.value = localStorage.getItem("piKey") || ""; } catch (e) {} }
@@ -1946,69 +1935,35 @@ function init() {
     var gallery = document.getElementById("privPiGallery").value.trim();
     var tags = document.getElementById("privateLocalTags").value.trim();
     var btn = privPiUploadBtn, old = btn.textContent;
-    var st = document.getElementById("privPiStatus");
-    var total = files.length, done = 0, okCount = 0, failCount = 0;
-    btn.disabled = true; btn.textContent = "上传中...";
-    function next() {
-      if (done >= total) {
-        st.textContent = ""; btn.disabled = false; btn.textContent = old; inp.value = "";
-        toast("Postimages 上传完成：成功 " + okCount + " 张" + (failCount ? "，失败 " + failCount + " 张" : ""), failCount ? 0 : 1);
-        loadPrivatePool(); loadTagCloud();
-        return;
-      }
-      var f = files[done++];
-      st.textContent = "正在上传 " + done + "/" + total + "：" + (f.name || "图片");
-      if (f.size > 24 * 1024 * 1024) { failCount++; next(); return; }
-      var rd = new FileReader();
-      rd.onload = function() {
-        var b64 = String(rd.result || "").split(",")[1] || "";
-        api("POST", "/admin/api/pool/upload-postimages", { name: f.name || "image.jpg", data: b64, key: key, gallery: gallery, tags: tags, title: "", size: f.size, is_private: 1 })
-          .then(function(r) { if (r.ok) okCount++; else { failCount++; if (r.error) console.log("pi fail:", r.error); } next(); });
-      };
-      rd.onerror = function() { failCount++; next(); };
-      rd.readAsDataURL(f);
-    }
-    next();
+    runParallelUpload(files, {
+      btn: btn, oldText: old, busyText: "上传中...", inp: inp, label: "Postimages 上传",
+      status: document.getElementById("privPiStatus"),
+      path: "/admin/api/pool/upload-postimages", maxSize: 24 * 1024 * 1024,
+      build: function(f, b64) {
+        return { name: f.name || "image.jpg", data: b64, key: key, gallery: gallery, tags: tags, title: "", size: f.size, is_private: 1 };
+      },
+      refresh: function() { loadPrivatePool(); loadTagCloud(); }
+    });
   });
-  // 通用「直传群」上传器：发送原文件到上传群并入库（代理，不占 R2）
+  // 通用「直传群」上传器：发送原文件到上传群并入库（代理，不占 R2），多文件并行
   function tgUploadMany(cfg) {
     var inp = cfg.inp;
     var files = inp.files;
     if (!files || !files.length) { toast("请先选择文件", 0); return; }
     var btn = cfg.btn, old = btn.textContent;
-    var st = cfg.st;
     var tags = (cfg.tagsEl ? (document.getElementById(cfg.tagsEl) || {}).value : "") || "";
-    var total = files.length, done = 0, okCount = 0, failCount = 0, errMsg = "";
-    btn.disabled = true; btn.textContent = "直传中...";
-    function next() {
-      if (done >= total) {
-        st.textContent = "";
-        btn.disabled = false; btn.textContent = old;
-        inp.value = "";
-        toast("直传完成：成功 " + okCount + " 个" + (failCount ? "，失败 " + failCount + " 个" + (errMsg ? "（" + errMsg + "）" : "") : ""), failCount ? 0 : 1);
-        if (cfg.refresh) cfg.refresh();
-        return;
-      }
-      var f = files[done++];
-      st.textContent = "正在直传 " + done + "/" + total + "：" + (f.name || "文件");
-      if (f.size > 30 * 1024 * 1024) { failCount++; errMsg = errMsg || "存在超过 30MB 的文件"; next(); return; }
-      var rd = new FileReader();
-      rd.onload = function() {
-        var b64 = String(rd.result || "").split(",")[1] || "";
+    runParallelUpload(files, {
+      btn: btn, oldText: old, busyText: "直传中...", inp: inp, label: "直传",
+      status: cfg.st,
+      path: cfg.path, maxSize: 30 * 1024 * 1024,
+      build: function(f, b64) {
         var body = { name: f.name || "file.bin", data: b64, tags: tags, title: "", size: f.size };
         if (cfg.levelEl) body.level = document.getElementById(cfg.levelEl).value;
         if (cfg.is_private) body.is_private = 1;
-        api("POST", cfg.path, body)
-          .then(function(r) {
-            if (r.ok) okCount++;
-            else { failCount++; if (!errMsg && r.error) errMsg = r.error; }
-            next();
-          });
-      };
-      rd.onerror = function() { failCount++; next(); };
-      rd.readAsDataURL(f);
-    }
-    next();
+        return body;
+      },
+      refresh: function() { if (cfg.refresh) cfg.refresh(); }
+    });
   }
   var fileTgBtn = document.getElementById("fileTgUploadBtn");
   if (fileTgBtn) fileTgBtn.addEventListener("click", function() {

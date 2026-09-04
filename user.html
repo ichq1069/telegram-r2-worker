@@ -777,27 +777,67 @@ function upPick(fileList) {
   upUploadAll();
 }
 
-async function upUploadAll() {
-  var status = document.getElementById("uploadStatus");
-  var okN = 0;
-  var fails = [];
-  for (var i = 0; i < upQueue.length; i++) {
-    var it = upQueue[i];
-    if (it.status === "ok" || it.status === "uploading") continue;
-    status.textContent = "正在上传 " + (i + 1) + "/" + upQueue.length + "：" + it.name + " ...";
-    it.status = "uploading";
-    renderUpGrid();
+// 并行上传：单文件上传带 90s 超时，多文件受限并发，单个文件失败不阻塞其它文件
+var UPLOAD_CONC = 3;
+var _uploadChain = Promise.resolve();
+
+function upOneReq(it) {
+  return new Promise(function(resolve) {
     var fd = new FormData();
     fd.append("files", it.file);
-    try {
-      var r = await fetch("/api/v1/user/upload", { method: "POST", headers: { "X-API-Key": AK }, body: fd });
-      var data = await r.json();
-      var res = (data.ok && data.data && data.data.results) || [];
-      if (res[0] && !res[0].error) { it.status = "ok"; okN++; }
-      else { it.status = "err"; it.err = (res[0] && res[0].error) || data.error || "未知错误"; fails.push(it.name + ": " + it.err); }
-    } catch (e) { it.status = "err"; it.err = e.message; fails.push(it.name + ": " + e.message); }
-    renderUpGrid();
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var opts = { method: "POST", headers: { "X-API-Key": AK }, body: fd };
+    if (ctrl) { opts.signal = ctrl.signal; setTimeout(function() { ctrl.abort(); }, 90000); }
+    fetch("/api/v1/user/upload", opts)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        var res = (data.ok && data.data && data.data.results) || [];
+        if (res[0] && !res[0].error) { it.status = "ok"; it.err = ""; resolve(null); }
+        else { var er = (res[0] && res[0].error) || data.error || "未知错误"; it.status = "err"; it.err = er; resolve(er); }
+      })
+      .catch(function(e) {
+        var er = (ctrl && e && e.name === "AbortError") ? "上传超时" : ((e && e.message) || "未知错误");
+        it.status = "err"; it.err = er; resolve(er);
+      });
+  });
+}
+
+// 串行入口：多次选择时排队逐批并行，避免两批任务重复处理同一文件
+function upUploadAll() {
+  _uploadChain = _uploadChain.then(function() { return doUploadBatch(); }).catch(function() {});
+}
+
+async function doUploadBatch() {
+  var status = document.getElementById("uploadStatus");
+  var waitItems = [];
+  for (var i = 0; i < upQueue.length; i++) {
+    var it0 = upQueue[i];
+    if (it0.status !== "ok" && it0.status !== "uploading") waitItems.push(it0);
   }
+  var total = waitItems.length;
+  if (!total) { status.textContent = ""; return; }
+  for (var i = 0; i < waitItems.length; i++) waitItems[i].status = "uploading";
+  renderUpGrid();
+  var okN = 0, fails = [], done = 0, idx = 0, running = 0;
+  status.textContent = "正在并行上传 " + done + "/" + total + " ...";
+  await new Promise(function(resolve) {
+    function launch() {
+      while (running < UPLOAD_CONC && idx < waitItems.length) {
+        var it = waitItems[idx++]; running++;
+        (function(item) {
+          upOneReq(item).then(function(err) {
+            running--; done++;
+            if (!err) okN++; else fails.push(item.name + ": " + err);
+            status.textContent = "正在并行上传 " + done + "/" + total + (fails.length ? "，失败 " + fails.length : "") + " ...";
+            renderUpGrid();
+            if (running === 0 && idx >= waitItems.length) resolve(); else launch();
+          });
+        })(it);
+      }
+    }
+    launch();
+  });
+  renderUpGrid();
   status.textContent = "上传完成：" + okN + " 成功" + (fails.length ? "，" + fails.length + " 失败（" + fails.join("；") + "）" : "");
   if (okN) {
     loadUserFiles(1);
