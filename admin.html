@@ -5825,13 +5825,20 @@ async function loadProxyOnlyState() {
     PROXY_ONLY = (r && r.ok && r.data.proxy_only === 1) ? 1 : 0;
   } catch (e) { PROXY_ONLY = 0; }
 }
-function linkBadge(f) {
+ function linkBadge(f) {
   if (!f) return '';
   var t = f.link_type;
   if (t === 'both') return '<span class="badge" style="background:#dcfce7;color:#16a34a">R2+代理</span>';
   if (t === 'r2') return '<span class="badge" style="background:#dcfce7;color:#16a34a">R2直链</span>';
   if (t === 'proxy') return '<span class="badge" style="background:#fef9c3;color:#a16207">Tele代理</span>';
   return '';
+}
+// 网页拾取(scrape)入库文件：显示来源页面徽标，title 里给出原始图片链接
+function scrapeBadge(f) {
+  if (!f || !f.page_url) return '';
+  var tt = '来源页面：' + (f.page_url || '');
+  if (f.original_url) tt += '\n原图链接：' + f.original_url;
+  return '<a class="badge" style="background:#ccfbf1;color:#0f766e;text-decoration:none;cursor:pointer" target="_blank" rel="noopener" href="' + escStr(f.page_url) + '" title="' + escStr(tt) + '">抓取来源</a> ';
 }
 function copySelected(mode) {
   var ids = Array.from(selSet);
@@ -6024,7 +6031,7 @@ async function loadFiles(page) {
       h += '<div class="cb-wrap"><input type="checkbox" class="fck" data-id="' + f.id + '"></div>';
       h += thumb;
       h += '<div class="info"><div class="name" title="' + nm + '">' + nm + '</div>';
-      h += '<div style="font-size:10px;margin:3px 0">' + levelBadge(f.level) + ' ' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div>';
+      h += '<div style="font-size:10px;margin:3px 0">' + levelBadge(f.level) + ' ' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + scrapeBadge(f) + ' ' + tagHtml(f) + '</div>';
       h += '<div class="meta"><span>' + fmtSize(f.file_size) + '</span><span>' + (f.created_at || "").split("T")[0] + '</span></div></div>';
       h += '<div class="actions"><a href="' + pv + '" target="_blank" class="btn btn-ghost btn-sm">打开</a>';
       h += '<button class="btn btn-ghost btn-sm" data-action="tag-file" data-id="' + f.id + '">标签</button>';
@@ -6048,7 +6055,7 @@ async function loadFiles(page) {
             : '<div class="preview-placeholder" style="cursor:pointer;background:#1e293b;color:#fff;font-size:14px" data-preview="' + pv + '" data-type="video" data-name="' + nm + '">\u25B6</div>')
         : '<div class="preview-placeholder">\uD83D\uDCC4</div>';
       h += '<tr><td><input type="checkbox" class="fck" data-id="' + f.id + '"></td><td>' + img + '</td>';
-      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + levelBadge(f.level) + ' ' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + tagHtml(f) + '</div></td>';
+      h += '<td><div class="file-name" title="' + nm + '">' + nm + '</div><div style="font-size:10px;margin-top:2px">' + levelBadge(f.level) + ' ' + refBadge(f) + ' ' + poolStateBadge(f.pool_state) + ' ' + linkBadge(f) + ' ' + scrapeBadge(f) + ' ' + tagHtml(f) + '</div></td>';
       h += '<td><span class="badge badge-blue">' + f.file_type + '</span></td>';
       h += '<td>' + fmtSize(f.file_size) + '</td>';
       h += '<td style="font-size:12px">' + escStr(f.chat_title || "") + '</td>';

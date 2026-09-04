@@ -69,7 +69,9 @@ const MYSQL_TABLES = [
     receipt_msg_id INTEGER DEFAULT 0,
     deleted_at TEXT,
     view_count INTEGER DEFAULT 0,
-    source_platform TEXT DEFAULT ''
+    source_platform TEXT DEFAULT '',
+    page_url TEXT DEFAULT '',
+    original_url TEXT DEFAULT ''
   )`,
   `CREATE TABLE IF NOT EXISTS random_pool (
     id INTEGER PRIMARY KEY AUTO_INCREMENT,
@@ -239,6 +241,20 @@ export async function ensureMySQLTables(env) {
           console.error('ensureMySQLTables table error:', e.message);
         }
       }
+      // files 表列迁移（MySQL 无 IF NOT EXISTS ADD COLUMN，需按 information_schema 判断）
+      try {
+        const mCols = [
+          ["page_url", "ALTER TABLE files ADD COLUMN page_url TEXT DEFAULT ''"],
+          ["original_url", "ALTER TABLE files ADD COLUMN original_url TEXT DEFAULT ''"]
+        ];
+        const [rows] = await c.query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'files'");
+        const have = new Set((rows || []).map(function(r) { return r.COLUMN_NAME; }));
+        for (const mc of mCols) {
+          if (have.has(mc[0])) continue;
+          try { await c.query(mc[1]); console.log('mysql migrated: added ' + mc[0] + ' column'); }
+          catch (e2) { console.error('mysql column migration failed for ' + mc[0] + ':', e2.message); }
+        }
+      } catch (e3) { console.error('ensureMySQLTables files columns check failed:', e3.message); }
     });
     // 至少部分表创建成功就标记为已初始化（避免阻塞双写）
     if (okCount > 0) _tablesEnsured = true;

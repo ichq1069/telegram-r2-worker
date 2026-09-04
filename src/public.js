@@ -2060,7 +2060,7 @@ async function tgSendDocumentToGroup(env, groupId, bytes, name, ct, caption) {
 }
 
 // 核心：直传群 + 落库 files（proxy 代理行）。返回 { ok, id, url, fileType, fileId, messageId, error }
-// opts: { name, bytes, size, tags, title, caption, level, isPrivate, toPool, origin }
+// opts: { name, bytes, size, tags, title, caption, level, isPrivate, toPool, origin, pageUrl, originalUrl }
 async function tgProxySave(env, opts) {
   const groupId = await getUploadGroupId(env);
   if (!groupId) return { ok: false, error: '尚未配置上传群组：请到「运维 → 用户上传配置」设置默认绑定群组' };
@@ -2074,8 +2074,10 @@ async function tgProxySave(env, opts) {
   const now = cnNowISO();
   const isPrivate = o.isPrivate ? 1 : 0;
   const level = isPrivate ? 'vvip' : sanitizeLevel(o.level);
-  const r = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?)')
-    .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(o.name).slice(0, 255), o.size, info.fileType, info.ct, String(o.title || '').slice(0, 200), o.tags, level, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now).run();
+  const pageUrl = o.pageUrl ? String(o.pageUrl).slice(0, 500) : '';
+  const originalUrl = o.originalUrl ? String(o.originalUrl).slice(0, 1000) : '';
+  const r = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at, page_url, original_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?, ?, ?)')
+    .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(o.name).slice(0, 255), o.size, info.fileType, info.ct, String(o.title || '').slice(0, 200), o.tags, level, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now, pageUrl, originalUrl).run();
   const dbId = r.meta.last_row_id;
   const proxyUrl = '/file/tg/' + dbId;
   await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind(proxyUrl, dbId).run();
@@ -2303,7 +2305,7 @@ export async function handleAdminScrapeGrab(request, env) {
           name = 'img_' + String(Math.random()).slice(2, 10) + '.' + ext;
         }
         name = String(name).replace(/[\\/:*?"<>|]/g, '_');
-        const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate });
+        const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate, pageUrl: referer || '', originalUrl: url });
         if (!res2.ok) { row.error = res2.error; }
         else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; added++; }
       } catch (e) { row.error = e.message; }
