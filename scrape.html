@@ -946,11 +946,12 @@ async function runLoop() {
   run.paused = false;
   setBusyUI(true);
   updateProg();
+  var BATCH = 3;
   while (run.running && !run.paused) {
-    var idx = -1;
-    for (var i = 0; i < job.items.length; i++) { if (job.items[i].st === 'pend') { idx = i; break; } }
-    if (idx < 0) break;
-    await processOne(job.items[idx]);
+    var batch = [];
+    for (var i = 0; i < job.items.length && batch.length < BATCH; i++) { if (job.items[i].st === 'pend') batch.push(job.items[i]); }
+    if (!batch.length) break;
+    await Promise.all(batch.map(function(it) { return processOne(it); }));
   }
   run.running = false;
   if (pendCount() > 0) run.paused = true;

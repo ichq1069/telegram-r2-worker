@@ -2293,7 +2293,10 @@ async function fetchImageWithFallbacks(imageUrl, givenReferer, cookieStr) {
   let lastErr = null;
   for (const hd of attempts) {
     try {
-      const resp = await fetch(imageUrl, { headers: hd, redirect: 'follow' });
+      const ac = new AbortController();
+      const timer = setTimeout(function() { try { ac.abort(); } catch (e) {} }, 15000);
+      const resp = await fetch(imageUrl, { headers: hd, redirect: 'follow', signal: ac.signal });
+      clearTimeout(timer);
       last = resp;
       if (resp.ok) return { res: resp, tried: attempts };
       // 403/429/5xx 等继续试下一档；明确成功才返回
@@ -2458,42 +2461,50 @@ export async function handleAdminScrapeGrab(request, env) {
     const results = [];
     let added = 0;
     let ignored = 0;
-    for (const url of urls) {
+    async function processUrl(url) {
       const row = { url: url, ok: false, ignored: false, error: '' };
       try {
         const low = url.toLowerCase();
         let ignoreReason = '';
-        // 链接包含关键词 → 忽略（不发请求）
         for (const kw of ignoreKws) {
           if (low.indexOf(kw) >= 0) { ignoreReason = '链接含「' + kw + '」'; break; }
         }
-        // 扩展名匹配 → 忽略
         if (!ignoreReason) {
           let ext = '';
           try { const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); ext = seg.indexOf('.') >= 0 ? seg.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') : ''; } catch (e) {}
           if (ext && ignoreExts.indexOf(ext) >= 0) ignoreReason = '已忽略格式 .' + ext;
         }
-        if (ignoreReason) { row.ok = false; row.ignored = true; row.error = ignoreReason; ignored++; results.push(row); continue; }
+        if (ignoreReason) { row.ignored = true; row.error = ignoreReason; return row; }
         const dl = await fetchImageWithFallbacks(url, referer, '');
         const res = dl.res;
-        if (!res.ok) { row.error = '下载失败（HTTP ' + res.status + '）'; results.push(row); continue; }
+        if (!res.ok) { row.error = '下载失败（HTTP ' + res.status + '）'; return row; }
         const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
         const cl = parseInt(res.headers.get('content-length') || '0', 10);
-        if (cl > maxBytes) { row.ok = false; row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; ignored++; results.push(row); continue; }
-        // 格式校验：仅收图片
+        if (cl > maxBytes) { row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; return row; }
         const ctExt = MIME_EXT[ct] || '';
-        if (!/^image\//.test(ct)) { row.ok = false; row.ignored = true; row.error = '非图片格式（' + (ct || '未知') + '）'; ignored++; results.push(row); continue; }
-        if (ignoreExts.indexOf(ctExt) >= 0) { row.ok = false; row.ignored = true; row.error = '已忽略格式 .' + (ctExt || ct); ignored++; results.push(row); continue; }
+        if (!/^image\//.test(ct)) { row.ignored = true; row.error = '非图片格式（' + (ct || '未知') + '）'; return row; }
+        if (ignoreExts.indexOf(ctExt) >= 0) { row.ignored = true; row.error = '已忽略格式 .' + (ctExt || ct); return row; }
         const buf = await res.arrayBuffer();
-        if (!buf || !buf.byteLength) { row.error = '空响应'; results.push(row); continue; }
-        if (buf.byteLength > maxBytes) { row.ok = false; row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; ignored++; results.push(row); continue; }
+        if (!buf || !buf.byteLength) { row.error = '空响应'; return row; }
+        if (buf.byteLength > maxBytes) { row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; return row; }
         const bytes = new Uint8Array(buf);
         const name = scrapeImageName(url, MIME_EXT[ct] || '', title);
         const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer || '', originalUrl: url });
         if (!res2.ok) { row.error = res2.error; }
-        else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; row.private = !!isPrivate; added++; }
+        else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; row.private = !!isPrivate; }
       } catch (e) { row.error = e.message; }
-      results.push(row);
+      return row;
+    }
+    // 并行批次处理：每批 5 张，显著提速
+    const BATCH = 5;
+    for (let i = 0; i < urls.length; i += BATCH) {
+      const batch = urls.slice(i, i + BATCH);
+      const batchResults = await Promise.allSettled(batch.map(function(u) { return processUrl(u); }));
+      for (const r of batchResults) {
+        const row = r.status === 'fulfilled' ? r.value : { url: '', ok: false, ignored: false, error: r.reason && r.reason.message || '异常' };
+        results.push(row);
+        if (row.ok) added++; else if (row.ignored) ignored++;
+      }
     }
     return json({ ok: true, data: { added: added, failed: results.length - added - ignored, ignored: ignored, results: results } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
