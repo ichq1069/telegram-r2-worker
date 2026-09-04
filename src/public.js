@@ -2047,23 +2047,52 @@ async function getUploadGroupId(env) {
   } catch (e) { return ''; }
 }
 
+// 并发控制：Telegram Bot API 同一 chat 限 ~30 msg/s，并行批次易触发 429
+const TG_SEMAPHORE_MAX = 3;
+let tgSemaphore = 0;
+const tgWaitQueue = [];
+function tgAcquire() {
+  return new Promise(function(resolve) {
+    if (tgSemaphore < TG_SEMAPHORE_MAX) { tgSemaphore++; resolve(); }
+    else tgWaitQueue.push(resolve);
+  });
+}
+function tgRelease() {
+  tgSemaphore--;
+  if (tgWaitQueue.length) { tgSemaphore++; tgWaitQueue.shift()(); }
+}
+
 // 把字节作为 photo（小图，群里直接显示图片）或 document（大图/其他格式）发送到 upload_group_id 群
 // （官方 Bot API，保证 file_id 全局可用）。photo 仅支持 Telegram 压缩前 <=10MB 的图片。
 async function tgSendMediaToGroup(env, groupId, bytes, name, ct, caption, asPhoto) {
   const endpoint = asPhoto ? 'sendPhoto' : 'sendDocument';
   const field = asPhoto ? 'photo' : 'document';
-  const fd = new FormData();
-  fd.append('chat_id', String(groupId));
-  fd.append(field, new Blob([bytes], { type: ct }), String(name).slice(0, 200));
-  if (caption) fd.append('caption', String(caption).slice(0, 1024));
-  const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/' + endpoint, { method: 'POST', body: fd });
-  const j = await resp.json().catch(() => ({ ok: false, description: 'Telegram response not JSON' }));
-  if (!j.ok || !j.result) return { ok: false, error: j.description || ('Telegram ' + endpoint + ' failed') };
-  const med = asPhoto ? j.result.photo : j.result.document;
-  let fid = '';
-  if (asPhoto && Array.isArray(med) && med.length) fid = med[med.length - 1].file_id || '';
-  else if (med && med.file_id) fid = med.file_id;
-  return { ok: true, fileId: fid || '', messageId: j.result.message_id || 0, chatId: j.result.chat && j.result.chat.id ? j.result.chat.id : String(groupId) };
+  await tgAcquire();
+  try {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      const fd = new FormData();
+      fd.append('chat_id', String(groupId));
+      fd.append(field, new Blob([bytes], { type: ct }), String(name).slice(0, 200));
+      if (caption) fd.append('caption', String(caption).slice(0, 1024));
+      const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/' + endpoint, { method: 'POST', body: fd });
+      const j = await resp.json().catch(() => ({ ok: false, description: 'Telegram response not JSON' }));
+      if (j.ok && j.result) {
+        const med = asPhoto ? j.result.photo : j.result.document;
+        let fid = '';
+        if (asPhoto && Array.isArray(med) && med.length) fid = med[med.length - 1].file_id || '';
+        else if (med && med.file_id) fid = med.file_id;
+        return { ok: true, fileId: fid || '', messageId: j.result.message_id || 0, chatId: j.result.chat && j.result.chat.id ? j.result.chat.id : String(groupId) };
+      }
+      // 429 Too Many Requests → 等待 Retry-After 后重试
+      if (resp.status === 429) {
+        const retryAfter = parseInt(resp.headers.get('Retry-After') || '1', 10);
+        await new Promise(function(r) { setTimeout(r, Math.min(retryAfter, 10) * 1000); });
+        continue;
+      }
+      return { ok: false, error: j.description || ('Telegram ' + endpoint + ' failed') };
+    }
+    return { ok: false, error: 'Telegram ' + endpoint + ' 重试耗尽' };
+  } finally { tgRelease(); }
 }
 
 // 核心：直传群 + 落库 files（proxy 代理行）。返回 { ok, id, url, fileType, fileId, messageId, error }
