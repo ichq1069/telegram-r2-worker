@@ -73,10 +73,10 @@ a.link { color: #00d4ff; text-decoration: none; }
       <button class="btn primary" id="scAnalyzeBtn">拾取图片</button>
     </div>
     <div class="status" id="scStatus"></div>
-    <div style="font-size:11px;color:#8a8aa8;margin-top:6px">整页解析被目标网站拦截（如贴吧返回安全验证）时，可直接在输入框<b>粘贴多条图片直链</b>（每行一条，如 tiebapic.baidu.com 以 .jpg/.png/.webp 结尾的链接），工具会把它们当作候选图片列出并直传。</div>
+    <div style="font-size:11px;color:#8a8aa8;margin-top:6px">整页解析被目标网站拦截（如贴吧返回安全验证/只给占位图）时，可直接在输入框<b>粘贴多条图片直链</b>（每行一条，如贴吧桌面帖 F12 里以 <b>pic/item?tbpicau=</b> 结尾的原图），或直接粘贴从页面复制出的 <b>&lt;img data-src/src&gt;</b> 片段，工具会自动抽取其中的图片作为候选直传。</div>
   </div>
 
-  <div class="card" id="candCard" style="display:none">
+  <div class="card" id="candCard">
     <div class="opts">
       <div class="field" style="min-width:220px;flex:2"><label>标题（可选，默认用页面标题）</label><input type="text" id="scTitle" placeholder="默认取网页 title"></div>
       <div class="field"><label>标签（逗号分隔，可选）</label><input type="text" id="scTags" placeholder="风景,美女"></div>
@@ -183,40 +183,79 @@ function setLoading(btn, on, label) {
   else { btn.disabled = false; btn.textContent = label || '直传选中到 Tele 库'; }
 }
 
+// 从粘贴的 HTML/IMG 片段中抽取图片直链（兼容从浏览器 F12 复制出的 <img data-src src>）
+function fragmentImgUrls(txt) {
+  var out = [];
+  var re = /\b(?:data-src|data-original|data-lazy-src|src)\s*=\s*["']([^"']+)["']/gi;
+  var m;
+  while ((m = re.exec(txt))) {
+    var v = String(m[1]).trim();
+    if (/^https?:\/\//i.test(v)) out.push(v);
+  }
+  return out;
+}
+function enterDirectCandidates(list) {
+  var candList = localFilterUrls(list);
+  cands = candList;
+  document.getElementById('scTitle').value = document.getElementById('scTitle').value.trim();
+  document.getElementById('candCard').style.display = '';
+  renderGrid();
+  stopRunning();
+  clearLocalJob();
+  hideProg();
+  document.getElementById('scResult').innerHTML = '';
+  document.getElementById('scSum').style.display = 'none';
+  document.getElementById('scGrabStatus').textContent = '';
+  var msg;
+  if (!cands.length) msg = '未识别出可用图片：请粘贴以 .jpg/.png/.webp/.gif 等图片格式结尾的直链（每行一条）';
+  else msg = '直链识别成功：共 ' + cands.length + ' 张候选（已按忽略规则过滤），勾选后点「直传选中到 Tele 库」';
+  setStatus('scStatus', msg, cands.length ? 1 : 0);
+}
+function tiebaGuideHtml(url) {
+  var scr = "copy([...document.querySelectorAll('img')].map(function(i){return i.getAttribute('data-src')||i.src;}).filter(function(v){return /^https?:\\/\\/tiebapic\\.baidu\\.com\\/forum\\/pic\\/item\\/.+\\.(jpe?g|png|webp|gif)/i.test(v);}).join('\\n'))";
+  return '贴吧帖子整页解析拿不到全尺寸原图（防盗链签名只在浏览器桌面版按需生成），继续解析只会得到占位图。请：' +
+    '1) 浏览器打开 <b>' + escStr(url) + '</b> 桌面版，向下滚动让图片全部加载；' +
+    '2) F12 → Console 粘贴下面脚本回车，会自动把全部全图直链复制到剪贴板；' +
+    '3) 回本页把直链整段粘贴到上方输入框（每行一条）再点「拾取图片」，即可列出候选并直传。<br>' +
+    '<div class="ign" style="margin-top:6px"><code style="flex:1;font-size:11px;word-break:break-all;background:#0b0b1c;padding:6px 8px;border-radius:6px">' + escStr(scr) + '</code>' +
+    '<button class="btn ghost" onclick="copyScr()" style="white-space:nowrap">复制脚本</button></div>';
+}
+function copyScr() {
+  var scr = "copy([...document.querySelectorAll('img')].map(function(i){return i.getAttribute('data-src')||i.src;}).filter(function(v){return /^https?:\\/\\/tiebapic\\.baidu\\.com\\/forum\\/pic\\/item\\/.+\\.(jpe?g|png|webp|gif)/i.test(v);}).join('\\n'))";
+  var ta = document.createElement('textarea');
+  ta.value = scr;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+  var s = document.getElementById('scStatus');
+  if (s) s.innerHTML += '<br>脚本已复制，去贴吧桌面版 F12 Console 粘贴运行。';
+}
+
 function analyze() {
   var uVal = document.getElementById('scUrl').value.trim();
   // 解析前先自动切到与网址域名匹配的规则组，并按域名加载该站 Cookie
   activateGroupForUrl(firstHttpOf(uVal));
   syncCookieField();
   var tokens = uVal.split(/[\r\n,，;；]+/).map(function(s) { return s.trim(); }).filter(Boolean);
-  var httpOnes = tokens.filter(function(t) { return /^https?:\/\//i.test(t); });
+  var plainHttp = tokens.filter(function(t) { return /^https?:\/\//i.test(t); });
+  // 直接粘贴从浏览器复制出的 <img data-src="..." src="..."> 片段时，抽取其中图片直链当候选
+  var pulled = /(<img\b|data-src\s*=|src\s*=\s*")/i.test(uVal) ? fragmentImgUrls(uVal) : [];
+  if (pulled.length) { enterDirectCandidates(pulled); return; }
+  var httpOnes = plainHttp;
   var imgOnes = httpOnes.filter(function(t) { return /\.(?:jpg|jpeg|png|gif|webp|avif|bmp|ico|svg|tif|tiff)(?:\?|#|$)/i.test(t); });
   // 批量直链模式：输入里含多个链接时不再请求页面，直接把图片直链作为候选
-  if (httpOnes.length > 1) {
-    var candList = localFilterUrls(imgOnes.length ? imgOnes : httpOnes);
-    cands = candList;
-    document.getElementById('scTitle').value = document.getElementById('scTitle').value.trim();
-    var card = document.getElementById('candCard');
-    card.style.display = '';
-    renderGrid();
-    stopRunning();
-    clearLocalJob();
-    hideProg();
-    document.getElementById('scResult').innerHTML = '';
-    document.getElementById('scSum').style.display = 'none';
-    document.getElementById('scGrabStatus').textContent = '';
-    var msg;
-    if (!cands.length) msg = '未识别出可用图片：请粘贴以 .jpg/.png/.webp/.gif 等图片格式结尾的直链（每行一条）';
-    else msg = '直链识别成功：共 ' + cands.length + ' 张候选（已按忽略规则过滤），勾选后点「直传选中到 Tele 库」';
-    setStatus('scStatus', msg, cands.length ? 1 : 0);
-    return;
-  }
+  if (httpOnes.length > 1) { enterDirectCandidates(imgOnes.length ? imgOnes : httpOnes); return; }
   var url = uVal;
   if (!/^https?:\/\//i.test(url)) { setStatus('scStatus', '请输入 http(s) 网页链接；若页面解析不到图，可一次粘贴多条图片直链', 0); return; }
+  // 贴吧帖子整页解析只能拿到防盗链占位图，引导改用桌面版全图直链粘贴
+  if (/^https?:\/\/(?:[a-z0-9-]+\.)*tieba\.baidu\.com\/(?:p|mo\/q\/m)/i.test(url)) {
+    setStatus('scStatus', tiebaGuideHtml(url), 1);
+    return;
+  }
   var btn = document.getElementById('scAnalyzeBtn');
   setLoading(btn, true, '拾取中...');
   setStatus('scStatus', '正在抓取页面并提取图片...', 1);
-  document.getElementById('candCard').style.display = 'none';
   var rules = readRules();
   var payload = { url: url, ignore_kw: rules.kw, ignore_ext: rules.ext };
   if (ckVal()) payload.cookie = ckVal();
