@@ -60,6 +60,18 @@ a.link { color: #00d4ff; text-decoration: none; }
 .proginfo { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; color: #9a9ab5; }
 .proginfo b { color: #fff; }
 .progurl { flex: 1; word-break: break-all; color: #00d4ff; }
+.tpick-mask { position: fixed; inset: 0; background: rgba(6, 8, 18, .72); z-index: 60; align-items: center; justify-content: center; }
+.tpick-panel { width: min(680px, 94vw); max-height: 80vh; display: flex; flex-direction: column; background: #181a30; border: 1px solid #3a3c5a; border-radius: 14px; overflow: hidden; box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
+.tpick-head { padding: 14px 16px; border-bottom: 1px solid #2a2c4a; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tpick-head b { color: #fff; font-size: 14px; }
+.tpick-kw { flex: 1; min-width: 120px; max-width: 260px; }
+.tpick-body { flex: 1; overflow: auto; padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
+.tpick-foot { padding: 10px 16px; border-top: 1px solid #2a2c4a; font-size: 11px; color: #8a8aa8; }
+.tchip { cursor: pointer; user-select: none; padding: 6px 12px; border-radius: 18px; border: 1px solid #3a3c5a; background: #0f1020; color: #c8c8dd; font-size: 13px; transition: all .15s; }
+.tchip:hover { border-color: #00d4ff; }
+.tchip.on { border-color: #0072ff; background: rgba(0, 114, 255, .18); color: #fff; }
+.tchip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+.sum-ops { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 </style>
 </head>
 <body>
@@ -79,7 +91,13 @@ a.link { color: #00d4ff; text-decoration: none; }
   <div class="card" id="candCard">
     <div class="opts">
       <div class="field" style="min-width:220px;flex:2"><label>标题（可选，默认用页面标题）</label><input type="text" id="scTitle" placeholder="默认取网页 title"></div>
-      <div class="field"><label>标签（逗号分隔，可选）</label><input type="text" id="scTags" placeholder="风景,美女"></div>
+      <div class="field" style="min-width:240px;flex:2">
+        <label>标签（从后台标签库多选，可选）</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="scTags" readonly placeholder="点击「选择标签」从后台标签库勾选" onclick="openTagPicker()" title="标签来自后台「标签页」维护的标签库，选中后逗号拼接随图片入库">
+          <button class="btn ghost" id="scTagsPickBtn" type="button" onclick="openTagPicker()" style="flex:0 0 auto;white-space:nowrap">选择标签…</button>
+        </div>
+      </div>
       <div class="field"><label>入库级别</label><select id="scLevel"><option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option></select></div>
     </div>
     <div style="font-size:11px;color:#8a8aa8;margin:-6px 0 4px">入库级别选 <b>vvip</b> = 私密内容：直传后自动进入<b>私密库</b>（random_pool is_private=1，仅 vvip 密钥可访问），不显示在 Tele 文件库列表；管理后台 Tele 文件页可勾选「含私密(vvip)」查看。</div>
@@ -123,9 +141,23 @@ a.link { color: #00d4ff; text-decoration: none; }
     </div>
     <div class="grid" id="scGrid"></div>
     <div class="sum" id="scSum" style="display:none"></div>
+    <div id="scFailOps" class="sum-ops" style="display:none"></div>
     <div class="status" id="scGrabStatus"></div>
     <div id="scResult"></div>
     <div style="margin-top:12px;font-size:12px;color:#8a8aa8">图片会作为<b>照片</b>（jpg/png/webp &lt;10MB）或<b>文件</b>消息发送到「上传群」，按返回 file_id 入库（source=代理），可在 <a class="link" href="/admin#files" target="_blank">admin → Tele 文件</a> 查看。需先在 admin「运维 → 用户上传配置」设置上传群组。</div>
+  </div>
+</div>
+
+<div id="tagPickMask" class="tpick-mask" style="display:none" onclick="if(event.target===this)closeTagPicker()">
+  <div class="tpick-panel">
+    <div class="tpick-head">
+      <b>从后台标签库选择标签</b>
+      <input type="text" class="tpick-kw" id="tagPickKw" placeholder="搜索标签…">
+      <button class="btn ghost" type="button" onclick="clearTagPick()" style="padding:6px 12px">清空</button>
+      <button class="btn primary" type="button" onclick="confirmTagPick()" style="padding:6px 16px">确定</button>
+    </div>
+    <div class="tpick-body" id="tagPickBody"><span class="loading"></span>加载标签库中…</div>
+    <div class="tpick-foot">标签库与 admin →「标签页」同步（可到 <a class="link" href="/admin#tags" target="_blank">admin 标签页</a> 增删）。选择后随本批图片一并入库。</div>
   </div>
 </div>
 
@@ -525,6 +557,68 @@ function cookieForGrab(imgUrl, pageUrl, cookie) {
   return '';
 }
 
+// ===== 后台标签库多选（scTags 只读展示，选中值仍以逗号串回填，保持 job.tags/接口兼容）=====
+var tagLibCache = null;   // [{id,name,color,category}]
+var scPickedTags = [];
+
+function tagInputParts() {
+  return document.getElementById('scTags').value.split(/[,，;；]/).map(function(s) { return s.trim(); }).filter(Boolean);
+}
+function openTagPicker() {
+  if (run && (run.running || run.paused)) { setStatus('scGrabStatus', '直传进行中：请先暂停或等结束再修改标签', 0); return; }
+  scPickedTags = tagInputParts();
+  var kwEl = document.getElementById('tagPickKw');
+  if (kwEl) { kwEl.value = ''; kwEl.focus(); }
+  document.getElementById('tagPickMask').style.display = 'flex';
+  if (tagLibCache) { renderTagPick(); return; }
+  var body = document.getElementById('tagPickBody');
+  body.innerHTML = '<span class="loading"></span>加载标签库中…';
+  api('GET', '/admin/api/tags/list', null, 20000)
+    .then(function(d) {
+      if (d && d.ok && Array.isArray(d.data)) {
+        tagLibCache = d.data.map(function(t) {
+          return { id: t.id, name: String(t.name || '').trim(), color: t.color || '', category: t.category || '' };
+        }).filter(function(t) { return t.name; });
+        renderTagPick();
+      } else {
+        body.innerHTML = '<div style="width:100%;color:#ff6666;font-size:13px">加载标签库失败：' + escStr((d && d.error) || '未知错误') + '</div>';
+      }
+    })
+    .catch(function(e) {
+      body.innerHTML = '<div style="width:100%;color:#ff6666;font-size:13px">请求失败：' + escStr(e.message) + '</div>';
+    });
+}
+function renderTagPick() {
+  var body = document.getElementById('tagPickBody');
+  var kw = document.getElementById('tagPickKw').value.trim().toLowerCase();
+  if (!tagLibCache || !tagLibCache.length) { body.innerHTML = '<div style="width:100%;color:#8a8aa8;font-size:13px">后台标签库为空：可先到 <a class="link" href="/admin#tags" target="_blank">admin → 标签页</a> 添加标签，再回来勾选。</div>'; return; }
+  var h = '';
+  tagLibCache.forEach(function(t) {
+    if (kw && t.name.toLowerCase().indexOf(kw) === -1 && (t.category || '').toLowerCase().indexOf(kw) === -1) return;
+    var on = scPickedTags.indexOf(t.name) !== -1;
+    h += '<span class="tchip' + (on ? ' on' : '') + '" data-name="' + escStr(t.name) + '" data-color="' + escStr(t.color) + '" onclick="togglePickTag(this)">' +
+      (t.color ? '<span class="dot" style="background:' + escStr(t.color) + '"></span>' : '') +
+      escStr(t.name) + '</span>';
+  });
+  body.innerHTML = h || '<div style="width:100%;color:#8a8aa8;font-size:13px">无匹配标签</div>';
+}
+function togglePickTag(el) {
+  var nm = el.getAttribute('data-name');
+  var i = scPickedTags.indexOf(nm);
+  if (i >= 0) scPickedTags.splice(i, 1);
+  else scPickedTags.push(nm);
+  el.classList.toggle('on', i < 0);
+}
+function clearTagPick() { scPickedTags = []; renderTagPick(); }
+function closeTagPicker() { document.getElementById('tagPickMask').style.display = 'none'; }
+function confirmTagPick() {
+  document.getElementById('scTags').value = scPickedTags.join(', ');
+  closeTagPicker();
+  var el = document.getElementById('scTags');
+  if (el) el.title = '标签：' + (scPickedTags.join('，') || '（未选择）');
+}
+document.getElementById('tagPickKw').addEventListener('input', renderTagPick);
+
 // ===== 批量直传任务（单张请求 + 进度条 + 暂停/续传，状态保留在本机可断点重来）=====
 var JOB_KEY = 'scrapeJob';
 var job = null;                       // { pageUrl,title,tags,level,kw,ext,mb, items:[{u,st,reason,id}] }
@@ -537,7 +631,7 @@ function persistJob() {
     else localStorage.removeItem(JOB_KEY);
   } catch (e) {}
 }
-function clearLocalJob() { job = null; persistJob(); }
+function clearLocalJob() { job = null; persistJob(); renderFailOps(); }
 function hideProg() {
   document.getElementById('scProgWrap').style.display = 'none';
   document.getElementById('scPauseBtn').style.display = 'none';
@@ -561,6 +655,7 @@ function rowClsOf(it) {
   if (it.st === 'failed') return { ico: '✗', cls: 'fail', why: it.reason || '失败' };
   return { ico: '…', cls: '', why: '等待中' };
 }
+function failedItems() { return job ? job.items.filter(function(i) { return i.st === 'failed'; }) : []; }
 function renderResultRows() {
   if (!job) return;
   var rows = job.items.map(function(it, i) {
@@ -573,6 +668,7 @@ function renderResultRows() {
       '<span class="' + r.cls + '" style="white-space:nowrap">' + escStr(r.why) + '</span></div>';
   }).join('');
   document.getElementById('scResult').innerHTML = rows;
+  renderFailOps();
 }
 function batchSummaryHtml() {
   var c = { ok: 0, exists: 0, ignored: 0, failed: 0 };
@@ -583,6 +679,77 @@ function batchSummaryHtml() {
   if (c.failed) parts.push('<span class="fail">' + c.failed + '</span> 失败');
   parts.push('<a class="link" href="/admin#files" target="_blank">去 admin 查看 →</a>');
   return '本轮：' + parts.join(' · ');
+}
+
+// 失败项操作条：完成态（无运行/暂停且存在失败）展示「一键重试失败」「失败项加入候选（链接导入）」入口
+function renderFailOps() {
+  var wrap = document.getElementById('scFailOps');
+  if (!wrap) return;
+  var fs = failedItems();
+  var show = !!job && !run.running && !run.paused && fs.length > 0;
+  wrap.style.display = show ? '' : 'none';
+  if (!show) { wrap.innerHTML = ''; return; }
+  var n = fs.length;
+  wrap.innerHTML =
+    '<button class="btn primary" onclick="retryFailed()">一键重试失败 ' + n + ' 张</button>' +
+    '<button class="btn ghost" onclick="failedToCand()" title="把失败项 URL 加入上方候选列表（可调整勾选后再直传，等价走「链接批量导入」）">失败项加入候选</button>' +
+    '<button class="btn ghost" onclick="jumpToFirstFailed()">打开失败项</button>' +
+    '<span style="font-size:12px;color:#8a8aa8">双击单条失败行可单独重试</span>';
+}
+
+// 一键重试：把全部 failed 项重置为 pend 并重新跑队列
+function retryFailed() {
+  if (!job || run.running || run.paused) return;
+  var fs = failedItems();
+  if (!fs.length) { renderFailOps(); return; }
+  fs.forEach(function(it) { it.st = 'pend'; it.reason = ''; it.busy = false; });
+  persistJob();
+  document.getElementById('scSum').style.display = 'none';
+  updateProg();
+  renderResultRows();
+  runLoop();
+}
+
+// 失败项加入候选：把失败 URL 并入 cands（去重），并把失败项对应的候选勾选上，供用户直接再直传
+function failedToCand() {
+  if (!job) return;
+  var fs = failedItems();
+  if (!fs.length) { renderFailOps(); return; }
+  var want = {};
+  fs.forEach(function(it) { want[it.u] = 1; });
+  var merged = cands.slice();
+  var had = {};
+  merged.forEach(function(u) { had[u] = 1; });
+  fs.forEach(function(it) { if (!had[it.u]) { merged.push(it.u); had[it.u] = 1; } });
+  cands = merged;
+  renderGrid();
+  // 勾选失败项对应的候选
+  fs.forEach(function(it) {
+    var idx = cands.indexOf(it.u);
+    if (idx < 0) return;
+    var cb = document.querySelector('input[data-cand="' + idx + '"]');
+    if (cb) { cb.checked = true; var box = cb.closest('.cand'); if (box) box.classList.add('sel'); }
+  });
+  updateSelCount();
+  document.getElementById('scResult').innerHTML = '';
+  document.getElementById('scSum').style.display = 'none';
+  hideProg();
+  clearLocalJob();
+  renderFailOps();
+  setStatus('scGrabStatus', '已把 ' + fs.length + ' 个失败项加入候选并勾选：可再次点「直传选中」，已入库项会自动跳过。', 1);
+}
+
+function jumpToFirstFailed() {
+  var rows = document.querySelectorAll('#scResult .result-item');
+  for (var i = 0; i < rows.length; i++) {
+    if (job && job.items[i] && job.items[i].st === 'failed') {
+      rows[i].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      rows[i].style.outline = '2px solid #ff6666';
+      var el = rows[i];
+      setTimeout(function() { el.style.outline = ''; }, 1800);
+      return;
+    }
+  }
 }
 function updateProg() {
   if (!job) { hideProg(); return; }
@@ -626,6 +793,7 @@ function updateProg() {
   } else if (!run.running && !run.paused) {
     sumEl.style.display = 'none';
   }
+  renderFailOps();
   updateResumeBtn();
 }
 function stopRunning() {
@@ -645,7 +813,7 @@ async function processOne(it) {
   var ctl = new AbortController();
   run.ctl = ctl;
   var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 240000);
-  var body = { url: it.u, title: job.title, tags: job.tags, level: job.level, ref: job.pageUrl, ignore_kw: job.kw, ignore_ext: job.ext, max_mb: job.mb };
+  var body = { url: it.u, title: job.title, tags: job.tags, level: job.level, ref: job.pageUrl, ignore_kw: job.kw, ignore_ext: job.ext, max_mb: job.mb, seq: it.seq || 0 };
   var gc = cookieForGrab(it.u, job.pageUrl, ckVal());
   if (gc) body.cookie = gc;
   try {
@@ -658,8 +826,8 @@ async function processOne(it) {
       if (it.st === 'failed' && !it.reason) it.reason = '未知错误';
     }
   } catch (e) {
-    it.st = run.paused ? 'pend' : 'pend';
-    it.reason = '已中断，可续传';
+    if (run.paused) { it.st = 'pend'; it.reason = '已中断，可续传'; }
+    else { it.st = 'failed'; it.reason = (e && e.name === 'AbortError') ? '请求超时（单张超过 4 分钟）' : ((e && e.message) || '请求异常'); }
   } finally {
     clearTimeout(timer);
     if (run.ctl === ctl) run.ctl = null;
@@ -704,7 +872,7 @@ function beginBatch() {
     kw: document.getElementById('scIgKw').value.trim(),
     ext: document.getElementById('scIgExt').value.trim(),
     mb: parseInt(document.getElementById('scIgMb').value, 10) || 30,
-    items: urls.map(function(u) { return { u: u, st: 'pend', reason: '', id: null }; })
+    items: urls.map(function(u, i) { return { u: u, seq: i + 1, st: 'pend', reason: '', id: null }; })
   };
   persistJob();
   document.getElementById('scSum').style.display = 'none';
@@ -731,6 +899,10 @@ function handleStoredJobAfterAnalyze(pageUrl) {
   try { saved = JSON.parse(localStorage.getItem(JOB_KEY) || 'null'); } catch (e) {}
   if (saved && Array.isArray(saved.items) && saved.pageUrl === pageUrl && saved.items.some(function(i) { return i.st === 'pend'; })) {
     job = saved;
+    // 历史任务未带序号：按原顺序补 seq
+    job.items.forEach(function(it, i) { if (!it.seq) it.seq = i + 1; });
+    // 把已存任务的标签同步到只读展示框
+    document.getElementById('scTags').value = saved.tags || '';
     if (pendCount() > 0) {
       setStatus('scStatus', '检测到上次未完成的直传任务（剩余 ' + pendCount() + ' 张），可直接点「续传剩余 ' + pendCount() + ' 张」继续，已入库图片会自动跳过不重复发送', 1);
       renderResultRows();

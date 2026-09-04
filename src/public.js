@@ -2480,6 +2480,7 @@ export async function handleAdminScrapeGrabOne(request, env) {
     const toPool = isPrivate ? 1 : 0;
     const referer = b.ref ? String(b.ref).trim() : '';
     const caption = b.caption != null ? b.caption : title;
+    const seq = Math.max(0, parseInt(b.seq, 10) || 0);
     const ignoreKws = String(b.ignore_kw || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
     const ignoreExts = String(b.ignore_ext || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
     let maxBytes = SCRAPE_MAX_BYTES;
@@ -2514,7 +2515,9 @@ export async function handleAdminScrapeGrabOne(request, env) {
       if (!buf || !buf.byteLength) return fail('空响应');
       if (buf.byteLength > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
       const bytes = new Uint8Array(buf);
-      const name = scrapeImageName(url, ctExt || '', title);
+      // 批量直传时前端传 seq（1 起），拼成 3 位序号前缀入库文件名，避免同源多图重名互相覆盖/难辨识
+      let name = scrapeImageName(url, ctExt || '', title);
+      if (seq > 0) name = ('000' + seq).slice(-3) + '_' + name;
       const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer, originalUrl: url });
       if (!res2.ok) return fail(res2.error);
       return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate } });
