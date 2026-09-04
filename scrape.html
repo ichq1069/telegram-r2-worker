@@ -31,8 +31,10 @@ input:focus { border-color: #00d4ff; }
 select { background: #0f1020; color: #e8e8f8; border: 1px solid #3a3c5a; border-radius: 8px; padding: 9px 10px; width: 100%; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin-top: 14px; }
 .cand { position: relative; background: #0f1020; border: 1px solid #3a3c5a; border-radius: 8px; overflow: hidden; }
-.cand img { width: 100%; height: 110px; object-fit: cover; display: block; background: #22243c; }
-.cand input { position: absolute; top: 6px; left: 6px; width: 16px; height: 16px; accent-color: #0072ff; }
+.cand .ph { position: relative; display: block; width: 100%; height: 110px; background: #22243c; overflow: hidden; }
+.cand .ph-ico { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 22px; color: #5a5a7a; }
+.cand .ph img { position: relative; z-index: 1; width: 100%; height: 100%; object-fit: cover; display: block; }
+.cand input { position: absolute; top: 6px; left: 6px; width: 16px; height: 16px; z-index: 2; accent-color: #0072ff; }
 .cand .nm { font-size: 10px; color: #8a8aa8; padding: 4px 6px; word-break: break-all; height: 28px; line-height: 13px; overflow: hidden; }
 .cand.sel { border-color: #0072ff; }
 .toolbar { display: flex; align-items: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
@@ -90,6 +92,22 @@ var cands = [];
 
 function escStr(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
+// 解码 HTML 实体（&#8211; → –），避免标题/输入框显示原始实体文本
+function decodeEnt(s) {
+  if (s == null) return '';
+  var t = document.createElement('textarea');
+  t.innerHTML = String(s);
+  return t.value;
+}
+
+// 预览图加载失败：仅隐藏 <img> 露出占位图标，保留卡片与复选框（仍可勾选直传）
+function imgErr(img) {
+  if (!img) return;
+  img.style.display = 'none';
+  var holder = img.parentNode;
+  if (holder) holder.classList.add('ph-fail');
+}
+
 function api(method, path, body, timeoutMs) {
   var url = OR + path + '?api_key=' + encodeURIComponent(API_KEY);
   var opts = { method: method, headers: { 'Content-Type': 'application/json' } };
@@ -124,7 +142,7 @@ function analyze() {
       setLoading(btn, false, '拾取图片');
       if (!d.ok) { setStatus('scStatus', d.error || '拾取失败', 0); return; }
       cands = (d.data && d.data.images) || [];
-      document.getElementById('scTitle').value = (d.data && d.data.title) || '';
+      document.getElementById('scTitle').value = decodeEnt(d.data && d.data.title);
       var card = document.getElementById('candCard');
       card.style.display = '';
       renderGrid();
@@ -143,10 +161,13 @@ function renderGrid() {
     var u = cands[i];
     var nm = u.replace(/^https?:\/\//, '').slice(0, 60);
     h += '<label class="cand" data-i="' + i + '">' +
-      '<img loading="lazy" src="' + escStr(u) + '" onerror="this.parentNode.style.display=\'none\'">' +
+      '<span class="ph"><span class="ph-ico">🖼</span>' +
+      '<img loading="lazy" referrerpolicy="no-referrer" src="' + escStr(u) + '" alt="" onerror="imgErr(this)">' +
+      '</span>' +
       '<input type="checkbox" data-cand="' + i + '">' +
       '<div class="nm" title="' + escStr(u) + '">' + escStr(nm) + '</div></label>';
   }
+  document.getElementById('scCount').textContent = cands.length;
   g.innerHTML = h || '<div style="grid-column:1/-1;color:#666;padding:16px;text-align:center">无候选图片</div>';
   updateSelCount();
 }
