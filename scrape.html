@@ -82,6 +82,8 @@ a.link { color: #00d4ff; text-decoration: none; }
   <div class="card">
     <div class="input-group">
       <input type="url" id="scUrl" placeholder="粘贴网页链接，例如 https://example.com/post/123">
+      <button class="btn" id="scClearBtn" title="清空输入框" style="padding:6px 10px;font-size:13px">✕</button>
+      <button class="btn" id="scPasteBtn" title="粘贴剪贴板" style="padding:6px 10px;font-size:13px">📋</button>
       <button class="btn primary" id="scAnalyzeBtn">拾取图片</button>
     </div>
     <div class="status" id="scStatus"></div>
@@ -1019,6 +1021,13 @@ function handleStoredJobAfterAnalyze(pageUrl) {
 
 document.getElementById('scAnalyzeBtn').addEventListener('click', analyze);
 document.getElementById('scUrl').addEventListener('keydown', function(e) { if (e.key === 'Enter') analyze(); });
+document.getElementById('scClearBtn').addEventListener('click', function() { document.getElementById('scUrl').value = ''; document.getElementById('scUrl').focus(); });
+document.getElementById('scPasteBtn').addEventListener('click', function() {
+  var inp = document.getElementById('scUrl');
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    navigator.clipboard.readText().then(function(t) { inp.value = t.trim(); inp.focus(); }).catch(function() { inp.focus(); });
+  } else { inp.focus(); }
+});
 document.getElementById('scGrid').addEventListener('change', function(e) {
   var t = e.target;
   if (t && t.hasAttribute('data-cand')) {
