@@ -122,3 +122,14 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: r2 object put bot-telegram/scrape.html --file=scrape.html --content-type text/html --cache-control "public, max-age=300" --remote
+
+      # 兼容历史裸 key 直接访问：早前部署上传的是 /admin /user /jx 这类无扩展名对象，
+      # 后期改为只传 *.html 后裸 key 变成 404。这里每轮把页面再传一份无扩展名 key 保持原访问方式可用。
+      - name: Upload no-extension keys for legacy direct URLs (/user /jx /admin-guide /user-manage /scrape)
+        run: |
+          for p in user jx admin-guide user-manage scrape; do
+            npx --yes wrangler@4.128.0 r2 object put bot-telegram/$p --file=$p.html --content-type text/html --cache-control "public, max-age=300" --remote
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
