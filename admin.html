@@ -1664,6 +1664,10 @@ function init() {
   bindStoreTabs("privateStoreTabs", ["local", "tg", "zup", "pi", "link"]);
   bindStoreTabs("fileStoreTabs", ["local", "tg", "link"]);
 
+  // 内嵌的网页图片拾取页（带 admin api_key，避免重复登录）
+  var scrapeFrame = document.getElementById("scrapeFrame");
+  if (scrapeFrame && AK) scrapeFrame.src = OR + "/scrape?api_key=" + encodeURIComponent(AK);
+
   initQuickTagUI();
 
   // 退出登录
