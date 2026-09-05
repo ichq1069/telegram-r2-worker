@@ -2391,6 +2391,7 @@ export async function handleAdminScrapeAnalyze(request, env) {
     const cookie = String((b && b.cookie) || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
     const ignoreKws = String((b && b.ignore_kw) || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
     const ignoreExts = String((b && b.ignore_ext) || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
+    const mustKws = String((b && b.must) || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
     let html = '';
     let directImage = false;
     let title = '';
@@ -2418,7 +2419,7 @@ export async function handleAdminScrapeAnalyze(request, env) {
       title = directImage ? raw : (String((html.match(/<title[^>]*>([^<]*)<\/title>/i) || [null, ''])[1]).trim().slice(0, 200) || raw);
       rawUrls = directImage ? [raw] : extractPageImages(html, raw);
     }
-    // 解析阶段过滤：链接携带的内容命中忽略关键词/格式时，直接不再返回该候选
+    // 解析阶段过滤：链接携带的内容命中忽略关键词/格式、或未命中必带白名单时，直接不再返回该候选
     const kept = [];
     let ignoredN = 0;
     for (const u of rawUrls) {
@@ -2431,6 +2432,11 @@ export async function handleAdminScrapeAnalyze(request, env) {
         const mm = String(u).match(/\.([a-zA-Z0-9]{1,8})(?:\?.*)?$/);
         const ext = mm ? mm[1].toLowerCase() : '';
         if (ext && ignoreExts.indexOf(ext) !== -1) hit = '格式 .' + ext;
+      }
+      if (!hit && mustKws.length) {
+        let ok = false;
+        for (const kw of mustKws) { if (low.indexOf(kw) >= 0) { ok = true; break; } }
+        if (!ok) hit = '不含必带内容';
       }
       if (hit) ignoredN++;
       else kept.push(u);
@@ -2484,6 +2490,7 @@ export async function handleAdminScrapeGrab(request, env) {
     // 忽略规则
     const ignoreKws = String(b.ignore_kw || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
     const ignoreExts = String(b.ignore_ext || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
+    const mustKws = String(b.must || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
     let maxBytes = SCRAPE_MAX_BYTES;
     if (b.max_mb) { const mb = Number(b.max_mb); if (mb > 0 && mb <= 30) maxBytes = Math.round(mb * 1024 * 1024); }
     const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/x-icon': 'ico', 'image/tiff': 'tiff' };
@@ -2502,6 +2509,11 @@ export async function handleAdminScrapeGrab(request, env) {
           let ext = '';
           try { const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); ext = seg.indexOf('.') >= 0 ? seg.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') : ''; } catch (e) {}
           if (ext && ignoreExts.indexOf(ext) >= 0) ignoreReason = '已忽略格式 .' + ext;
+        }
+        if (!ignoreReason && mustKws.length) {
+          let hit = false;
+          for (const kw of mustKws) { if (low.indexOf(kw) >= 0) { hit = true; break; } }
+          if (!hit) ignoreReason = '链接不含必带内容';
         }
         if (ignoreReason) { row.ignored = true; row.error = ignoreReason; return row; }
         const dl = await fetchImageWithFallbacks(url, referer, '');
@@ -2596,6 +2608,7 @@ export async function handleAdminScrapeGrabOne(request, env) {
     const seq = Math.max(0, parseInt(b.seq, 10) || 0);
     const ignoreKws = String(b.ignore_kw || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
     const ignoreExts = String(b.ignore_ext || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
+    const mustKws = String(b.must || '').split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
     let maxBytes = SCRAPE_MAX_BYTES;
     if (b.max_mb) { const mb = Number(b.max_mb); if (mb > 0 && mb <= 30) maxBytes = Math.round(mb * 1024 * 1024); }
     const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/x-icon': 'ico', 'image/tiff': 'tiff' };
@@ -2606,6 +2619,11 @@ export async function handleAdminScrapeGrabOne(request, env) {
       const low = url.toLowerCase();
       for (const kw of ignoreKws) {
         if (low.indexOf(kw) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '链接含「' + kw + '」' } });
+      }
+      if (mustKws.length) {
+        let hitMust = false;
+        for (const kw of mustKws) { if (low.indexOf(kw) >= 0) { hitMust = true; break; } }
+        if (!hitMust) return json({ ok: true, data: { url: url, status: 'ignored', reason: '链接不含必带内容' } });
       }
       let ext = '';
       try { const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); ext = seg.indexOf('.') >= 0 ? seg.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') : ''; } catch (e) {}
@@ -3396,7 +3414,8 @@ function cleanRuleGroupList(list) {
       name: String(g.name != null && g.name !== '' ? g.name : (key === '*' ? '默认（所有页面）' : key)).trim().slice(0, 200),
       kw: String(g.kw || '').trim().slice(0, 4000),
       ext: String(g.ext != null ? g.ext : 'svg').trim().slice(0, 500),
-      mb: clampInt(g.mb, 10, 1, 30)
+      mb: clampInt(g.mb, 10, 1, 30),
+      must: String(g.must || '').trim().slice(0, 4000)
     });
   }
   return out;
@@ -3422,7 +3441,7 @@ export async function handleAdminScrapeRuleGroupsSave(request, env) {
     if (!env.D1_DB) return json({ ok: false, error: 'D1 不可用' }, 500);
     // 确保至少存在默认组兜底
     if (!groups.some(function(g) { return g.key === '*'; })) {
-      groups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 });
+      groups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' });
     }
     await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .bind(SCRAPE_RULE_GROUPS_KEY, JSON.stringify(groups)).run();

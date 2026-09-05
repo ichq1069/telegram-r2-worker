@@ -117,7 +117,12 @@ a.link { color: #00d4ff; text-decoration: none; }
       <input type="number" id="scIgMb" placeholder="单张上限MB" value="10" min="1" max="30">
       <span class="ign-hint" id="scRulesHint">规则已保存</span>
     </div>
-    <div style="font-size:11px;color:#8a8aa8;margin-top:2px">忽略规则按「规则组」管理，不同网页可以各用各的组合：输入后自动保存到<b>当前生效的组</b>（顶部下拉可看到是哪个组、也能切换编辑别的组）；同一域名再次打开自动沿用，匹配不到时用「默认」规则组。规则对「拾取解析」和「直传」同时生效（命中即不解析/不入库）。规则组<b>存到云端数据库</b>：本页保存自动同步，任何浏览器/设备打开同一 API Key 都会拉到同一套规则组；离线或网络失败时自动回退用本机缓存。</div>
+    <div class="ign">
+      <span class="ig-label">必带内容</span>
+      <input type="text" id="scIgMust" placeholder="链接必须含以下内容才保留（逗号分隔，如 xhscdn；留空 = 不限）">
+      <span style="font-size:11px;color:#8a8aa8">与「忽略内容」互逆：未命中任一必带内容的链接会被过滤掉。留空则全部放行。</span>
+    </div>
+    <div style="font-size:11px;color:#8a8aa8;margin-top:2px">忽略规则按「规则组」管理，不同网页可以各用各的组合：输入后自动保存到<b>当前生效的组</b>（顶部下拉可看到是哪个组、也能切换编辑别的组）；同一域名再次打开自动沿用，匹配不到时用「默认」规则组。忽略规则对「拾取解析」和「直传」同时生效：命中忽略关键词/格式即不解析/不入库；填了必带内容则只保留包含其中任一关键词的链接。规则组<b>存到云端数据库</b>：本页保存自动同步，任何浏览器/设备打开同一 API Key 都会拉到同一套规则组；离线或网络失败时自动回退用本机缓存。</div>
     <div class="ign">
       <span class="ig-label">站点Cookie</span>
       <input type="password" id="scCookie" autocomplete="off" spellcheck="false" placeholder="粘贴该站登录 Cookie（浏览器 F12 → Network 任意请求头里整段复制）">
@@ -250,7 +255,7 @@ function enterDirectCandidates(list) {
   cands = candList;
   document.getElementById('scTitle').value = document.getElementById('scTitle').value.trim();
   document.getElementById('candCard').style.display = '';
-  renderGrid();
+  renderGrid(true);
   stopRunning();
   clearLocalJob();
   hideProg();
@@ -259,7 +264,7 @@ function enterDirectCandidates(list) {
   document.getElementById('scGrabStatus').textContent = '';
   var msg;
   if (!cands.length) msg = '未识别出可用图片：请粘贴以 .jpg/.png/.webp/.gif 等图片格式结尾的直链（每行一条）';
-  else msg = '直链识别成功：共 ' + cands.length + ' 张候选（已按忽略规则过滤），勾选后点「直传选中到 Tele 库」';
+  else msg = '直链识别成功：共 ' + cands.length + ' 张候选（已按忽略规则过滤），默认已全部勾选，可直接点「直传选中到 Tele 库」或手动调整';
   setStatus('scStatus', msg, cands.length ? 1 : 0);
 }
 function tiebaGuideHtml(url) {
@@ -346,7 +351,7 @@ function runPageAnalyze(url) {
   setLoading(btn, true, '拾取中...');
   setStatus('scStatus', '正在抓取页面并提取图片...', 1);
   var rules = readRules();
-  var payload = { url: url, ignore_kw: rules.kw, ignore_ext: rules.ext };
+  var payload = { url: url, ignore_kw: rules.kw, ignore_ext: rules.ext, must: rules.must };
   if (ckVal()) payload.cookie = ckVal();
   api('POST', '/admin/api/scrape/analyze', payload, 60000)
     .then(function(d) {
@@ -356,12 +361,12 @@ function runPageAnalyze(url) {
       document.getElementById('scTitle').value = decodeEnt(d.data && d.data.title);
       var card = document.getElementById('candCard');
       card.style.display = '';
-      renderGrid();
+      renderGrid(true);
       var rawN = (d.data && d.data.total) || cands.length;
       var filteredN = (d.data && d.data.filtered) || 0;
       var msg;
-      if (!cands.length) msg = '页面解析完成：共提取 ' + rawN + ' 张，全部被忽略规则过滤（' + filteredN + ' 张），请调整忽略关键词/格式后重新拾取';
-      else msg = '页面解析成功：找到 ' + cands.length + ' 张候选图片（提取 ' + rawN + ' 张，忽略规则过滤 ' + filteredN + ' 张），勾选后点「直传选中到 Tele 库」';
+      if (!cands.length) msg = '页面解析完成：共提取 ' + rawN + ' 张，全部被忽略规则过滤（' + filteredN + ' 张），请调整忽略关键词/必带内容/格式后重新拾取';
+      else msg = '页面解析成功：找到 ' + cands.length + ' 张候选图片（提取 ' + rawN + ' 张，忽略规则过滤 ' + filteredN + ' 张），默认已全部勾选，可直接点「直传选中到 Tele 库」或手动调整';
       setStatus('scStatus', msg, cands.length ? 1 : 0);
       document.getElementById('scGrabStatus').textContent = '';
       document.getElementById('scResult').innerHTML = '';
@@ -374,17 +379,17 @@ function runPageAnalyze(url) {
     .catch(function(e) { setLoading(btn, false, '拾取图片'); setStatus('scStatus', '请求失败: ' + e.message, 0); });
 }
 
-function renderGrid() {
+function renderGrid(preSel) {
   var g = document.getElementById('scGrid');
   var h = '';
   for (var i = 0; i < cands.length; i++) {
     var u = cands[i];
     var nm = u.replace(/^https?:\/\//, '').slice(0, 60);
-    h += '<label class="cand" data-i="' + i + '">' +
+    h += '<label class="cand' + (preSel ? ' sel' : '') + '" data-i="' + i + '">' +
       '<span class="ph"><span class="ph-ico">🖼</span>' +
       '<img loading="lazy" referrerpolicy="no-referrer" src="' + escStr(u) + '" alt="" onerror="imgErr(this)">' +
       '</span>' +
-      '<input type="checkbox" data-cand="' + i + '">' +
+      '<input type="checkbox" data-cand="' + i + '"' + (preSel ? ' checked' : '') + '>' +
       '<div class="nm" title="' + escStr(u) + '">' + escStr(nm) + '</div></label>';
   }
   document.getElementById('scCount').textContent = cands.length;
@@ -405,10 +410,19 @@ function updateSelCount() {
   document.getElementById('scSelCount').textContent = n;
   document.getElementById('scGrabBtn').disabled = n === 0;
 }
+function selectAllCands() {
+  document.querySelectorAll('input[data-cand]').forEach(function(cb) { cb.checked = true; var box = cb.closest('.cand'); if (box) box.classList.add('sel'); });
+  updateSelCount();
+}
+function clearSelCands() {
+  document.querySelectorAll('input[data-cand]').forEach(function(cb) { cb.checked = false; var box = cb.closest('.cand'); if (box) box.classList.remove('sel'); });
+  updateSelCount();
+}
 
 // ===== 忽略规则组（按域名自动匹配；解析/直传双生效；本机缓存 + 云端 D1 同步）=====
-// ruleGroups: [{ key:'*'|'tieba.baidu.com'|'baidu.com', name, kw, ext, mb }]
+// ruleGroups: [{ key:'*'|'tieba.baidu.com'|'baidu.com', name, kw, ext, mb, must }]
 // 匹配规则：URL 主机名 === key，或以 '.' + key 结尾（父域覆盖子域）；'*' = 默认组兜底
+// 规则语义：kw=忽略（链接含任一关键词即剔除）、ext=忽略格式、mb=单张上限MB、must=必带（填了则链接须含其中任一关键词才保留，留空不限）
 var GROUPS_KEY = 'scrapeRuleGroups';
 var ruleGroups = [];
 var rulesHintTimer = null;
@@ -418,7 +432,8 @@ function readRules() {
   return {
     kw: document.getElementById('scIgKw').value.trim(),
     ext: document.getElementById('scIgExt').value.trim(),
-    mb: parseInt(document.getElementById('scIgMb').value, 10) || 30
+    mb: parseInt(document.getElementById('scIgMb').value, 10) || 30,
+    must: document.getElementById('scIgMust').value.trim()
   };
 }
 function applyRules(r) {
@@ -426,10 +441,11 @@ function applyRules(r) {
   document.getElementById('scIgKw').value = r.kw || '';
   if (r.ext != null) document.getElementById('scIgExt').value = r.ext;
   if (r.mb > 0) document.getElementById('scIgMb').value = r.mb;
+  document.getElementById('scIgMust').value = r.must || '';
 }
 function groupNameOf(key) { return key === '*' ? '默认（所有页面）' : key; }
 function defaultGroupObj(key) {
-  return { key: key || '*', name: groupNameOf(key || '*'), kw: '', ext: 'svg', mb: 10 };
+  return { key: key || '*', name: groupNameOf(key || '*'), kw: '', ext: 'svg', mb: 10, must: '' };
 }
 // 云端上传（防抖）：把当前全量规则组保存到后端 D1 settings，跨设备共享
 function scheduleGroupCloudSync() {
@@ -461,7 +477,7 @@ function saveGroups() {
 }
 function defaultGroup() {
   for (var i = 0; i < ruleGroups.length; i++) { if (ruleGroups[i].key === '*') return ruleGroups[i]; }
-  var g = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 };
+  var g = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' };
   ruleGroups.unshift(g);
   return g;
 }
@@ -474,16 +490,17 @@ function loadGroups() {
     var s = localStorage.getItem(GROUPS_KEY);
     if (s) { ruleGroups = JSON.parse(s); if (!Array.isArray(ruleGroups)) ruleGroups = []; }
   } catch (e) { ruleGroups = []; }
+  ruleGroups.forEach(function(g) { if (g && typeof g === 'object' && g.must == null) g.must = ''; });
   if (!ruleGroups.length) {
     // 迁移旧的单条规则到「默认」组
-    var def = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 };
+    var def = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' };
     try {
       var o = JSON.parse(localStorage.getItem('scrapeRules') || 'null');
-      if (o) { def.kw = o.kw || ''; if (o.ext != null) def.ext = o.ext; if (o.mb > 0) def.mb = o.mb; }
+      if (o) { def.kw = o.kw || ''; if (o.ext != null) def.ext = o.ext; if (o.mb > 0) def.mb = o.mb; if (o.must != null) def.must = o.must; }
     } catch (e) {}
     ruleGroups.push(def);
   }
-  if (!groupByKey('*')) ruleGroups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10 });
+  if (!groupByKey('*')) ruleGroups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' });
 }
 function firstHttpOf(str) {
   var parts = String(str || '').split(/[\r\n,，;；]+/);
@@ -542,6 +559,7 @@ function flashRulesHint() {
   g.kw = document.getElementById('scIgKw').value.trim();
   g.ext = document.getElementById('scIgExt').value.trim();
   g.mb = parseInt(document.getElementById('scIgMb').value, 10) || 30;
+  g.must = document.getElementById('scIgMust').value.trim();
   saveGroups();
   var h = document.getElementById('scRulesHint');
   if (!h) return;
@@ -557,8 +575,8 @@ function bindCurrentDomain() {
   if (!h) { alert('请先在输入框填入网页或图片链接，才能确定要绑定的域名'); return; }
   var src = selectedGroup();
   var g = groupByKey(h);
-  if (!g) { g = { key: h, name: h, kw: '', ext: 'svg', mb: 10 }; ruleGroups.push(g); }
-  g.kw = src.kw; g.ext = src.ext; g.mb = src.mb;
+  if (!g) { g = { key: h, name: h, kw: '', ext: 'svg', mb: 10, must: '' }; ruleGroups.push(g); }
+  g.kw = src.kw; g.ext = src.ext; g.mb = src.mb; g.must = src.must || '';
   saveGroups();
   refreshGroupSelect(h);
   applyRules(g);
@@ -571,8 +589,8 @@ function createGroup() {
   var key = String(input || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./, '').split('/')[0].split(/[:?#]/)[0].toLowerCase() || '*';
   var src = selectedGroup();
   var g = groupByKey(key);
-  if (!g) { g = { key: key, name: key === '*' ? '默认（所有页面）' : key, kw: '', ext: 'svg', mb: 10 }; ruleGroups.push(g); }
-  g.kw = src.kw; g.ext = src.ext; g.mb = src.mb;
+  if (!g) { g = { key: key, name: key === '*' ? '默认（所有页面）' : key, kw: '', ext: 'svg', mb: 10, must: '' }; ruleGroups.push(g); }
+  g.kw = src.kw; g.ext = src.ext; g.mb = src.mb; g.must = src.must || '';
   saveGroups();
   refreshGroupSelect(key);
   applyRules(g);
@@ -613,11 +631,12 @@ function pullGroupsFromCloud() {
     })
     .catch(function() { /* 拉取失败：保留本机缓存使用，saveGroups 仍会尝试推云端 */ });
 }
-// 本地直链过滤（与后端一致的忽略规则：关键词/扩展名）
+// 本地直链过滤（与后端一致的规则：忽略关键词/扩展名 + 必带白名单）
 function localFilterUrls(list) {
   var r = readRules();
   var kws = r.kw.split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
   var exts = r.ext.split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase().replace(/^\./, ''); }).filter(Boolean);
+  var musts = r.must.split(/[,，;；]/).map(function(s) { return s.trim().toLowerCase(); }).filter(Boolean);
   var seen = {};
   var out = [];
   list.forEach(function(u) {
@@ -628,6 +647,12 @@ function localFilterUrls(list) {
     var m = low.match(/\.([a-z0-9]{1,8})(?:\?.*)?$/);
     var e = m ? m[1] : '';
     if (e && exts.indexOf(e) >= 0) return;
+    // 必带白名单：填了就必须命中其中至少一个，否则剔除（留空 = 不限）
+    if (musts.length) {
+      var hit = false;
+      for (var j = 0; j < musts.length; j++) { if (low.indexOf(musts[j]) >= 0) { hit = true; break; } }
+      if (!hit) return;
+    }
     out.push(u);
   });
   return out;
@@ -933,7 +958,7 @@ async function processOne(it) {
   var ctl = new AbortController();
   run.ctl = ctl;
   var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 240000);
-  var body = { url: it.u, title: job.title, tags: job.tags, level: job.level, ref: job.pageUrl, ignore_kw: job.kw, ignore_ext: job.ext, max_mb: job.mb, seq: it.seq || 0 };
+  var body = { url: it.u, title: job.title, tags: job.tags, level: job.level, ref: job.pageUrl, ignore_kw: job.kw, ignore_ext: job.ext, max_mb: job.mb, must: job.must || '', seq: it.seq || 0 };
   var gc = cookieForGrab(it.u, job.pageUrl, ckVal());
   if (gc) body.cookie = gc;
   try {
@@ -993,6 +1018,7 @@ function beginBatch() {
     kw: document.getElementById('scIgKw').value.trim(),
     ext: document.getElementById('scIgExt').value.trim(),
     mb: parseInt(document.getElementById('scIgMb').value, 10) || 30,
+    must: document.getElementById('scIgMust').value.trim(),
     items: urls.map(function(u, i) { return { u: u, seq: i + 1, st: 'pend', reason: '', id: null }; })
   };
   persistJob();
@@ -1074,16 +1100,10 @@ document.getElementById('scGrid').addEventListener('change', function(e) {
     updateSelCount();
   }
 });
-document.getElementById('scSelAll').addEventListener('click', function() {
-  document.querySelectorAll('input[data-cand]').forEach(function(cb) { cb.checked = true; var box = cb.closest('.cand'); if (box) box.classList.add('sel'); });
-  updateSelCount();
-});
-document.getElementById('scSelNone').addEventListener('click', function() {
-  document.querySelectorAll('input[data-cand]').forEach(function(cb) { cb.checked = false; var box = cb.closest('.cand'); if (box) box.classList.remove('sel'); });
-  updateSelCount();
-});
+document.getElementById('scSelAll').addEventListener('click', function() { selectAllCands(); });
+document.getElementById('scSelNone').addEventListener('click', function() { clearSelCands(); });
 document.getElementById('scSelSmall').addEventListener('click', function() {
-  document.querySelectorAll('input[data-cand]').forEach(function(cb) { cb.checked = false; var box = cb.closest('.cand'); if (box) box.classList.remove('sel'); });
+  clearSelCands();
   var n = Math.min(20, cands.length);
   for (var i = 0; i < n; i++) {
     var cb = document.querySelector('input[data-cand="' + i + '"]');
@@ -1122,6 +1142,7 @@ document.getElementById('scResult').addEventListener('dblclick', function(e) {
 document.getElementById('scIgKw').addEventListener('input', flashRulesHint);
 document.getElementById('scIgExt').addEventListener('input', flashRulesHint);
 document.getElementById('scIgMb').addEventListener('input', flashRulesHint);
+document.getElementById('scIgMust').addEventListener('input', flashRulesHint);
 document.getElementById('scRuleGroup').addEventListener('change', function() {
   applyRules(selectedGroup());
 });
