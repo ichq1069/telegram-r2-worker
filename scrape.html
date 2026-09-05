@@ -12,7 +12,8 @@ h1 { font-size: 22px; margin-bottom: 6px; color: #fff; }
 .sub { color: #8a8aa8; font-size: 13px; margin-bottom: 24px; line-height: 1.7; }
 .card { background: #181a30; border: 1px solid #2a2c4a; border-radius: 12px; padding: 18px; margin-bottom: 16px; }
 .input-group { display: flex; gap: 10px; }
-input[type=text], input[type=url], input[type=number] { flex: 1; background: #0f1020; color: #e8e8f8; border: 1px solid #3a3c5a; border-radius: 8px; padding: 10px 12px; font-size: 14px; outline: none; }
+input[type=text], input[type=url], input[type=number], textarea { flex: 1; background: #0f1020; color: #e8e8f8; border: 1px solid #3a3c5a; border-radius: 8px; padding: 10px 12px; font-size: 14px; outline: none; }
+textarea { resize: vertical; font-family: inherit; line-height: 1.5; }
 input:focus { border-color: #00d4ff; }
 .btn { background: #252848; color: #fff; border: 1px solid #3a3c5a; border-radius: 8px; padding: 10px 18px; font-size: 14px; cursor: pointer; white-space: nowrap; }
 .btn:hover { background: #2f3358; }
@@ -160,6 +161,21 @@ a.link { color: #00d4ff; text-decoration: none; }
     </div>
     <div class="tpick-body" id="tagPickBody"><span class="loading"></span>加载标签库中…</div>
     <div class="tpick-foot">标签库与 admin →「标签页」同步（可到 <a class="link" href="/admin#tags" target="_blank">admin 标签页</a> 增删）。选择后随本批图片一并入库。</div>
+  </div>
+</div>
+
+<div id="pastePickMask" class="tpick-mask" style="display:none" onclick="if(event.target===this)closePastePick()">
+  <div class="tpick-panel" style="width:min(720px,94vw)">
+    <div class="tpick-head">
+      <b>粘贴链接 / 分享文案 / 图片直链</b>
+      <span style="font-size:11px;color:#8a8aa8;flex:1">支持整段分享文案（自动提取其中的链接）、每行一条图片直链、<code>&lt;img&gt;</code> 片段</span>
+      <button class="btn ghost" type="button" onclick="closePastePick()" style="padding:6px 12px">取消</button>
+      <button class="btn primary" type="button" onclick="confirmPastePick()" style="padding:6px 16px">确定并拾取</button>
+    </div>
+    <div class="tpick-body" style="flex-direction:column;padding:12px 16px">
+      <textarea id="pastePickTa" rows="6" style="width:100%;background:#0f1020;color:#e8e8f8;border:1px solid #3a3c5a;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;outline:none;resize:vertical" placeholder="粘贴网页链接或整段分享文案（如小红书/微博/贴吧分享文本）或图片直链（每行一条）…"></textarea>
+    </div>
+    <div class="tpick-foot">粘贴后点「确定并拾取」，自动抓取页面图片或识别直链并列出候选，无需再手动点「拾取图片」。</div>
   </div>
 </div>
 
@@ -1020,14 +1036,35 @@ function handleStoredJobAfterAnalyze(pageUrl) {
   }
 }
 
+// ===== 粘贴即拾取 =====
+function pasteClipboardThenPick(txt) {
+  var inp = document.getElementById('scUrl');
+  var v = String(txt == null ? '' : txt).trim();
+  if (!v) { openPastePick(); return; }
+  inp.value = v;
+  analyze();
+}
+function openPastePick() {
+  if (run.running || run.paused) { setStatus('scGrabStatus', '直传进行中：请先暂停或等结束再粘贴', 0); return; }
+  var ta = document.getElementById('pastePickTa');
+  if (ta) { ta.value = document.getElementById('scUrl').value; ta.focus(); }
+  document.getElementById('pastePickMask').style.display = 'flex';
+}
+function closePastePick() { document.getElementById('pastePickMask').style.display = 'none'; }
+function confirmPastePick() {
+  var ta = document.getElementById('pastePickTa');
+  var v = ta ? ta.value : '';
+  closePastePick();
+  pasteClipboardThenPick(v);
+}
+
 document.getElementById('scAnalyzeBtn').addEventListener('click', analyze);
 document.getElementById('scUrl').addEventListener('keydown', function(e) { if (e.key === 'Enter') analyze(); });
 document.getElementById('scClearBtn').addEventListener('click', function() { document.getElementById('scUrl').value = ''; document.getElementById('scUrl').focus(); });
 document.getElementById('scPasteBtn').addEventListener('click', function() {
-  var inp = document.getElementById('scUrl');
   if (navigator.clipboard && navigator.clipboard.readText) {
-    navigator.clipboard.readText().then(function(t) { inp.value = t.trim(); inp.focus(); }).catch(function() { inp.focus(); });
-  } else { inp.focus(); }
+    navigator.clipboard.readText().then(pasteClipboardThenPick).catch(function() { openPastePick(); });
+  } else { openPastePick(); }
 });
 document.getElementById('scGrid').addEventListener('change', function(e) {
   var t = e.target;
