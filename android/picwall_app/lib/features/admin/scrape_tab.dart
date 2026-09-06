@@ -259,7 +259,7 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
         _field(_extCtrl, '忽略格式', '如 gif,webp'),
         _field(_mustCtrl, '必带内容', '链接必须包含的词'),
         _field(_cookieCtrl, 'Cookie（可选，贴吧/需登录站点）', '填登录 Cookie 提高抓取成功率',
-            multiLine: 2, mono: true),
+            multiLine: true, mono: true),
         if (_inputError != null) ...[
           const SizedBox(height: 8),
           Text(_inputError!,
