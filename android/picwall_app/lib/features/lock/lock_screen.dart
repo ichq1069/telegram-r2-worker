@@ -155,23 +155,20 @@ class _LockScreenState extends ConsumerState<LockScreen> {
                 onTap: _tap,
               ),
               const SizedBox(height: 12),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 200),
-                child: Text(
-                  _msg,
-                  key: ValueKey(_msg),
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: _error
-                        ? theme.colorScheme.error
-                        : theme.colorScheme.onSurfaceVariant,
-                  ),
+              SizedBox(
+                width: 240,
+                child: PatternConfirmBar(
+                  canSubmit: _seq.length >= 4,
+                  error: _error,
+                  hint: _msg,
+                  onSubmit: _submit,
+                  onClear: _clear,
                 ),
               ),
               const Spacer(flex: 1),
               if (_bioEnabled)
                 Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.only(bottom: 12),
                   child: OutlinedButton.icon(
                     onPressed: _checkingBio ? null : _unlockWithBio,
                     icon: _checkingBio
@@ -183,13 +180,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
                     label: const Text('指纹解锁'),
                   ),
                 ),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: TextButton(
-                  onPressed: _seq.isEmpty ? null : _clear,
-                  child: const Text('清除'),
-                ),
-              ),
+              const SizedBox(height: 24),
             ],
           ),
         ),
@@ -264,10 +255,10 @@ class _PatternPad extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final size = 240.0;
-    final r = 16.0;
+    const size = 240.0;
+    const r = 16.0;
     final centers = <Offset>[];
-    final step = (size - r * 2) / 2;
+    const step = (size - r * 2) / 2;
     for (var row = 0; row < 3; row++) {
       for (var col = 0; col < 3; col++) {
         centers.add(Offset(r + step * col, r + step * row));
@@ -314,7 +305,7 @@ class _PatternPad extends StatelessWidget {
                       ),
                       child: Center(
                         child: DecoratedBox(
-                          decoration: BoxDecoration(
+                          decoration: const BoxDecoration(
                             shape: BoxShape.circle,
                             color: Colors.transparent,
                           ),

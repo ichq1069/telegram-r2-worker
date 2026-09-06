@@ -20,7 +20,7 @@ class _LockSettingsSheetState extends ConsumerState<LockSettingsSheet> {
   /// null=不在创建流程；1=第一遍；2=第二遍确认。
   int? _createStep;
   List<int>? _firstSeq;
-  List<int> _cur = [];
+  final List<int> _cur = [];
   bool _error = false;
   String _hint = '';
   bool _saving = false;
@@ -129,7 +129,7 @@ class _LockSettingsSheetState extends ConsumerState<LockSettingsSheet> {
     try {
       await ref
           .read(settingsControllerProvider)
-          .saveAppLock(pattern: AppLock.encode(seq.join('-')));
+          .saveAppLock(enabled: true, pattern: AppLock.encode(seq.join('-')));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('解锁图案已设置，应用锁已启用')),
@@ -332,7 +332,7 @@ class PatternBoard extends StatelessWidget {
     const size = 200.0;
     const r = 15.0;
     final centers = <Offset>[];
-    final step = (size - r * 2) / 2;
+    const step = (size - r * 2) / 2;
     for (var row = 0; row < 3; row++) {
       for (var col = 0; col < 3; col++) {
         centers.add(Offset(r + step * col, r + step * row));
