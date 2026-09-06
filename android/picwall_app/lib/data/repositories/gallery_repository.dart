@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
 
 import '../../services/api_client.dart';
+import '../models/admin_file.dart';
 import '../models/media_item.dart';
 import '../models/user.dart';
 /// 分页结果封装（兼容 gallery/data 的 data.items 与 user/files 的顶层 total）。
@@ -204,5 +205,119 @@ class GalleryRepository {
     final d = body['data'];
     if (d is Map) return Map<String, dynamic>.from(d);
     return const {};
+  }
+
+  Map<String, dynamic> _adminQuery(String adminKey) => {'api_key': adminKey};
+
+  /// 回收站列表（GET /admin/api/trash）。
+  Future<AdminListPage<AdminFile>> adminTrash(
+    String adminKey, {
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final resp = await _api.getRaw(
+      '/admin/api/trash',
+      query: {..._adminQuery(adminKey), 'page': page, 'page_size': pageSize},
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '获取回收站失败').toString());
+    }
+    return _adminPage(resp, AdminFile.fromJson);
+  }
+
+  /// 回收站恢复（POST /admin/api/trash/restore，ids 空数组 = 恢复全部）。
+  Future<int> adminTrashRestore(
+    String adminKey, {
+    List<String> ids = const [],
+  }) async {
+    final resp = await _api.postRaw(
+      '/admin/api/trash/restore',
+      body: {'ids': ids},
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '恢复失败').toString());
+    }
+    return resp['restored'] is num ? (resp['restored'] as num).toInt() : 0;
+  }
+
+  /// 彻底删除回收站文件（DELETE /admin/api/files?...&purge=1）。
+  /// [all]=true 时 purge=1&all=1 清空整个回收站。
+  Future<int> adminTrashPurge(
+    String adminKey, {
+    List<String> ids = const [],
+    bool all = false,
+  }) async {
+    final resp = await _api.deleteRaw(
+      '/admin/api/files',
+      query: {
+        ..._adminQuery(adminKey),
+        if (all) ...{'purge': '1', 'all': '1'},
+        if (!all && ids.isNotEmpty) ...{'ids': ids.join(',')},
+      },
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '删除失败').toString());
+    }
+    return resp['deleted'] is num ? (resp['deleted'] as num).toInt() : 0;
+  }
+
+  /// 未入库列表（GET /admin/api/unsaved，processing_state != completed）。
+  Future<AdminListPage<AdminFile>> adminUnsaved(
+    String adminKey, {
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final resp = await _api.getRaw(
+      '/admin/api/unsaved',
+      query: {..._adminQuery(adminKey), 'page': page, 'page_size': pageSize},
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '获取未入库列表失败').toString());
+    }
+    return _adminPage(resp, AdminFile.fromJson);
+  }
+
+  /// 未入库重试（POST /admin/api/unsaved/retry）。
+  /// [ids] 非空重试指定记录；为空数组则服务端按默认批量兜底（8 条），
+  /// 如需全部重试传 [all]=true（服务端最多 50 条）。
+  Future<({int started, int total})> adminUnsavedRetry(
+    String adminKey, {
+    List<String> ids = const [],
+    bool all = false,
+  }) async {
+    final resp = await _api.postRaw(
+      '/admin/api/unsaved/retry',
+      body: all ? {'all': true} : {'ids': ids},
+      query: _adminQuery(adminKey),
+      noKey: true,
+      long: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '重试失败').toString());
+    }
+    return (
+      started: resp['started'] is num ? (resp['started'] as num).toInt() : 0,
+      total: resp['total'] is num ? (resp['total'] as num).toInt() : 0,
+    );
+  }
+
+  AdminListPage<T> _adminPage<T>(
+    Map<String, dynamic> resp,
+    T Function(Map<String, dynamic>) parse,
+  ) {
+    final d = resp['data'];
+    if (d is Map) return AdminListPage.fromJson(Map<String, dynamic>.from(d), parse);
+    return AdminListPage<T>(
+      items: const [],
+      total: 0,
+      page: 1,
+      totalPages: 1,
+      pageSize: 0,
+    );
   }
 }
