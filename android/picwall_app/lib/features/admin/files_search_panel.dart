@@ -81,10 +81,12 @@ class _FilesSearchPanelState extends ConsumerState<FilesSearchPanel> {
         setState(() => _error = e.toString());
       }
     } finally {
-      if (mounted) setState(() {
-        _loading = false;
-        _loadingMore = false;
-      });
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadingMore = false;
+        });
+      }
     }
   }
 
