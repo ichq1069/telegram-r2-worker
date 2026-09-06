@@ -459,4 +459,49 @@ class GalleryRepository {
     }
     throw ApiException('服务器返回结构异常');
   }
+
+  /// 读取采集域名规则组（GET /admin/api/scrape/rule-groups）。
+  Future<List<RuleGroup>> adminRuleGroups(String adminKey) async {
+    final resp = await _api.getRaw(
+      '/admin/api/scrape/rule-groups',
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '读取规则组失败').toString());
+    }
+    return _groupsOf(resp['data']);
+  }
+
+  /// 全量覆盖保存采集规则组（POST /admin/api/scrape/rule-groups）。
+  Future<List<RuleGroup>> adminRuleGroupsSave(
+    String adminKey,
+    List<RuleGroup> groups,
+  ) async {
+    final resp = await _api.postRaw(
+      '/admin/api/scrape/rule-groups',
+      body: {'groups': [for (final g in groups) g.toJson()]},
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '保存规则组失败').toString());
+    }
+    return _groupsOf(resp['data']);
+  }
+
+  List<RuleGroup> _groupsOf(dynamic d) {
+    final groups = <RuleGroup>[];
+    if (d is Map) {
+      final raw = d['groups'];
+      if (raw is List) {
+        for (final e in raw) {
+          if (e is Map) {
+            groups.add(RuleGroup.fromJson(Map<String, dynamic>.from(e)));
+          }
+        }
+      }
+    }
+    return groups;
+  }
 }

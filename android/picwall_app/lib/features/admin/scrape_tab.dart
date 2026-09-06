@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
+import '../../data/models/admin_file.dart';
 import '../../services/providers.dart';
+import 'rules_page.dart';
 
 /// 网页采集：输入链接(可选规则) → 候选缩略图网格(默认全选) → 逐张入库进度。
 /// 依赖服务端 /admin/api/scrape/analyze 与 grab_one（忽略规则服务端强校验）。
@@ -79,6 +81,62 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
   }
 
   String get _cookie => _cookieCtrl.text.trim();
+
+  Future<void> _openRuleGroups() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => RulesPage(adminKey: widget.adminKey),
+    ));
+  }
+
+  /// 按当前链接域名套用云端规则组（优先精确域名，回退 `*` 默认组）。
+  Future<void> _applyDomainRules() async {
+    var url = _urlCtrl.text.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = 'https://$url';
+    }
+    final uri = Uri.tryParse(url);
+    final host = uri?.host ?? '';
+    if (host.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先输入网页链接')),
+      );
+      return;
+    }
+    try {
+      final groups =
+          await ref.read(galleryRepositoryProvider).adminRuleGroups(widget.adminKey);
+      var g = groups.firstWhere(
+        (x) => x.key == host || (host.startsWith('www.') && x.key == host.substring(4)),
+        orElse: () => const RuleGroup(key: ''),
+      );
+      if (g.key.isEmpty) {
+        g = groups.firstWhere(
+          (x) => x.key == '*',
+          orElse: () => const RuleGroup(key: ''),
+        );
+      }
+      if (g.key.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('云端暂无「$host」规则，可在规则组管理里新建')),
+        );
+        return;
+      }
+      setState(() {
+        _kwCtrl.text = g.kw;
+        _extCtrl.text = g.ext;
+        _mustCtrl.text = g.must;
+        _maxMbCtrl.text = g.mb > 0 ? g.mb.toString() : '';
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('已套用「${g.key == '*' ? '默认' : g.key}」规则组'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+    }
+  }
 
   Future<void> _analyze() async {
     final url = _urlCtrl.text.trim();
@@ -265,7 +323,27 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
           Text(_inputError!,
               style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
         ],
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _applyDomainRules,
+                icon: const Icon(Icons.rule, size: 18),
+                label: const Text('套用域名规则'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _openRuleGroups,
+                icon: const Icon(Icons.tune, size: 18),
+                label: const Text('规则组管理'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
         FilledButton.icon(
           onPressed: _analyzing ? null : _analyze,
           icon: _analyzing

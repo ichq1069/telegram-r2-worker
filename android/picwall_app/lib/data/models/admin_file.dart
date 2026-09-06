@@ -156,3 +156,42 @@ class R2ListPage {
     );
   }
 }
+
+/// 采集域名规则组（key 为域名或 `*` 默认组）。
+class RuleGroup {
+  const RuleGroup({
+    required this.key,
+    this.name = '',
+    this.kw = '',
+    this.ext = '',
+    this.mb = 10,
+    this.must = '',
+  });
+
+  final String key;
+  final String name;
+  final String kw;
+  final String ext;
+  final int mb;
+  final String must;
+
+  factory RuleGroup.fromJson(Map<String, dynamic> j) {
+    return RuleGroup(
+      key: (j['key'] ?? '').toString(),
+      name: (j['name'] ?? '').toString(),
+      kw: (j['kw'] ?? '').toString(),
+      ext: (j['ext'] ?? '').toString(),
+      mb: j['mb'] is num ? (j['mb'] as num).toInt() : 10,
+      must: (j['must'] ?? '').toString(),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'key': key,
+        'name': name,
+        'kw': kw,
+        'ext': ext,
+        'mb': mb,
+        'must': must,
+      };
+}
