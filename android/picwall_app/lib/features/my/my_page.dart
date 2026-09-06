@@ -7,6 +7,7 @@ import '../../services/providers.dart';
 import '../auth/login_page.dart';
 import '../auth/session_controller.dart';
 import '../library/local_grid_page.dart';
+import '../sync/sync_page.dart';
 import '../upload/upload_page.dart';
 import 'my_files_page.dart';
 
@@ -69,6 +70,8 @@ class _MyPageState extends ConsumerState<MyPage> {
             _ProfileCard(session: session, quota: _quota),
             const SizedBox(height: 8),
             _entry(Icons.cloud_upload_outlined, '上传图片', _openUpload),
+            _entry(Icons.photo_library_outlined, '相册同步',
+                () => _push(const SyncPage())),
             _entry(Icons.photo_outlined, '我的图片', () => _push(const MyFilesPage())),
             _entry(Icons.favorite_outline, '我的收藏', () => _push(const LocalGridPage(
                   title: '我的收藏',

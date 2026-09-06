@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/local/local_db.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/gallery_repository.dart';
+import '../features/upload/upload_engine.dart';
 import 'api_client.dart';
 import 'secure_store.dart';
 import 'settings.dart';
@@ -44,4 +45,22 @@ final galleryRepositoryProvider = Provider<GalleryRepository>(
 /// 本地库（收藏/历史，sqflite）。懒加载：仅进入收藏/历史/详情页时打开。
 final localDbProvider = FutureProvider<LocalDb>(
   (ref) => LocalDb.open(),
+);
+
+/// 全局上传引擎：上传页与相册同步共享同一队列实例。
+///
+/// 依赖 localDb / galleryRepository / settings；在 provider 层完成懒打开与恢复。
+final uploadEngineProvider = FutureProvider<UploadEngine>(
+  (ref) async {
+    final db = await ref.watch(localDbProvider.future);
+    final repo = ref.watch(galleryRepositoryProvider);
+    final wifiOnly = ref.watch(settingsControllerProvider).settings.wifiOnlyUpload;
+    final engine = UploadEngine(
+      repository: repo,
+      db: db,
+      wifiOnly: wifiOnly,
+    );
+    await engine.loadFromDb();
+    return engine;
+  },
 );

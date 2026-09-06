@@ -12,6 +12,7 @@ import '../../services/providers.dart';
 import 'upload_engine.dart';
 
 /// 上传页：三来源（相册/拍照/URL）+ 队列管理 + WiFi-only。
+/// 与相册同步共用全局 [uploadEngineProvider] 队列实例。
 class UploadPage extends ConsumerStatefulWidget {
   const UploadPage({super.key});
 
@@ -22,51 +23,40 @@ class UploadPage extends ConsumerStatefulWidget {
 class _UploadPageState extends ConsumerState<UploadPage> {
   final _tagsCtrl = TextEditingController();
   final _picker = ImagePicker();
-  UploadEngine? _engine;
   StreamSubscription<List<ConnectivityResult>>? _connSub;
-  bool _loading = true;
+  UploadEngine? _engine;
+  bool _watched = false;
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    _initEngine();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _boot());
   }
 
-  Future<void> _initEngine() async {
+  Future<void> _boot() async {
     try {
-      final db = await ref.read(localDbProvider.future);
-      final settings =
-          ref.read(settingsControllerProvider).settings.wifiOnlyUpload;
-      final engine = UploadEngine(
-        repository: ref.read(galleryRepositoryProvider),
-        db: db,
-        wifiOnly: settings,
-      );
-      engine.addListener(_onEngine);
-      await engine.loadFromDb();
-      _connSub = Connectivity().onConnectivityChanged.listen((results) {
-        _onNetwork(results);
-      });
-      if (mounted) {
-        setState(() {
-          _engine = engine;
-          _loading = false;
-        });
-      }
-      // 重新进入页面：恢复中断的队列（WiFi-only 下探测不到则保持挂起态）。
+      final engine = await ref.read(uploadEngineProvider.future);
+      if (!mounted) return;
+      _attach(engine);
       await engine.start();
     } catch (_) {
       if (mounted) {
-        setState(() {
-          _loading = false;
-          _engine = null;
-        });
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('本地库初始化失败，无法使用上传')),
+          const SnackBar(content: Text('上传引擎初始化失败')),
         );
       }
     }
+  }
+
+  void _attach(UploadEngine engine) {
+    if (_watched) return;
+    _watched = true;
+    _engine = engine;
+    engine.addListener(_onEngine);
+    _connSub = Connectivity().onConnectivityChanged.listen((results) {
+      _onNetwork(results);
+    });
   }
 
   void _onEngine() {
@@ -89,7 +79,6 @@ class _UploadPageState extends ConsumerState<UploadPage> {
   void dispose() {
     _connSub?.cancel();
     _engine?.removeListener(_onEngine);
-    _engine?.dispose();
     _tagsCtrl.dispose();
     super.dispose();
   }
@@ -231,19 +220,28 @@ class _UploadPageState extends ConsumerState<UploadPage> {
 
   @override
   Widget build(BuildContext context) {
+    final asyncEngine = ref.watch(uploadEngineProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('上传')),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _engine == null
-              ? const Center(child: Text('上传不可用'))
-              : _buildBody(context),
+      body: asyncEngine.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, __) => const Center(child: Text('上传引擎不可用')),
+        data: (engine) {
+          _engine = engine;
+          if (!_watched) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _attach(engine);
+              engine.start();
+            });
+          }
+          return _buildBody(context, engine);
+        },
+      ),
     );
   }
 
-  Widget _buildBody(BuildContext context) {
+  Widget _buildBody(BuildContext context, UploadEngine engine) {
     final theme = Theme.of(context);
-    final engine = _engine!;
     final subtitleColor = theme.colorScheme.onSurfaceVariant;
 
     return ListView(

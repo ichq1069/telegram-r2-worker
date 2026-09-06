@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:sqflite/sqflite.dart';
 
+import '../models/album_sync_state.dart';
 import '../models/media_item.dart';
 import '../models/upload_task.dart';
 
@@ -35,7 +36,7 @@ class LocalDb {
     final path = '${await getDatabasesPath()}/$_dbName';
     final db = await openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE favorites(
@@ -52,10 +53,14 @@ class LocalDb {
           )
         ''');
         await _createUploadQueue(db);
+        await _createSyncTables(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
           await _createUploadQueue(db);
+        }
+        if (oldVersion < 3) {
+          await _createSyncTables(db);
         }
       },
     );
@@ -174,6 +179,116 @@ class LocalDb {
     );
     final tasks = rows.map((r) => UploadTask.fromDb(r)).toList();
     return tasks.where((t) => t.state != UploadState.done).toList();
+  }
+
+  // ---------------- 相册同步 ----------------
+
+  static Future<void> _createSyncTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_state(
+        album_id TEXT PRIMARY KEY,
+        album_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        cursor TEXT,
+        last_sync INTEGER,
+        synced_count INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS synced_assets(
+        asset_id TEXT PRIMARY KEY,
+        uploaded_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_synced_assets_id ON synced_assets(asset_id)');
+  }
+
+  Future<void> saveAlbumSync(AlbumSyncState state) async {
+    await _db.insert('sync_state', state.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  /// 将某相册设为唯一启用的同步相册（其它全部停用）。
+  Future<void> setEnabledAlbum(String albumId, String albumName) async {
+    await _db.update('sync_state', {'enabled': 0});
+    await _db.insert(
+      'sync_state',
+      AlbumSyncState(albumId: albumId, albumName: albumName, enabled: true)
+          .toDb(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> disableAllSyncAlbums() async {
+    await _db.update('sync_state', {'enabled': 0});
+  }
+
+  Future<AlbumSyncState?> getEnabledAlbum() async {
+    final rows = await _db.query(
+      'sync_state',
+      where: 'enabled = 1',
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return AlbumSyncState.fromDb(rows.first);
+  }
+
+  Future<AlbumSyncState?> getAlbumSync(String albumId) async {
+    final rows = await _db.query(
+      'sync_state',
+      where: 'album_id = ?',
+      whereArgs: [albumId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return AlbumSyncState.fromDb(rows.first);
+  }
+
+  Future<void> updateAlbumSyncProgress(
+    String albumId, {
+    String? cursorAssetId,
+    int syncedCount = 0,
+    bool updateLastSync = false,
+  }) async {
+    final state = await getAlbumSync(albumId);
+    if (state == null) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db.update(
+      'sync_state',
+      {
+        'cursor': cursorAssetId ?? state.cursorAssetId,
+        'synced_count': state.syncedCount + syncedCount,
+        'last_sync': updateLastSync ? now : state.lastSync?.millisecondsSinceEpoch,
+      },
+      where: 'album_id = ?',
+      whereArgs: [albumId],
+    );
+  }
+
+  Future<void> markAssetSynced(String assetId) async {
+    await _db.insert(
+      'synced_assets',
+      {'asset_id': assetId, 'uploaded_at': DateTime.now().millisecondsSinceEpoch},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  Future<bool> isAssetSynced(String assetId) async {
+    final rows = await _db.query(
+      'synced_assets',
+      columns: ['asset_id'],
+      where: 'asset_id = ?',
+      whereArgs: [assetId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  /// 一次取出所有已同步 asset id（用于一轮扫描的去重集合）。
+  Future<Set<String>> loadAllSyncedAssetIds() async {
+    final rows = await _db.query('synced_assets', columns: ['asset_id']);
+    return rows.map((r) => (r['asset_id'] as String?) ?? '').where((s) => s.isNotEmpty).toSet();
   }
 
   List<LocalEntry> _rowsToEntries(List<Map<String, Object?>> rows, String timeCol) {
