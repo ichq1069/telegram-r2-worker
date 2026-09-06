@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../services/debug_service.dart';
+import '../../services/debug_service.dart';
 
 /// 调试模式下的错误浮层：右上角红色角标，点击展开最近错误列表。
 class DebugErrorOverlay extends StatefulWidget {

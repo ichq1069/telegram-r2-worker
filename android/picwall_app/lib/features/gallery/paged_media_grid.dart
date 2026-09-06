@@ -182,38 +182,3 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
     );
   }
 }
-
-class _CenterBox extends StatelessWidget {
-  const _CenterBox({
-    required this.icon,
-    required this.text,
-    required this.action,
-  });
-
-  final IconData icon;
-  final String text;
-  final Widget action;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 48, color: Colors.white24),
-          const SizedBox(height: 12),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Text(
-              text,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white54),
-            ),
-          ),
-          const SizedBox(height: 18),
-          action,
-        ],
-      ),
-    );
-  }
-}
