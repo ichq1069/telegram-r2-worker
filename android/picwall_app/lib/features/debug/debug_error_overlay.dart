@@ -26,10 +26,11 @@ class _DebugErrorOverlayState extends State<DebugErrorOverlay> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_svc.enabled) return widget.child;
     return Stack(
       children: [
         widget.child,
-        if (_svc.enabled && _count > 0)
+        if (_count > 0)
           Positioned(
             top: MediaQuery.of(context).padding.top + 4,
             right: 8,
