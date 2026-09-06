@@ -6,6 +6,7 @@ import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
+import '../../ui/app_widgets.dart';
 import '../detail/detail_page.dart';
 import 'media_thumb.dart';
 
@@ -131,20 +132,20 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
 
   Widget _body(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const AppLoadingIndicator();
     }
     if (_hasError) {
-      return _CenterBox(
-        icon: Icons.cloud_off,
-        text: _errorText,
-        action: FilledButton(onPressed: _loadFirst, child: const Text('重试')),
+      return AppErrorState(
+        message: _errorText,
+        onRetry: _loadFirst,
       );
     }
     if (_items.isEmpty) {
-      return _CenterBox(
+      return AppEmptyState(
         icon: Icons.image_not_supported_outlined,
         text: '还没有内容',
-        action: FilledButton(onPressed: _loadFirst, child: const Text('刷新')),
+        actionLabel: '刷新',
+        onAction: _loadFirst,
       );
     }
     return LayoutBuilder(
@@ -171,13 +172,7 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
                   width: double.infinity,
                   child: Padding(
                     padding: EdgeInsets.all(16),
-                    child: Center(
-                      child: SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      ),
-                    ),
+                    child: AppLoadingIndicator(size: 22, strokeWidth: 2),
                   ),
                 ),
             ],

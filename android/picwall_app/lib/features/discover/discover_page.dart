@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/models/media_item.dart';
 import '../../services/api_client.dart';
 import '../../services/providers.dart';
+import '../../ui/app_widgets.dart';
 import '../detail/detail_page.dart';
 import '../gallery/media_thumb.dart';
 
@@ -128,41 +129,20 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
 
   Widget _body(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+      return const AppLoadingIndicator();
     }
     if (_hasError) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.cloud_off, size: 48, color: Colors.white24),
-            const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
-              child: Text(
-                _errorText,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white54),
-              ),
-            ),
-            const SizedBox(height: 18),
-            FilledButton(onPressed: _loadRandom, child: const Text('重试')),
-          ],
-        ),
+      return AppErrorState(
+        message: _errorText,
+        onRetry: _loadRandom,
       );
     }
     if (_items.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.inbox_outlined, size: 52, color: Colors.white24),
-            const SizedBox(height: 12),
-            const Text('当前没有可推荐的', style: TextStyle(color: Colors.white54)),
-            const SizedBox(height: 16),
-            FilledButton(onPressed: _loadRandom, child: const Text('换一批')),
-          ],
-        ),
+      return AppEmptyState(
+        icon: Icons.inbox_outlined,
+        text: '当前没有可推荐的',
+        actionLabel: '换一批',
+        onAction: _loadRandom,
       );
     }
     return RefreshIndicator(

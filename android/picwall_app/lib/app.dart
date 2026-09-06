@@ -11,6 +11,7 @@ import 'features/settings/onboarding_page.dart';
 import 'features/lock/lock_screen.dart';
 import 'features/debug/debug_error_overlay.dart';
 import 'services/providers.dart';
+import 'ui/app_widgets.dart';
 
 /// 全局根导航 key：切后台补锁屏覆盖路由用。
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -159,7 +160,7 @@ class _Splash extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
-      body: Center(child: CircularProgressIndicator()),
+      body: AppLoadingIndicator(),
     );
   }
 }
