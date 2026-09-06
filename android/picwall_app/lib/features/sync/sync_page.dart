@@ -152,6 +152,16 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     setState(() => _busy = true);
     try {
       if (value) {
+        // 请求相册权限
+        final state = await PhotoManager.requestPermissionExtend();
+        if (!state.isAuth) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('需要相册权限才能同步')),
+            );
+          }
+          return;
+        }
         await SyncService.enableAuto();
         if (!_running && _enabled != null) {
           await SyncService.startPass();
@@ -407,8 +417,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
 
   static String _fmtTime(DateTime? t) {
     if (t == null) return '从未';
+    final bjt = t.toUtc().add(const Duration(hours: 8));
     String two(int v) => v.toString().padLeft(2, '0');
-    return '${t.year}-${two(t.month)}-${two(t.day)} '
-        '${two(t.hour)}:${two(t.minute)}';
+    return '${bjt.year}-${two(bjt.month)}-${two(bjt.day)} '
+        '${two(bjt.hour)}:${two(bjt.minute)}';
   }
 }

@@ -24,9 +24,16 @@ String fmtCount(int n) {
   return buf.toString();
 }
 
-/// ISO 时间戳截短为 `yyyy-MM-dd HH:mm`。
+/// ISO 时间戳转北京时间 `yyyy-MM-dd HH:mm`。
 String fmtIso(String s) {
-  if (s.length < 19) return s;
-  final v = s.replaceAll('T', ' ');
-  return v.substring(0, 16);
+  if (s.isEmpty) return '-';
+  final dt = DateTime.tryParse(s);
+  if (dt == null) return s;
+  final bjt = dt.toUtc().add(const Duration(hours: 8));
+  final y = bjt.year;
+  final m = bjt.month.toString().padLeft(2, '0');
+  final d = bjt.day.toString().padLeft(2, '0');
+  final h = bjt.hour.toString().padLeft(2, '0');
+  final min = bjt.minute.toString().padLeft(2, '0');
+  return '$y-$m-$d $h:$min';
 }

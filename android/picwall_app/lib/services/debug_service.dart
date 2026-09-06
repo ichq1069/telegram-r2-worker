@@ -50,9 +50,10 @@ class DebugError {
   final DateTime time;
 
   String get timeStr {
-    final h = time.hour.toString().padLeft(2, '0');
-    final m = time.minute.toString().padLeft(2, '0');
-    final s = time.second.toString().padLeft(2, '0');
+    final bjt = time.toUtc().add(const Duration(hours: 8));
+    final h = bjt.hour.toString().padLeft(2, '0');
+    final m = bjt.minute.toString().padLeft(2, '0');
+    final s = bjt.second.toString().padLeft(2, '0');
     return '$h:$m:$s';
   }
 }

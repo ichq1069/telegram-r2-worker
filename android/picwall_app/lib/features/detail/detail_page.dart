@@ -4,9 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:video_player/video_player.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/constants.dart';
+import '../../core/time_utils.dart';
 import '../../data/models/media_item.dart';
 import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
@@ -99,18 +100,6 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   void _showDetail() {
     final item = _current;
-    final rows = <_DetailRow>[
-      if (item.title.isNotEmpty) _DetailRow('文件名', item.title),
-      _DetailRow('类型', item.fileTypeLabel),
-      if (item.width != null && item.height != null)
-        _DetailRow('尺寸', '${item.width} × ${item.height}'),
-      if (item.fileSize != null)
-        _DetailRow('大小', _fmtSize(item.fileSize!)),
-      if (item.source.isNotEmpty) _DetailRow('来源', item.source),
-      if (item.createdAt.isNotEmpty) _DetailRow('时间', item.createdAt),
-      if (item.tags.isNotEmpty) _DetailRow('标签', item.tags.join(', ')),
-      _DetailRow('等级', item.level.label),
-    ];
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -119,9 +108,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.4,
+        initialChildSize: 0.5,
         minChildSize: 0.2,
-        maxChildSize: 0.7,
+        maxChildSize: 0.8,
         expand: false,
         builder: (ctx, ctrl) => ListView(
           controller: ctrl,
@@ -129,34 +118,57 @@ class _DetailPageState extends ConsumerState<DetailPage> {
           children: [
             Center(
               child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(2),
-                ),
+                width: 36, height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
               ),
             ),
             const SizedBox(height: 16),
             const Text('文件详情',
                 style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
-            for (final r in rows) ...[
+            if (item.title.isNotEmpty) _detailRow('文件名', item.title),
+            _detailRow('类型', item.fileTypeLabel),
+            if (item.width != null && item.height != null)
+              _detailRow('尺寸', '${item.width} × ${item.height}'),
+            if (item.fileSize != null) _detailRow('大小', _fmtSize(item.fileSize!)),
+            if (item.source.isNotEmpty) _detailRow('来源', item.source),
+            if (item.createdAt.isNotEmpty) _detailRow('时间', BJT.formatDateTime(item.createdAt)),
+            _detailRow('等级', item.level.label),
+            if (item.tags.isNotEmpty) ...[
+              const SizedBox(height: 4),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SizedBox(
+                  const SizedBox(
                     width: 64,
-                    child: Text(r.label,
-                        style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                    child: Text('标签', style: TextStyle(color: Colors.white54, fontSize: 13)),
                   ),
                   Expanded(
-                    child: Text(r.value,
-                        style: const TextStyle(color: Colors.white, fontSize: 13)),
+                    child: Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      children: [
+                        for (final tag in item.tags)
+                          GestureDetector(
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              Navigator.pop(context); // close detail page
+                              // TODO: navigate to gallery with tag filter
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF6C7CFF).withValues(alpha: 0.25),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(tag, style: const TextStyle(color: Color(0xFF9FA8FF), fontSize: 12)),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
             ],
             const SizedBox(height: 8),
             Align(
@@ -176,6 +188,57 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         ),
       ),
     );
+  }
+
+  static Widget _detailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 64,
+            child: Text(label, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+          ),
+          Expanded(
+            child: Text(value, style: const TextStyle(color: Colors.white, fontSize: 13)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _downloadVideo() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final item = _current;
+      final resp = await ref.read(apiClientProvider).dio.get<List<int>>(
+        item.url,
+        options: Options(responseType: ResponseType.bytes),
+      );
+      final bytes = resp.data;
+      if (bytes == null || bytes.isEmpty) throw StateError('empty');
+      final accessible = await Gal.hasAccess();
+      if (!accessible) {
+        final granted = await Gal.requestAccess();
+        if (!granted) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('需要相册权限才能保存')));
+          return;
+        }
+      }
+      await Gal.putImageBytes(Uint8List.fromList(bytes),
+          name: item.title.isNotEmpty ? item.title : null);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('视频已保存到相册')));
+    } catch (e) {
+      DebugService.instance.recordError('DetailPage.downloadVideo', e);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('下载失败：请检查网络')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   static String _fmtSize(int bytes) {
@@ -319,6 +382,12 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                       onTap: _save,
                     ),
                     _ActionBtn(icon: Icons.share_outlined, label: '分享', onTap: _share),
+                    if (_current.isVideo)
+                      _ActionBtn(
+                        icon: Icons.download_outlined,
+                        label: _saving ? '下载中…' : '下载',
+                        onTap: _downloadVideo,
+                      ),
                     _ActionBtn(icon: Icons.info_outline, label: '详情', onTap: _showDetail),
                   ],
                 ),
@@ -354,7 +423,7 @@ class _MediaViewer extends StatelessWidget {
       color: Colors.black,
       alignment: Alignment.center,
       child: item.isVideo
-          ? _VideoTile(url: item.url, apiClient: apiClient)
+          ? _VideoTile(url: item.url, item: item, apiClient: apiClient)
           : InteractiveViewer(
               maxScale: 5,
               child: Image.network(
@@ -375,156 +444,118 @@ class _MediaViewer extends StatelessWidget {
   }
 }
 
-/// 视频查看：首次点击初始化播放器（延迟联网），支持播放/暂停、循环。
-class _VideoTile extends StatefulWidget {
-  const _VideoTile({required this.url, required this.apiClient});
+/// 视频查看：点击用外部播放器打开，支持下载。
+class _VideoTile extends StatelessWidget {
+  const _VideoTile({required this.url, required this.item, required this.apiClient});
 
   final String url;
+  final MediaItem item;
   final ApiClient apiClient;
 
   @override
-  State<_VideoTile> createState() => _VideoTileState();
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      child: Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.play_circle_outline, size: 80, color: Colors.white54),
+            const SizedBox(height: 12),
+            const Text('点击播放视频', style: TextStyle(color: Colors.white70, fontSize: 15)),
+            const SizedBox(height: 20),
+            _VideoDownloadBtn(url: url, item: item, apiClient: apiClient),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
-class _VideoTileState extends State<_VideoTile> {
-  VideoPlayerController? _controller;
-  bool _loading = false;
-  bool _failed = false;
+/// 视频下载按钮
+class _VideoDownloadBtn extends StatefulWidget {
+  const _VideoDownloadBtn({required this.url, required this.item, required this.apiClient});
+
+  final String url;
+  final MediaItem item;
+  final ApiClient apiClient;
 
   @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
+  State<_VideoDownloadBtn> createState() => _VideoDownloadBtnState();
+}
 
-  Future<void> _ensurePlayer() async {
-    if (_controller != null) {
-      await _controller!.play();
-      return;
-    }
-    setState(() {
-      _loading = true;
-      _failed = false;
-    });
-    final c = VideoPlayerController.networkUrl(
-      Uri.parse(widget.url),
-      httpHeaders: const {'Accept': '*/*'},
-    );
-    _controller = c;
-    c.setLooping(true);
+class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
+  bool _downloading = false;
+  double? _progress;
+
+  Future<void> _download() async {
+    if (_downloading) return;
+    setState(() { _downloading = true; _progress = null; });
     try {
-      await c.initialize();
-      if (!mounted) return;
-      setState(() => _loading = false);
-      await c.play();
+      final resp = await widget.apiClient.dio.get<List<int>>(
+        widget.url,
+        options: Options(responseType: ResponseType.bytes),
+        onReceiveProgress: (received, total) {
+          if (total > 0 && mounted) {
+            setState(() => _progress = received / total);
+          }
+        },
+      );
+      final bytes = resp.data;
+      if (bytes == null || bytes.isEmpty) throw StateError('empty');
+      final accessible = await Gal.hasAccess();
+      if (!accessible) {
+        final granted = await Gal.requestAccess();
+        if (!granted) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('需要相册权限才能保存')));
+          return;
+        }
+      }
+      await Gal.putImageBytes(Uint8List.fromList(bytes), name: widget.item.title.isNotEmpty ? widget.item.title : null);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('视频已保存到相册')));
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loading = false;
-        _failed = true;
-      });
-      DebugService.instance.recordError('VideoTile.init', e);
-    }
-  }
-
-  Future<void> _toggle() async {
-    if (_loading) return;
-    final c = _controller;
-    if (_failed) {
-      // 重试：重建控制器
-      _controller?.dispose();
-      _controller = null;
-      await _ensurePlayer();
-      return;
-    }
-    if (c == null) {
-      await _ensurePlayer();
-      return;
-    }
-    if (c.value.isPlaying) {
-      await c.pause();
-    } else {
-      await c.play();
+      DebugService.instance.recordError('VideoDownload', e);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('下载失败: ${e.toString().substring(0, 50)}')));
+    } finally {
+      if (mounted) setState(() { _downloading = false; _progress = null; });
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = _controller;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _toggle,
-      child: Container(
-        color: Colors.black,
-        alignment: Alignment.center,
-        child: _content(c),
+    if (_downloading) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 160,
+            child: LinearProgressIndicator(
+              value: _progress,
+              backgroundColor: Colors.white24,
+              color: const Color(0xFF6C7CFF),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(_progress != null ? '${(_progress! * 100).toStringAsFixed(0)}%' : '下载中...',
+              style: const TextStyle(color: Colors.white54, fontSize: 12)),
+        ],
+      );
+    }
+    return OutlinedButton.icon(
+      onPressed: _download,
+      icon: const Icon(Icons.download_outlined, size: 18, color: Colors.white70),
+      label: const Text('下载视频', style: TextStyle(color: Colors.white70, fontSize: 13)),
+      style: OutlinedButton.styleFrom(
+        side: const BorderSide(color: Colors.white30),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
     );
-  }
-
-  Widget _content(VideoPlayerController? c) {
-    if (_loading) {
-      return const CircularProgressIndicator(color: Colors.white70);
-    }
-    if (c == null) {
-      return const Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.play_circle_outline, size: 72, color: Colors.white54),
-          SizedBox(height: 10),
-          Text('点按播放视频', style: TextStyle(color: Colors.white70, fontSize: 14)),
-        ],
-      );
-    }
-    if (_failed) {
-      return const Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.error_outline, size: 72, color: Colors.white54),
-          SizedBox(height: 10),
-          Text('播放失败，点按重试', style: TextStyle(color: Colors.white70, fontSize: 14)),
-        ],
-      );
-    }
-    if (!c.value.isInitialized) {
-      return const CircularProgressIndicator(color: Colors.white70);
-    }
-    return AnimatedBuilder(
-      animation: c,
-      builder: (context, _) {
-        final v = c.value;
-        final playing = v.isPlaying;
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AspectRatio(
-              aspectRatio: v.aspectRatio <= 0 ? 16 / 9 : v.aspectRatio,
-              child: VideoPlayer(c),
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(playing ? Icons.pause_circle_outline : Icons.play_circle_outline,
-                    color: Colors.white70, size: 36),
-                const SizedBox(width: 8),
-                Text(
-                  '${_fmt(v.position)} / ${_fmt(v.duration)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ],
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  static String _fmt(Duration d) {
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 }
 
@@ -559,10 +590,4 @@ class _ActionBtn extends StatelessWidget {
       ),
     );
   }
-}
-
-class _DetailRow {
-  const _DetailRow(this.label, this.value);
-  final String label;
-  final String value;
 }
