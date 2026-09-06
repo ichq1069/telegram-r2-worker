@@ -223,19 +223,25 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       if (!accessible) {
         final granted = await Gal.requestAccess();
         if (!granted) {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('需要相册权限才能保存')));
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('需要相册权限才能保存')));
+          }
           return;
         }
       }
       await Gal.putImageBytes(Uint8List.fromList(bytes),
           name: item.title.isNotEmpty ? item.title : 'picwall_video');
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('视频已保存到相册')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('视频已保存到相册')));
+      }
     } catch (e) {
       DebugService.instance.recordError('DetailPage.downloadVideo', e);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('下载失败：请检查网络')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('下载失败：请检查网络')));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -510,14 +516,18 @@ class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
       if (!accessible) {
         final granted = await Gal.requestAccess();
         if (!granted) {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('需要相册权限才能保存')));
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('需要相册权限才能保存')));
+          }
           return;
         }
       }
       await Gal.putImageBytes(Uint8List.fromList(bytes), name: widget.item.title.isNotEmpty ? widget.item.title : 'picwall_video');
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('视频已保存到相册')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('视频已保存到相册')));
+      }
     } catch (e) {
       DebugService.instance.recordError('VideoDownload', e);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
