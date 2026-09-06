@@ -28,6 +28,7 @@ dependencies:
   workmanager: ^0.10.9
   local_auth: ^2.3.0
   crypto: ^3.0.3
+  video_player: ^2.8.2
 
 dev_dependencies:
   flutter_test:

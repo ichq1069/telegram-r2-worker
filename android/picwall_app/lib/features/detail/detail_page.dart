@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../data/models/media_item.dart';
 import '../../services/providers.dart';
@@ -262,7 +263,7 @@ class _MediaViewer extends StatelessWidget {
       color: Colors.black,
       alignment: Alignment.center,
       child: item.isVideo
-          ? const Center(child: Icon(Icons.play_circle_outline, size: 64, color: Colors.white38))
+          ? _VideoTile(url: item.url)
           : InteractiveViewer(
               maxScale: 5,
               child: Image.network(
@@ -280,6 +281,154 @@ class _MediaViewer extends StatelessWidget {
               ),
             ),
     );
+  }
+}
+
+/// 视频查看：首次点击初始化播放器（延迟联网），支持播放/暂停、循环。
+class _VideoTile extends StatefulWidget {
+  const _VideoTile({required this.url});
+
+  final String url;
+
+  @override
+  State<_VideoTile> createState() => _VideoTileState();
+}
+
+class _VideoTileState extends State<_VideoTile> {
+  VideoPlayerController? _controller;
+  bool _loading = false;
+  bool _failed = false;
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _ensurePlayer() async {
+    if (_controller != null) {
+      await _controller!.play();
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    _controller = c;
+    c.setLooping(true);
+    try {
+      await c.initialize();
+      if (!mounted) return;
+      setState(() => _loading = false);
+      await c.play();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  Future<void> _toggle() async {
+    if (_loading) return;
+    final c = _controller;
+    if (_failed) {
+      // 重试：重建控制器
+      _controller?.dispose();
+      _controller = null;
+      await _ensurePlayer();
+      return;
+    }
+    if (c == null) {
+      await _ensurePlayer();
+      return;
+    }
+    if (c.value.isPlaying) {
+      await c.pause();
+    } else {
+      await c.play();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = _controller;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _toggle,
+      child: Container(
+        color: Colors.black,
+        alignment: Alignment.center,
+        child: _content(c),
+      ),
+    );
+  }
+
+  Widget _content(VideoPlayerController? c) {
+    if (_loading) {
+      return const CircularProgressIndicator(color: Colors.white70);
+    }
+    if (c == null) {
+      return const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.play_circle_outline, size: 72, color: Colors.white54),
+          SizedBox(height: 10),
+          Text('点按播放视频', style: TextStyle(color: Colors.white70, fontSize: 14)),
+        ],
+      );
+    }
+    if (_failed) {
+      return const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, size: 72, color: Colors.white54),
+          SizedBox(height: 10),
+          Text('播放失败，点按重试', style: TextStyle(color: Colors.white70, fontSize: 14)),
+        ],
+      );
+    }
+    if (!c.value.isInitialized) {
+      return const CircularProgressIndicator(color: Colors.white70);
+    }
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) {
+        final v = c.value;
+        final playing = v.isPlaying;
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AspectRatio(
+              aspectRatio: v.aspectRatio <= 0 ? 16 / 9 : v.aspectRatio,
+              child: VideoPlayer(c),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(playing ? Icons.pause_circle_outline : Icons.play_circle_outline,
+                    color: Colors.white70, size: 36),
+                const SizedBox(width: 8),
+                Text(
+                  '${_fmt(v.position)} / ${_fmt(v.duration)}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  static String _fmt(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 }
 

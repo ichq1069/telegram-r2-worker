@@ -27,7 +27,7 @@ class _LockScreenState extends ConsumerState<LockScreen> {
   String _msg = '绘制图案解锁';
 
   bool get _bioEnabled =>
-      ref.watch(settingsControllerProvider).settings.lockBiometric;
+      ref.read(settingsControllerProvider).settings.lockBiometric;
 
   @override
   void initState() {
