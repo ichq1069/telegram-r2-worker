@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/album_sync_state.dart';
 import '../models/media_item.dart';
+import '../models/sync_filter.dart';
 import '../models/upload_task.dart';
 
 /// 本地条目（收藏/历史），media 存归一化 JSON。
@@ -36,7 +37,7 @@ class LocalDb {
     final path = '${await getDatabasesPath()}/$_dbName';
     final db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE favorites(
@@ -54,6 +55,7 @@ class LocalDb {
         ''');
         await _createUploadQueue(db);
         await _createSyncTables(db);
+        await _createSyncV4Tables(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -61,6 +63,9 @@ class LocalDb {
         }
         if (oldVersion < 3) {
           await _createSyncTables(db);
+        }
+        if (oldVersion < 4) {
+          await _createSyncV4Tables(db);
         }
       },
     );
@@ -289,6 +294,100 @@ class LocalDb {
   Future<Set<String>> loadAllSyncedAssetIds() async {
     final rows = await _db.query('synced_assets', columns: ['asset_id']);
     return rows.map((r) => (r['asset_id'] as String?) ?? '').where((s) => s.isNotEmpty).toSet();
+  }
+
+  // ---------------- 同步筛选与运行元信息（v4） ----------------
+
+  static Future<void> _createSyncV4Tables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_filter(
+        row_id INTEGER PRIMARY KEY,
+        min_bytes INTEGER NOT NULL DEFAULT 0,
+        max_bytes INTEGER NOT NULL DEFAULT 0,
+        kind TEXT NOT NULL DEFAULT 'both',
+        exts TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS sync_meta(
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )
+    ''');
+  }
+
+  Future<void> saveSyncFilter(SyncFilter filter) async {
+    await _db.insert('sync_filter', filter.toDb(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<SyncFilter> loadSyncFilter() async {
+    final rows = await _db.query('sync_filter', limit: 1);
+    if (rows.isEmpty) return const SyncFilter();
+    return SyncFilter.fromDb(rows.first);
+  }
+
+  Future<String?> syncMeta(String key) async {
+    final rows = await _db.query('sync_meta',
+        columns: ['value'], where: 'key = ?', whereArgs: [key], limit: 1);
+    if (rows.isEmpty) return null;
+    return rows.first['value'] as String?;
+  }
+
+  Future<void> setSyncMeta(String key, String value) async {
+    await _db.insert('sync_meta', {'key': key, 'value': value},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<void> delSyncMeta(String key) async {
+    await _db.delete('sync_meta', where: 'key = ?', whereArgs: [key]);
+  }
+
+  /// 同步前台服务运行锁（防止主进程引擎与后台服务同时上传）。
+  Future<void> setSyncRunning(bool running) async {
+    if (running) {
+      await setSyncMeta('sync_running', '1');
+      await setSyncMeta(
+          'sync_started_at', DateTime.now().millisecondsSinceEpoch.toString());
+    } else {
+      await delSyncMeta('sync_running');
+      await delSyncMeta('sync_started_at');
+    }
+  }
+
+  /// 服务正在运行（超过 2 小时的陈旧锁视为已死并自动清除）。
+  Future<bool> isSyncRunning() async {
+    final v = await syncMeta('sync_running');
+    if (v != '1') return false;
+    final started = int.tryParse(await syncMeta('sync_started_at') ?? '0') ?? 0;
+    final ageMs = DateTime.now().millisecondsSinceEpoch - started;
+    if (ageMs > 2 * 60 * 60 * 1000) {
+      await setSyncRunning(false);
+      return false;
+    }
+    return true;
+  }
+
+  /// 队列状态聚合（同步/上传状态页轮询用）。
+  Future<QueueSnapshot> queueSnapshot() async {
+    var queued = 0, uploading = 0, done = 0, failed = 0;
+    final rows = await _db.rawQuery(
+        'SELECT state, COUNT(*) AS c FROM upload_queue GROUP BY state');
+    for (final r in rows) {
+      final c = ((r['c'] as num?) ?? 0).toInt();
+      switch (r['state']) {
+        case 'queued':
+          queued = c;
+        case 'uploading':
+          uploading = c;
+        case 'done':
+          done = c;
+        case 'failed':
+          failed = c;
+      }
+    }
+    return QueueSnapshot(
+        queued: queued, uploading: uploading, done: done, failed: failed);
   }
 
   List<LocalEntry> _rowsToEntries(List<Map<String, Object?>> rows, String timeCol) {

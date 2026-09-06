@@ -137,8 +137,10 @@ class UploadEngine extends ChangeNotifier {
   }
 
   /// 启动队列（幂等）。若 wifiOnly 且当前非 Wi-Fi，则进入挂起态。
+  /// 后台同步前台服务持锁运行期间不主动上传，避免双上传。
   Future<void> start() async {
     if (_running) return;
+    if (await _db.isSyncRunning()) return;
     if (wifiOnly) {
       final net = await _networkProbe();
       if (!net.isUnlimited) {
@@ -152,6 +154,7 @@ class UploadEngine extends ChangeNotifier {
 
   /// 网络状态变化入口：Wi-Fi 恢复后自动继续被挂起的队列。
   Future<void> onNetworkChanged(NetworkKind net) async {
+    if (await _db.isSyncRunning()) return;
     if (!wifiOnly) return;
     if (net.isUnlimited) {
       if (_networkPaused && hasPending && !_running) {
@@ -170,10 +173,15 @@ class UploadEngine extends ChangeNotifier {
     if (!value && _networkPaused && hasPending && !_running) {
       _networkPaused = false;
       notifyListeners();
-      _drain();
+      _drainWhenIdle();
     } else {
       notifyListeners();
     }
+  }
+
+  Future<void> _drainWhenIdle() async {
+    if (await _db.isSyncRunning()) return;
+    await _drain();
   }
 
   Future<void> _drain() async {

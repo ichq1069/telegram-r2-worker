@@ -1,16 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../data/local/local_db.dart';
 import '../../data/models/album_sync_state.dart';
+import '../../data/models/sync_filter.dart';
 import '../../services/providers.dart';
-import '../upload/upload_engine.dart';
-import 'album_sync_scanner.dart';
+import 'album_grid_picker.dart';
+import 'sync_background.dart';
+import 'sync_filter_sheet.dart';
 
-/// 相册自动同步设置页：选择相册 → 立即同步 → 进入共享上传队列。
+/// 相册自动同步设置页：选相册（网格预览）→ 筛选规则 → 手动/自动后台同步。
 ///
-/// 与“上传”页共用 [uploadEngineProvider] 同一实例，避免双队列重复上传。
+/// 同步本体由前台服务（状态栏通知进度）执行；本页展示开关、规则与实时进度。
 class SyncPage extends ConsumerStatefulWidget {
   const SyncPage({super.key});
 
@@ -20,16 +24,16 @@ class SyncPage extends ConsumerStatefulWidget {
 
 class _SyncPageState extends ConsumerState<SyncPage> {
   LocalDb? _db;
-  UploadEngine? _engine;
-  AlbumSyncScanner? _scanner;
-
   AlbumSyncState? _enabled;
+  SyncFilter _filter = const SyncFilter();
   bool _ready = false;
+  bool _auto = false;
+  bool _running = false;
   bool _hasPermission = false;
-  bool _syncing = false;
-  int _scanned = 0;
-  int _newFound = 0;
+  bool _busy = false;
   String? _error;
+  QueueSnapshot? _snap;
+  Timer? _poll;
 
   @override
   void initState() {
@@ -37,167 +41,149 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _boot());
   }
 
-  Future<void> _boot() async {
-    try {
-      final engine = await ref.read(uploadEngineProvider.future);
-      final db = await ref.read(localDbProvider.future);
-      if (!mounted) return;
-      setState(() {
-        _engine = engine;
-        _db = db;
-        _scanner = AlbumSyncScanner(db: db, engine: engine);
-      });
-      _engine!.addListener(_onEngine);
-      final enabled = await db.getEnabledAlbum();
-      if (!mounted) return;
-      setState(() {
-        _enabled = enabled;
-        _ready = true;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _ready = true);
-    }
-  }
-
-  void _onEngine() {
-    if (mounted) setState(() {});
-  }
-
   @override
   void dispose() {
-    _engine?.removeListener(_onEngine);
+    _poll?.cancel();
     super.dispose();
   }
 
-  Future<void> _pickAlbum() async {
-    final scanner = _scanner;
-    if (scanner == null) return;
-    final ok = await scanner.ensurePermission();
-    if (!mounted) return;
-    setState(() => _hasPermission = ok);
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请在系统设置中允许“照片与视频”访问')),
-      );
-      return;
+  Future<void> _boot() async {
+    try {
+      final db = await ref.read(localDbProvider.future);
+      final enabled = await db.getEnabledAlbum();
+      final filter = await db.loadSyncFilter();
+      final auto = await db.syncMeta(kMetaAutoSync);
+      if (!mounted) return;
+      setState(() {
+        _db = db;
+        _enabled = enabled;
+        _filter = filter;
+        _auto = auto == '1';
+        _ready = true;
+      });
+      await _refreshRunning();
+      _poll = Timer.periodic(const Duration(seconds: 1), (_) => _pollTick());
+    } catch (_) {
+      if (mounted) setState(() => _ready = true);
     }
-    final albums = await scanner.fetchAlbums();
-    if (!mounted) return;
-    if (albums.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('没有可同步的相册')),
-      );
-      return;
-    }
-    final chosen = await showModalBottomSheet<AssetPathEntity>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('选择要同步的相册',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            ),
-            for (final a in albums)
-              ListTile(
-                leading: const Icon(Icons.photo_library_outlined),
-                title: Text(a.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                onTap: () => Navigator.pop(ctx, a),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (chosen == null || !mounted) return;
+  }
+
+  Future<void> _pollTick() async {
     final db = _db;
     if (db == null) return;
-    await db.setEnabledAlbum(chosen.id, chosen.name);
-    if (!mounted) return;
+    await _refreshRunning();
+  }
+
+  Future<void> _refreshRunning() async {
+    final db = _db;
+    if (db == null) return;
+    final running = await db.isSyncRunning();
+    final snap = await db.queueSnapshot();
     final enabled = await db.getEnabledAlbum();
     if (!mounted) return;
     setState(() {
-      _enabled = enabled;
-      _newFound = 0;
-      _scanned = 0;
-      _error = null;
+      _running = running;
+      _snap = snap;
+      if (enabled != null) _enabled = enabled;
     });
   }
 
-  Future<void> _disableSync() async {
+  Future<void> _pickAlbum() async {
     final db = _db;
     if (db == null) return;
-    await db.disableAllSyncAlbums();
-    if (!mounted) return;
-    setState(() {
-      _enabled = null;
-      _scanned = 0;
-      _newFound = 0;
-    });
-  }
-
-  Future<void> _runSync() async {
-    final scanner = _scanner;
-    final db = _db;
-    final engine = _engine;
-    final enabled = _enabled;
-    if (scanner == null ||
-        db == null ||
-        engine == null ||
-        enabled == null ||
-        _syncing) {
-      return;
-    }
-    setState(() {
-      _syncing = true;
-      _error = null;
-      _scanned = 0;
-      _newFound = 0;
-    });
     try {
-      final albums = await scanner.fetchAlbums();
-      AssetPathEntity? target;
-      for (final a in albums) {
-        if (a.id == enabled.albumId) {
-          target = a;
-          break;
-        }
-      }
-      if (target == null) {
-        throw StateError('相册「${enabled.albumName}」已删除或不可访问');
-      }
-      final added = await scanner.syncAlbum(
-        target,
-        onProgress: (n, s) {
-          if (mounted && (s % 25 == 0 || n % 10 == 0)) {
-            setState(() {
-              _newFound = n;
-              _scanned = s;
-            });
-          }
-        },
-      );
+      final state = await PhotoManager.requestPermissionExtend();
       if (!mounted) return;
-      setState(() => _newFound = added);
-      final refreshed = await db.getEnabledAlbum();
-      if (mounted && refreshed != null) setState(() => _enabled = refreshed);
-      await engine.start();
+      setState(() => _hasPermission = state.hasAccess);
+      if (!state.hasAccess) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('请在系统设置中允许“照片与视频”访问')),
+        );
+        return;
+      }
+      final albums =
+          await PhotoManager.getAssetPathList(type: RequestType.common);
+      if (!mounted) return;
+      if (albums.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('没有可同步的相册')),
+        );
+        return;
+      }
+      final chosen = await showAlbumGridPicker(context, albums: albums);
+      if (chosen == null || !mounted) return;
+      await db.setEnabledAlbum(chosen.id, chosen.name);
+      await _refreshRunning();
+    } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(added > 0 ? '已同步 $added 张新照片' : '相册已是最新')),
+          const SnackBar(content: Text('读取相册失败，请稍后重试')),
         );
       }
-    } catch (e) {
-      if (mounted) setState(() => _error = '$e');
-    } finally {
-      if (mounted) setState(() => _syncing = false);
     }
+  }
+
+  Future<void> _disableAlbum() async {
+    final db = _db;
+    if (db == null || _running) return;
+    await db.disableAllSyncAlbums();
+    if (!mounted) return;
+    setState(() => _enabled = null);
+  }
+
+  Future<void> _editFilter() async {
+    final db = _db;
+    if (db == null) return;
+    final next = await SyncFilterSheet.show(context, initial: _filter);
+    if (next == null) return;
+    await db.saveSyncFilter(next);
+    if (mounted) setState(() => _filter = next);
+  }
+
+  Future<void> _toggleAuto(bool value) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      if (value) {
+        await SyncService.enableAuto();
+      } else {
+        await SyncService.disableAuto();
+        if (_running) await SyncService.stopPass();
+      }
+      if (mounted) setState(() => _auto = value);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _startNow() async {
+    if (_busy || _running) return;
+    setState(() => _busy = true);
+    final ok = await SyncService.startPass();
+    if (mounted) {
+      setState(() => _busy = false);
+      if (!ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('同步已在运行或相册未配置')),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已开始后台同步，进度见状态栏通知')),
+        );
+      }
+    }
+    await _refreshRunning();
+  }
+
+  Future<void> _stopNow() async {
+    await SyncService.stopPass();
+    await _refreshRunning();
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final secondary = theme.colorScheme.onSurfaceVariant;
     return Scaffold(
       appBar: AppBar(title: const Text('相册同步')),
       body: !_ready
@@ -206,58 +192,140 @@ class _SyncPageState extends ConsumerState<SyncPage> {
               padding: const EdgeInsets.all(12),
               children: [
                 Card(
+                  child: SwitchListTile(
+                    secondary: const Icon(Icons.sync),
+                    title: const Text('自动同步'),
+                    subtitle: Text(
+                      _auto ? '每约 15 分钟在后台检查并同步新照片' : '开启后允许后台自动检查',
+                    ),
+                    value: _auto,
+                    onChanged: _busy ? null : _toggleAuto,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.sync, size: 20),
-                            SizedBox(width: 8),
-                            Text('自动相册同步',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.w700, fontSize: 16)),
-                          ],
-                        ),
+                        Text('同步相册',
+                            style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: secondary,
+                                fontSize: 13)),
                         const SizedBox(height: 8),
-                        const Text(
-                          '把相册中的新照片/视频自动加入上传队列，'
-                          '增量去重、断点续传，也受“仅 Wi-Fi 上传”约束。',
-                          style: TextStyle(fontSize: 13),
-                        ),
-                        const SizedBox(height: 12),
-                        _AlbumRow(
-                          enabled: _enabled,
-                          hasPermission: _hasPermission,
-                          syncing: _syncing,
-                          onPick: _pickAlbum,
-                          onDisable: _disableSync,
-                        ),
-                        if (_enabled != null) ...[
-                          const SizedBox(height: 12),
-                          _statusLine(context),
+                        if (_enabled == null)
+                          OutlinedButton.icon(
+                            onPressed: _running ? null : _pickAlbum,
+                            icon: const Icon(Icons.add_photo_alternate_outlined,
+                                size: 18),
+                            label: const Text('选择要同步的相册'),
+                          )
+                        else
+                          Row(
+                            children: [
+                              const Icon(Icons.photo_library_outlined),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _enabled!.albumName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style:
+                                      const TextStyle(fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: _running ? null : _pickAlbum,
+                                child: const Text('更换'),
+                              ),
+                              TextButton(
+                                onPressed: _running ? null : _disableAlbum,
+                                child: Text('停用',
+                                    style:
+                                        TextStyle(color: theme.colorScheme.error)),
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.filter_alt_outlined),
+                    title: const Text('同步筛选'),
+                    subtitle: Text(
+                      _filterSummary(),
+                      style: TextStyle(fontSize: 12, color: secondary),
+                    ),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _running ? null : _editFilter,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (_enabled != null) ...[
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(_running
+                                  ? Icons.sync
+                                  : Icons.cloud_done_outlined,
+                                  size: 20,
+                                  color: theme.colorScheme.primary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _running ? '后台同步进行中…' : '未在同步',
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w700, fontSize: 15),
+                                ),
+                              ),
+                              if (_running)
+                                TextButton(
+                                  onPressed: _stopNow,
+                                  child: Text('停止',
+                                      style: TextStyle(
+                                          color: theme.colorScheme.error)),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          if (_running)
+                            const LinearProgressIndicator(minHeight: 4)
+                          else
+                            const SizedBox(height: 4),
+                          const SizedBox(height: 10),
+                          _statusLines(theme),
                           const SizedBox(height: 12),
                           SizedBox(
                             width: double.infinity,
                             child: FilledButton.icon(
-                              onPressed: _syncing ? null : _runSync,
-                              icon: _syncing
+                              onPressed: _busy || _running ? null : _startNow,
+                              icon: _busy
                                   ? const SizedBox(
                                       width: 16,
                                       height: 16,
                                       child: CircularProgressIndicator(
                                           strokeWidth: 2))
                                   : const Icon(Icons.play_arrow),
-                              label: Text(_syncing ? '同步中…' : '立即同步'),
+                              label: Text(
+                                  _running ? '同步运行中' : '立即后台同步一次'),
                             ),
                           ),
                         ],
-                      ],
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 12),
+                  const SizedBox(height: 12),
+                ],
                 const Card(
                   child: Padding(
                     padding: EdgeInsets.all(16),
@@ -269,9 +337,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                                 fontWeight: FontWeight.w700, fontSize: 14)),
                         SizedBox(height: 6),
                         Text(
-                          '· 重复的照片不会再次上传（同一设备内以资产 ID 去重）。\n'
-                          '· 上传队列与“上传”页共用，可随时查看进度。\n'
-                          '· 建议开启“仅 Wi-Fi 上传”，大文件在移动网络下自动挂起。',
+                          '· 同步在前台服务中执行，进度显示在系统状态栏通知。\n'
+                          '· 重复照片不会上传；筛选不满足的文件直接跳过。\n'
+                          '· 自动同步需要“通知”权限，请勿在系统设置中关闭。',
                           style: TextStyle(fontSize: 13),
                         ),
                       ],
@@ -283,42 +351,47 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     );
   }
 
-  Widget _statusLine(BuildContext context) {
-    final en = _enabled;
-    if (en == null) return const SizedBox.shrink();
-    final theme = Theme.of(context);
+  Widget _statusLines(ThemeData theme) {
     final secondary = theme.colorScheme.onSurfaceVariant;
-    final lastSync = en.lastSync;
-    final busy = _syncing;
+    final snap = _snap;
+    final en = _enabled;
+    final last = en?.lastSync;
+    final lines = <String>[
+      '上次同步：${_fmtTime(last)}',
+      if (snap != null)
+        '上传队列：待传 ${snap.queued} · 上传中 ${snap.uploading}'
+            ' · 完成 ${snap.done} · 失败 ${snap.failed}',
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (busy)
-          Text(
-            '扫描中… 本次已扫 $_scanned 张 / 新增 $_newFound 张',
-            style: TextStyle(fontSize: 13, color: secondary),
-          )
-        else if (_error != null)
-          Text(
-            _error!,
-            style: TextStyle(fontSize: 13, color: theme.colorScheme.error),
-          )
-        else
-          Text(
-            '上次同步：${_fmtTime(lastSync)} · 累计入队 ${en.syncedCount} 张',
-            style: TextStyle(fontSize: 13, color: secondary),
-          ),
-        if (_engine != null)
+        for (final l in lines)
           Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(
-              '上传队列：待传 ${_engine!.queuedCount} · 上传中 ${_engine!.uploadingCount}'
-              ' · 完成 ${_engine!.doneCount} · 失败 ${_engine!.failedCount}',
-              style: TextStyle(fontSize: 12, color: secondary),
-            ),
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(l, style: TextStyle(fontSize: 12, color: secondary)),
           ),
       ],
     );
+  }
+
+  String _filterSummary() {
+    final parts = <String>[_filter.kind.label];
+    if (_filter.minBytes > 0 || _filter.maxBytes > 0) {
+      final min = _filter.minBytes / (1024 * 1024);
+      final max = _filter.maxBytes / (1024 * 1024);
+      if (_filter.minBytes > 0 && _filter.maxBytes > 0) {
+        parts.add('${min.toStringAsFixed(min % 1 == 0 ? 0 : 1)}–${max.toStringAsFixed(max % 1 == 0 ? 0 : 1)}MB');
+      } else if (_filter.minBytes > 0) {
+        parts.add('≥${min.toStringAsFixed(min % 1 == 0 ? 0 : 1)}MB');
+      } else {
+        parts.add('≤${max.toStringAsFixed(max % 1 == 0 ? 0 : 1)}MB');
+      }
+    }
+    if (_filter.exts.isNotEmpty) {
+      parts.add('仅 ${_filter.exts.join('/')}');
+    }
+    if (parts.length == 1) return '不限制（${parts.first}）';
+    return parts.join(' · ');
   }
 
   static String _fmtTime(DateTime? t) {
@@ -326,64 +399,5 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     String two(int v) => v.toString().padLeft(2, '0');
     return '${t.year}-${two(t.month)}-${two(t.day)} '
         '${two(t.hour)}:${two(t.minute)}';
-  }
-}
-
-class _AlbumRow extends StatelessWidget {
-  const _AlbumRow({
-    required this.enabled,
-    required this.hasPermission,
-    required this.syncing,
-    required this.onPick,
-    required this.onDisable,
-  });
-
-  final AlbumSyncState? enabled;
-  final bool hasPermission;
-  final bool syncing;
-  final VoidCallback onPick;
-  final VoidCallback onDisable;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final en = enabled;
-    if (en == null) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            hasPermission ? '尚未启用，请选择要同步的相册。' : '首次使用需授权访问相册。',
-            style: TextStyle(fontSize: 13, color: theme.colorScheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: syncing ? null : onPick,
-            icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
-            label: const Text('选择相册'),
-          ),
-        ],
-      );
-    }
-    return Row(
-      children: [
-        const Icon(Icons.photo_library_outlined, size: 20),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(en.albumName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w600)),
-        ),
-        TextButton(
-          onPressed: syncing ? null : onPick,
-          child: const Text('更换'),
-        ),
-        TextButton(
-          onPressed: syncing ? null : onDisable,
-          child: Text('停用', style: TextStyle(color: theme.colorScheme.error)),
-        ),
-      ],
-    );
   }
 }
