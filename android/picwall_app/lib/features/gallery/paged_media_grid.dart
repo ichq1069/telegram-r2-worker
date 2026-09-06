@@ -165,10 +165,10 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
                   ),
                 ),
               if (_loadingMore)
-                SizedBox(
+                const SizedBox(
                   width: double.infinity,
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
+                    padding: EdgeInsets.all(16),
                     child: Center(
                       child: SizedBox(
                         width: 22,

@@ -61,7 +61,6 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -99,8 +98,8 @@ class _DetailPageState extends State<DetailPage> {
                           ),
                         )
                       else
-                        const Text('${_index + 1} / ${widget.items.length}',
-                            style: TextStyle(color: Colors.white70, fontSize: 13)),
+                        Text('${_index + 1} / ${widget.items.length}',
+                            style: const TextStyle(color: Colors.white70, fontSize: 13)),
                     ],
                   ),
                 ),

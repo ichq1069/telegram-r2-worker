@@ -216,7 +216,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             ),
                             const SizedBox(width: 10),
                             OutlinedButton(
-                              onPressed: busy ? null : _redeem,
+                              onPressed: busy ? null : () async => _redeem(),
                               child: const Text('兑换'),
                             ),
                           ],

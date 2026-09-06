@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -23,7 +22,7 @@ class _MemoryStore extends SecureStore {
 
   @override
   Future<Map<String, String>> readSettings() async {
-    final raw = _mem[kSettings];
+    final raw = _mem[SecureStore.kSettings];
     if (raw == null || raw.isEmpty) return const {};
     final decoded = jsonDecode(raw);
     if (decoded is Map) {
@@ -34,7 +33,7 @@ class _MemoryStore extends SecureStore {
 
   @override
   Future<void> writeSettings(Map<String, String> settings) async {
-    _mem[kSettings] = jsonEncode(settings);
+    _mem[SecureStore.kSettings] = jsonEncode(settings);
   }
 }
 
