@@ -355,13 +355,13 @@ class LocalDb {
     }
   }
 
-  /// 服务正在运行（超过 2 小时的陈旧锁视为已死并自动清除）。
+  /// 服务正在运行（超过 10 分钟的陈旧锁视为已死并自动清除）。
   Future<bool> isSyncRunning() async {
     final v = await syncMeta('sync_running');
     if (v != '1') return false;
     final started = int.tryParse(await syncMeta('sync_started_at') ?? '0') ?? 0;
     final ageMs = DateTime.now().millisecondsSinceEpoch - started;
-    if (ageMs > 2 * 60 * 60 * 1000) {
+    if (ageMs > 10 * 60 * 1000) {
       await setSyncRunning(false);
       return false;
     }

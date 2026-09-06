@@ -3,6 +3,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../../services/settings.dart';
 import '../admin/admin_page.dart';
@@ -186,6 +187,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             leading: const Icon(Icons.info_outline),
             title: const Text('PicWall / 图墙'),
             subtitle: Text(_version == null ? '' : 'v$_version'),
+          ),
+          const Divider(height: 1, indent: 16),
+          SwitchListTile(
+            secondary: const Icon(Icons.bug_report_outlined),
+            title: const Text('调试模式'),
+            subtitle: const Text('开启后显示页面错误浮层'),
+            value: DebugService.instance.enabled,
+            onChanged: (v) {
+              DebugService.instance.setEnabled(v);
+              setState(() {});
+            },
           ),
           const SizedBox(height: 48),
         ],

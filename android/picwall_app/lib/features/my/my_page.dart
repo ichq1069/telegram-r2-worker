@@ -4,6 +4,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../core/constants.dart';
 import '../../data/models/user.dart';
+import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../admin/admin_page.dart';
 import '../auth/login_page.dart';
@@ -41,8 +42,8 @@ class _MyPageState extends ConsumerState<MyPage> {
         setState(
             () => _version = '${info.version} (${info.buildNumber})');
       }
-    } catch (_) {
-      // 版本读取失败不影响页面
+    } catch (e, st) {
+      DebugService.instance.recordError('MyPage.loadVersion', e, st);
     }
   }
 
@@ -58,8 +59,8 @@ class _MyPageState extends ConsumerState<MyPage> {
     try {
       final q = await ref.read(galleryRepositoryProvider).quota();
       if (mounted) setState(() => _quota = q);
-    } catch (_) {
-      // 配额展示失败不阻塞页面
+    } catch (e, st) {
+      DebugService.instance.recordError('MyPage.loadQuota', e, st);
     }
   }
 

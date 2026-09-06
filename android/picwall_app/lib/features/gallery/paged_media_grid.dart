@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/models/media_item.dart';
 import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
+import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../detail/detail_page.dart';
 import 'media_thumb.dart';
@@ -100,7 +101,8 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
         _page = next;
         _loadingMore = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      DebugService.instance.recordError('PagedMediaGrid.load', e, st);
       if (!mounted) return;
       setState(() => _loadingMore = false);
     }

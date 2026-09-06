@@ -9,6 +9,7 @@ import 'features/my/my_page.dart';
 import 'features/discover/discover_page.dart';
 import 'features/settings/onboarding_page.dart';
 import 'features/lock/lock_screen.dart';
+import 'features/debug/debug_error_overlay.dart';
 import 'services/providers.dart';
 
 /// 全局根导航 key：切后台补锁屏覆盖路由用。
@@ -20,18 +21,20 @@ class PicWallApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(settingsControllerProvider).settings.themeMode;
-    return MaterialApp(
-      title: 'PicWall',
-      debugShowCheckedModeBanner: false,
-      navigatorKey: rootNavigatorKey,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: switch (mode) {
-        'system' => ThemeMode.system,
-        'light' => ThemeMode.light,
-        _ => ThemeMode.dark,
-      },
-      home: const RootGate(),
+    return DebugErrorOverlay(
+      child: MaterialApp(
+        title: 'PicWall',
+        debugShowCheckedModeBanner: false,
+        navigatorKey: rootNavigatorKey,
+        theme: AppTheme.light(),
+        darkTheme: AppTheme.dark(),
+        themeMode: switch (mode) {
+          'system' => ThemeMode.system,
+          'light' => ThemeMode.light,
+          _ => ThemeMode.dark,
+        },
+        home: const RootGate(),
+      ),
     );
   }
 }

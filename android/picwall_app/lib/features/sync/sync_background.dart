@@ -5,6 +5,7 @@ import 'package:workmanager/workmanager.dart';
 import '../../data/local/local_db.dart';
 import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
+import '../../services/debug_service.dart';
 import '../../services/secure_store.dart';
 import '../upload/upload_engine.dart';
 import 'album_sync_scanner.dart';
@@ -51,14 +52,14 @@ class SyncService {
         channelId: kSyncChannelId,
         channelName: kSyncChannelName,
         channelDescription: '相册自动同步的运行状态与进度',
-        channelImportance: NotificationChannelImportance.LOW,
-        priority: NotificationPriority.LOW,
-        onlyAlertOnce: true,
+        channelImportance: NotificationChannelImportance.HIGH,
+        priority: NotificationPriority.HIGH,
+        onlyAlertOnce: false,
         showWhen: true,
       ),
       iosNotificationOptions: const IOSNotificationOptions(),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(60000),
+        eventAction: ForegroundTaskEventAction.repeat(30000),
       ),
     );
     if (_inited) return;
@@ -172,12 +173,18 @@ class SyncService {
       _notify('PicWall 相册同步',
           added > 0 ? '发现 $added 张新照片，开始上传…' : '没有新增内容');
 
+      var totalScanned = 0;
       engine.addListener(() {
-        if (engine.uploadingCount > 0 || engine.queuedCount > 0) {
+        final queued = engine.queuedCount;
+        final uploading = engine.uploadingCount;
+        final done = engine.doneCount;
+        final failed = engine.failedCount;
+        totalScanned = done + failed + queued + uploading;
+        if (totalScanned > 0 && (uploading > 0 || queued > 0)) {
+          final pct = totalScanned > 0 ? ((done / totalScanned) * 100).round() : 0;
           _notify(
             'PicWall 相册同步',
-            '上传中：剩余 ${engine.queuedCount} · 成功 ${engine.doneCount}'
-            ' · 失败 ${engine.failedCount}',
+            '上传中 $pct%：剩余 $queued · 成功 $done · 失败 $failed',
           );
         }
       });
@@ -191,6 +198,9 @@ class SyncService {
       } else {
         await _notify('PicWall 相册同步', '本轮同步完成，共上传 ${engine.doneCount} 张');
       }
+    } catch (e, st) {
+      DebugService.instance.recordError('SyncService.runPass', e, st);
+      await _notify('PicWall 相册同步', '同步出错：$e');
     } finally {
       await db.setSyncRunning(false);
       await FlutterForegroundTask.stopService();

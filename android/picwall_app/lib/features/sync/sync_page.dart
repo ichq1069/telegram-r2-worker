@@ -7,6 +7,7 @@ import 'package:photo_manager/photo_manager.dart';
 import '../../data/local/local_db.dart';
 import '../../data/models/album_sync_state.dart';
 import '../../data/models/sync_filter.dart';
+import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import 'album_grid_picker.dart';
 import 'sync_background.dart';
@@ -61,7 +62,8 @@ class _SyncPageState extends ConsumerState<SyncPage> {
       });
       await _refreshRunning();
       _poll = Timer.periodic(const Duration(seconds: 1), (_) => _pollTick());
-    } catch (_) {
+    } catch (e, st) {
+      DebugService.instance.recordError('SyncPage.boot', e, st);
       if (mounted) setState(() => _ready = true);
     }
   }
@@ -131,6 +133,14 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   Future<void> _editFilter() async {
     final db = _db;
     if (db == null) return;
+    if (_running) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('同步进行中，筛选将在下一轮生效')),
+        );
+      }
+      return;
+    }
     final next = await SyncFilterSheet.show(context, initial: _filter);
     if (next == null) return;
     await db.saveSyncFilter(next);
@@ -143,6 +153,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     try {
       if (value) {
         await SyncService.enableAuto();
+        if (!_running && _enabled != null) {
+          await SyncService.startPass();
+        }
       } else {
         await SyncService.disableAuto();
         if (_running) await SyncService.stopPass();
@@ -151,6 +164,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    await _refreshRunning();
   }
 
   Future<void> _startNow() async {
@@ -259,7 +273,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
                       style: TextStyle(fontSize: 12, color: secondary),
                     ),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: _running ? null : _editFilter,
+                    onTap: _editFilter,
                   ),
                 ),
                 const SizedBox(height: 12),

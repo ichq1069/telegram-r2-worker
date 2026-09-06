@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../data/models/media_item.dart';
+import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 
 /// 详情页：大图 + 左右滑切 + 缩放 + 操作条（收藏/保存/分享/复制）。
@@ -54,15 +55,17 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     try {
       final db = await ref.read(localDbProvider.future);
       await db.record(item);
-    } catch (_) {
-      // 本地库不可用（如测试环境）时静默降级
+    } catch (e, st) {
+      DebugService.instance.recordError('DetailPage.record', e, st);
     }
     // 读取收藏态
     bool fav = false;
     try {
       final db = await ref.read(localDbProvider.future);
       fav = await db.isFavorited(item.dedupeKey);
-    } catch (_) {}
+    } catch (e, st) {
+      DebugService.instance.recordError('DetailPage.isFavorited', e, st);
+    }
     if (mounted) setState(() => _fav = fav);
   }
 
@@ -84,7 +87,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       } else {
         await db.unfavorite(_current.dedupeKey);
       }
-    } catch (_) {
+    } catch (e, st) {
+      DebugService.instance.recordError('DetailPage.toggleFav', e, st);
       if (mounted) setState(() => _fav = !_fav);
     } finally {
       if (mounted) setState(() => _favBusy = false);

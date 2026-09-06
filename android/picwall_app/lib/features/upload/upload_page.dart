@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../data/models/upload_task.dart';
+import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import 'upload_engine.dart';
 
@@ -40,7 +41,8 @@ class _UploadPageState extends ConsumerState<UploadPage> {
       if (!mounted) return;
       _attach(engine);
       await engine.start();
-    } catch (_) {
+    } catch (e, st) {
+      DebugService.instance.recordError('UploadPage.boot', e, st);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('上传引擎初始化失败')),
