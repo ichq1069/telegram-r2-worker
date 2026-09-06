@@ -49,14 +49,15 @@ class UploadEngine extends ChangeNotifier {
     Future<NetworkKind> Function()? networkProbe,
   })  : _repo = repository,
         _db = db,
+        _wifiOnly = wifiOnly,
         _networkProbe = networkProbe ?? probeNetworkNow;
 
   final GalleryRepository _repo;
   final LocalDb _db;
   final Future<NetworkKind> Function() _networkProbe;
+  bool _wifiOnly;
 
   final List<UploadTask> tasks = [];
-  bool _wifiOnly;
   bool _running = false;
   bool _networkPaused = false;
   String? _lastError;

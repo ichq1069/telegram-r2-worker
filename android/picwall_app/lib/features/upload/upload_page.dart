@@ -98,7 +98,7 @@ class _UploadPageState extends ConsumerState<UploadPage> {
 
   Future<void> _pickFromGallery() async {
     final picked = await _picker.pickMultiImage();
-    if (picked == null || picked.isEmpty) return;
+    if (picked.isEmpty) return;
     await _enqueue(
       picked.map((x) => x.path).where((p) => p.isNotEmpty).toList(),
       UploadSource.gallery,
@@ -454,7 +454,7 @@ class _TaskTile extends StatelessWidget {
       UploadSource.gallery => Icons.photo_outlined,
       UploadSource.camera => Icons.photo_camera_outlined,
       UploadSource.url => Icons.link,
-      UploadSource.unknown => Icons.file_outlined,
+      UploadSource.unknown => Icons.insert_drive_file_outlined,
     };
 
     return Card(
