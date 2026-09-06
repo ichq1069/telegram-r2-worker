@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/constants.dart';
@@ -12,6 +16,9 @@ class AppSettings {
     this.adminKey = '',
     this.onboarded = false,
     this.wifiOnlyUpload = false,
+    this.lockEnabled = false,
+    this.lockBiometric = false,
+    this.lockPattern = '',
   });
 
   String apiBase;
@@ -20,6 +27,13 @@ class AppSettings {
   String adminKey;
   bool onboarded;
   bool wifiOnlyUpload;
+  bool lockEnabled;
+  bool lockBiometric;
+
+  /// 存储为 `salt:sha256hex`；仅在解锁校验时本地比对，不落明文。
+  String lockPattern;
+
+  bool get hasPattern => lockPattern.isNotEmpty;
 
   bool get configured => apiBase.isNotEmpty;
 
@@ -29,6 +43,41 @@ class AppSettings {
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
     if (url.startsWith('/')) return '$apiBase$url';
     return '$apiBase/$url';
+  }
+}
+
+/// 应用锁工具：图案序列号 -> 加盐哈希比对。
+class AppLock {
+  /// 校验图案格式：3x3 九个点 index 0..8 的去重序列，长度 >= 4。
+  static bool valid(List<int> seq) {
+    if (seq.length < 4) return false;
+    if (seq.length > 9) return false;
+    final set = <int>{};
+    for (final i in seq) {
+      if (i < 0 || i > 8 || !set.add(i)) return false;
+    }
+    return true;
+  }
+
+  static String salt() {
+    final r = Random.secure();
+    return List.generate(8, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  static String _hash(String salt, String seq) =>
+      sha256.convert(utf8.encode('pw-lock:$salt:$seq')).toString();
+
+  /// 生成可持久化串 `salt:hash`。
+  static String encode(String seq) {
+    final s = salt();
+    return '$s:${_hash(s, seq)}';
+  }
+
+  static bool verify(String stored, String seq) {
+    final idx = stored.indexOf(':');
+    if (idx <= 0) return false;
+    final salt = stored.substring(0, idx);
+    return _hash(salt, seq) == stored.substring(idx + 1);
   }
 }
 
@@ -60,6 +109,9 @@ class SettingsController extends ChangeNotifier {
         adminKey: map['adminKey'] ?? '',
         onboarded: map['onboarded'] == '1',
         wifiOnlyUpload: map['wifiOnlyUpload'] == '1',
+        lockEnabled: map['lockEnabled'] == '1',
+        lockBiometric: map['lockBiometric'] == '1',
+        lockPattern: map['lockPattern'] ?? '',
       );
       _loaded = true;
     } catch (e) {
@@ -95,6 +147,24 @@ class SettingsController extends ChangeNotifier {
     await _persist();
   }
 
+  /// 更新应用锁配置：enabled 总开关 / biometric 指纹 / pattern 图案(已编码)。
+  Future<void> saveAppLock({
+    bool? enabled,
+    bool? biometric,
+    String? pattern,
+  }) async {
+    if (enabled != null) _settings.lockEnabled = enabled;
+    if (biometric != null) _settings.lockBiometric = biometric;
+    if (pattern != null) {
+      _settings.lockPattern = pattern;
+      if (pattern.isEmpty) {
+        _settings.lockEnabled = false;
+        _settings.lockBiometric = false;
+      }
+    }
+    await _persist();
+  }
+
   Future<void> _persist() async {
     await _secure.writeSettings({
       'apiBase': _settings.apiBase,
@@ -103,6 +173,9 @@ class SettingsController extends ChangeNotifier {
       'adminKey': _settings.adminKey,
       'onboarded': _settings.onboarded ? '1' : '0',
       'wifiOnlyUpload': _settings.wifiOnlyUpload ? '1' : '0',
+      'lockEnabled': _settings.lockEnabled ? '1' : '0',
+      'lockBiometric': _settings.lockBiometric ? '1' : '0',
+      'lockPattern': _settings.lockPattern,
     });
     notifyListeners();
   }

@@ -4,6 +4,7 @@ import '../data/local/local_db.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/gallery_repository.dart';
 import '../features/upload/upload_engine.dart';
+import '../features/lock/app_lock_controller.dart';
 import 'api_client.dart';
 import 'secure_store.dart';
 import 'settings.dart';
@@ -11,6 +12,11 @@ import 'settings.dart';
 /// 安全存储。
 final secureStoreProvider = Provider<SecureStore>(
   (ref) => SecureStore(),
+);
+
+/// 应用锁运行态（是否已解锁）。
+final appLockControllerProvider = ChangeNotifierProvider<AppLockController>(
+  (ref) => AppLockController(),
 );
 
 /// 设置控制器（含默认端点 + apiKey + adminKey 持久化）。

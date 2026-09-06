@@ -9,6 +9,7 @@ import '../admin/admin_page.dart';
 import '../auth/login_page.dart';
 import '../auth/session_controller.dart';
 import '../library/local_grid_page.dart';
+import '../lock/lock_settings_sheet.dart';
 import '../sync/sync_page.dart';
 import '../upload/upload_page.dart';
 import 'my_files_page.dart';
@@ -80,6 +81,15 @@ class _MyPageState extends ConsumerState<MyPage> {
     );
   }
 
+  void _openAppLock() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => const LockSettingsSheet(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sessionCtl = ref.watch(sessionControllerProvider);
@@ -109,6 +119,7 @@ class _MyPageState extends ConsumerState<MyPage> {
                   emptyText: '还没有浏览记录',
                 ))),
             _entry(Icons.settings_outlined, '设置', _openSettings),
+            _entry(Icons.lock_outline, '应用锁', _openAppLock),
             const Divider(height: 1),
             ListTile(
               leading: const Icon(Icons.logout, color: Color(0xFFE53935)),

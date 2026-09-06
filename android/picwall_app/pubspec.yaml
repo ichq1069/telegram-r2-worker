@@ -25,6 +25,8 @@ dependencies:
   package_info_plus: ^8.0.0
   flutter_foreground_task: ^8.0.0
   workmanager: ^0.10.9
+  local_auth: ^2.3.0
+  crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:

@@ -8,7 +8,11 @@ import 'features/gallery/gallery_page.dart';
 import 'features/my/my_page.dart';
 import 'features/discover/discover_page.dart';
 import 'features/settings/onboarding_page.dart';
+import 'features/lock/lock_screen.dart';
 import 'services/providers.dart';
+
+/// 全局根导航 key：切后台补锁屏覆盖路由用。
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 class PicWallApp extends ConsumerWidget {
   const PicWallApp({super.key});
@@ -18,6 +22,7 @@ class PicWallApp extends ConsumerWidget {
     return MaterialApp(
       title: 'PicWall',
       debugShowCheckedModeBanner: false,
+      navigatorKey: rootNavigatorKey,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: ThemeMode.dark,
@@ -26,7 +31,7 @@ class PicWallApp extends ConsumerWidget {
   }
 }
 
-/// 顶层路由门：未配置→Onboarding；未登录→登录页；否则→Shell。
+/// 顶层路由门：应用锁(启用时) → 未配置→Onboarding；未登录→登录页；否则→Shell。
 class RootGate extends ConsumerStatefulWidget {
   const RootGate({super.key});
 
@@ -34,10 +39,12 @@ class RootGate extends ConsumerStatefulWidget {
   ConsumerState<RootGate> createState() => _RootGateState();
 }
 
-class _RootGateState extends ConsumerState<RootGate> {
+class _RootGateState extends ConsumerState<RootGate>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final settings = ref.read(settingsControllerProvider);
       if (!settings.loaded) settings.load();
@@ -46,8 +53,40 @@ class _RootGateState extends ConsumerState<RootGate> {
   }
 
   @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _armLock();
+    }
+  }
+
+  /// 切后台：若应用锁开启且当前未锁，复位解锁态并保证屏幕被锁屏覆盖
+  /// （避免任务切换快照泄露上方内容，也防止直接返回前台时内容可见）。
+  Future<void> _armLock() async {
+    final settingsCtl = ref.read(settingsControllerProvider);
+    final lockCtl = ref.read(appLockControllerProvider);
+    if (!settingsCtl.loaded) return;
+    if (!settingsCtl.settings.lockEnabled || !lockCtl.unlocked) return;
+    lockCtl.lock();
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final nav = rootNavigatorKey.currentState;
+    if (nav == null || !nav.canPop()) return;
+    await nav.push(MaterialPageRoute<void>(
+      fullscreenDialog: true,
+      builder: (_) => const LockScreen(allowPop: true),
+    ));
+  }
+
+  @override
   Widget build(BuildContext context) {
     final settingsState = ref.watch(settingsControllerProvider);
+    final lockCtl = ref.watch(appLockControllerProvider);
     final sessionState = ref.watch(sessionControllerProvider);
 
     // 配置尚未恢复完成
@@ -55,15 +94,22 @@ class _RootGateState extends ConsumerState<RootGate> {
       return const _Splash();
     }
 
-    final session = sessionState.session;
+    final locked =
+        settingsState.settings.lockEnabled && !lockCtl.unlocked;
 
+    final session = sessionState.session;
+    final Widget body;
     if (!settingsState.settings.onboarded) {
-      return const OnboardingPage();
+      body = const OnboardingPage();
+    } else if (session == null || !session.loggedIn) {
+      body = const LoginPage();
+    } else {
+      body = const HomeShell();
     }
-    if (session == null || !session.loggedIn) {
-      return const LoginPage();
+    if (locked) {
+      return const LockScreen();
     }
-    return const HomeShell();
+    return body;
   }
 }
 
