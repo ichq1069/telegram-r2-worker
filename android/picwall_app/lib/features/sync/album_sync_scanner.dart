@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../data/local/local_db.dart';
