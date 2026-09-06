@@ -52,7 +52,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
         ),
       ),
       body: PagedMediaGrid(
-        key: ValueKey('$_type'),
+        key: ValueKey(_type),
         title: '图库',
         embedded: true,
         loader: _loader,

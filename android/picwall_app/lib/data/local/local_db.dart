@@ -130,7 +130,7 @@ class LocalDb {
           decoded is Map ? Map<String, dynamic>.from(decoded) : const {},
         );
       } catch (_) {
-        item = MediaItem(id: '', url: '', title: '(已损坏的本地记录)');
+        item = const MediaItem(id: '', url: '', title: '(已损坏的本地记录)');
       }
       final ts = (r[timeCol] as int?) ?? 0;
       return LocalEntry(

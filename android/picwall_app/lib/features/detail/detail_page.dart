@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -86,7 +84,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         await db.unfavorite(_current.dedupeKey);
       }
     } catch (_) {
-      setState(() => _fav = !_fav);
+      if (mounted) setState(() => _fav = !_fav);
     } finally {
       if (mounted) setState(() => _favBusy = false);
     }
@@ -153,7 +151,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('保存失败：请检查网络或复制直链')),
+          const SnackBar(content: Text('保存失败：请检查网络或复制直链')),
         );
       }
     } finally {
