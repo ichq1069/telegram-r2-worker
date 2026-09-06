@@ -70,14 +70,20 @@ jobs:
               m = re.search(r'<application\b[^>]*>', s)
               if m:
                   s = s[:m.end()] + '\n' + service + s[m.end():]
+          s = re.sub(r'android:label="[^"]*"', 'android:label="图墙"', s, count=1)
           open(p, 'w', encoding='utf-8').write(s)
-          print('manifest permissions/service injected')
+          print('manifest permissions/service/label injected')
           PY
 
       - name: Flutter pub get
         if: steps.check.outputs.present == 'true'
         working-directory: android/picwall_app
         run: flutter pub get
+
+      - name: Apply launcher icon (flutter_launcher_icons)
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: flutter pub run flutter_launcher_icons
 
       - name: Analyze
         if: steps.check.outputs.present == 'true'
