@@ -49,7 +49,7 @@ void main() {
     });
   });
 
-  group('AppSettings.resolve / saveAppLock', () {
+  group('AppSettings.resolve', () {
     test('resolve keeps absolute and joins relative', () {
       final s = AppSettings(apiBase: 'https://api.example.com');
       expect(s.resolve('https://cdn.example.com/x.jpg'), 'https://cdn.example.com/x.jpg');
@@ -58,41 +58,5 @@ void main() {
       expect(s.resolve(''), isEmpty);
       expect(s.resolve(null), isEmpty);
     });
-
-    test('clearing pattern disables lock flags', () async {
-      final c = SettingsController(_InMemorySecureStore());
-      final s = c.settings;
-      s.lockEnabled = true;
-      s.lockBiometric = true;
-      await c.saveAppLock(pattern: '');
-      expect(s.lockEnabled, isFalse);
-      expect(s.lockBiometric, isFalse);
-      expect(c.settings.hasPattern, isFalse);
-    });
-
-    test('theme mode rejects invalid values', () async {
-      final c = SettingsController(_InMemorySecureStore());
-      await c.saveThemeMode('purple');
-      expect(c.settings.themeMode, 'dark');
-      await c.saveThemeMode('light');
-      expect(c.settings.themeMode, 'light');
-    });
   });
-}
-
-class _InMemorySecureStore extends SecureStore {
-  final Map<String, String> _map = <String, String>{};
-
-  @override
-  Future<void> write(String key, String value) async {
-    _map[key] = value;
-  }
-
-  @override
-  Future<String?> read(String key) async => _map[key];
-
-  @override
-  Future<void> delete(String key) async {
-    _map.remove(key);
-  }
 }

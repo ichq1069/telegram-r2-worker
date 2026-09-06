@@ -38,7 +38,7 @@ void main() {
     });
 
     test('toDb/fromDb round trip preserves fields', () {
-      final t = UploadTask(
+      const t = UploadTask(
         id: 42,
         filePath: '/tmp/x.jpg',
         fileName: 'x.jpg',
@@ -64,7 +64,7 @@ void main() {
     });
 
     test('copyWith updates only requested fields', () {
-      final t = const UploadTask(filePath: '/tmp/a.jpg', fileName: 'a.jpg', createdAt: 100, state: UploadState.queued);
+      const t = UploadTask(filePath: '/tmp/a.jpg', fileName: 'a.jpg', createdAt: 100, state: UploadState.queued);
       final u = t.copyWith(state: UploadState.failed, error: 'network', finishedAt: 200);
       expect(u.state, UploadState.failed);
       expect(u.error, 'network');
