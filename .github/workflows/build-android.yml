@@ -45,7 +45,7 @@ jobs:
         working-directory: android/picwall_app
         run: flutter create --platforms=android --org com.picwall --project-name picwall_app .
 
-      - name: Declare photo library permissions (photo_manager runtime)
+      - name: Declare runtime permissions & foreground service (scaffold inject)
         if: steps.check.outputs.present == 'true'
         working-directory: android/picwall_app
         run: |
@@ -53,14 +53,24 @@ jobs:
           import re
           p = 'android/app/src/main/AndroidManifest.xml'
           s = open(p, encoding='utf-8').read()
-          perms = ('    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>\n'
-                   '    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>\n')
+
+          perms = (
+              '    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>\n'
+              '    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>\n'
+              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
+              '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n'
+              '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n'
+          )
           if 'READ_MEDIA_IMAGES' not in s:
               s = re.sub(r'(<application\b)', perms + r'\1', s, count=1)
-              open(p, 'w', encoding='utf-8').write(s)
-              print('injected media permissions')
-          else:
-              print('permissions already present')
+          service = ('    <service android:name="com.pravera.flutter_foreground_task.service.ForegroundService"'
+                     ' android:foregroundServiceType="dataSync" android:exported="false"/>\n')
+          if 'com.pravera.flutter_foreground_task' not in s:
+              m = re.search(r'<application\b[^>]*>', s)
+              if m:
+                  s = s[:m.end()] + '\n' + service + s[m.end():]
+          open(p, 'w', encoding='utf-8').write(s)
+          print('manifest permissions/service injected')
           PY
 
       - name: Flutter pub get
