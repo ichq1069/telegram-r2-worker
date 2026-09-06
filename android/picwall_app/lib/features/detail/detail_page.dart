@@ -1,10 +1,19 @@
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gal/gal.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../data/models/media_item.dart';
+import '../../services/providers.dart';
 
 /// 详情页：大图 + 左右滑切 + 缩放 + 操作条（收藏/保存/分享/复制）。
-class DetailPage extends StatefulWidget {
+///
+/// 浏览时自动写入本地历史；收藏落本地库；保存调用系统相册（图片）。
+class DetailPage extends ConsumerStatefulWidget {
   const DetailPage({
     super.key,
     required this.items,
@@ -15,18 +24,22 @@ class DetailPage extends StatefulWidget {
   final int initialIndex;
 
   @override
-  State<DetailPage> createState() => _DetailPageState();
+  ConsumerState<DetailPage> createState() => _DetailPageState();
 }
 
-class _DetailPageState extends State<DetailPage> {
+class _DetailPageState extends ConsumerState<DetailPage> {
   late final PageController _pageController;
   late int _index;
+  bool _fav = false;
+  bool _favBusy = false;
+  bool _saving = false;
 
   @override
   void initState() {
     super.initState();
     _index = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
+    _syncItem(_current);
   }
 
   @override
@@ -37,6 +50,48 @@ class _DetailPageState extends State<DetailPage> {
 
   MediaItem get _current => widget.items[_index];
 
+  Future<void> _syncItem(MediaItem item) async {
+    // 写入浏览历史（幂等覆盖）
+    try {
+      final db = await ref.read(localDbProvider.future);
+      await db.record(item);
+    } catch (_) {
+      // 本地库不可用（如测试环境）时静默降级
+    }
+    // 读取收藏态
+    bool fav = false;
+    try {
+      final db = await ref.read(localDbProvider.future);
+      fav = await db.isFavorited(item.dedupeKey);
+    } catch (_) {}
+    if (mounted) setState(() => _fav = fav);
+  }
+
+  void _onPage(int i) {
+    setState(() => _index = i);
+    _syncItem(widget.items[i]);
+  }
+
+  Future<void> _toggleFavorite() async {
+    if (_favBusy) return;
+    setState(() {
+      _favBusy = true;
+      _fav = !_fav;
+    });
+    try {
+      final db = await ref.read(localDbProvider.future);
+      if (_fav) {
+        await db.favorite(_current);
+      } else {
+        await db.unfavorite(_current.dedupeKey);
+      }
+    } catch (_) {
+      setState(() => _fav = !_fav);
+    } finally {
+      if (mounted) setState(() => _favBusy = false);
+    }
+  }
+
   Future<void> _copyLink() async {
     await Clipboard.setData(ClipboardData(text: _current.url));
     if (mounted) {
@@ -44,19 +99,66 @@ class _DetailPageState extends State<DetailPage> {
     }
   }
 
-  void _favorite() {
-    // TODO(T1.9): 落本地 drift 收藏库。
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('收藏功能即将上线')));
+  Future<void> _share() async {
+    final url = _current.url;
+    if (!mounted) return;
+    try {
+      final title = _current.title.isNotEmpty ? _current.title : 'PicWall 图片';
+      await Share.share(url, subject: title);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('分享不可用，可先复制直链')),
+        );
+      }
+    }
   }
 
-  void _save() {
-    // TODO(T1.9/T2.x): 写系统相册，需权限。
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('保存功能即将上线')));
-  }
-
-  void _share() {
-    // TODO: share_plus 分享。
-    _copyLink();
+  Future<void> _save() async {
+    if (_saving) return;
+    final item = _current;
+    if (!item.isPhoto) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前仅支持图片保存到相册，其它类型可复制直链')),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      // 下载原图字节
+      final resp = await ref.read(apiClientProvider).dio.get<List<int>>(
+            item.url,
+            options: Options(responseType: ResponseType.bytes),
+          );
+      final bytes = resp.data;
+      if (bytes == null || bytes.isEmpty) throw StateError('empty');
+      final accessible = await Gal.hasAccess();
+      if (!accessible) {
+        final granted = await Gal.requestAccess();
+        if (!granted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('需要相册权限才能保存')),
+            );
+          }
+          return;
+        }
+      }
+      await Gal.putImageBytes(Uint8List.fromList(bytes));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已保存到系统相册')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保存失败：请检查网络或复制直链')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
@@ -68,7 +170,7 @@ class _DetailPageState extends State<DetailPage> {
           PageView.builder(
             controller: _pageController,
             itemCount: widget.items.length,
-            onPageChanged: (i) => setState(() => _index = i),
+            onPageChanged: _onPage,
             itemBuilder: (context, i) {
               final item = widget.items[i];
               return _MediaViewer(item: item);
@@ -116,8 +218,17 @@ class _DetailPageState extends State<DetailPage> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    _ActionBtn(icon: Icons.favorite_outline, label: '收藏', onTap: _favorite),
-                    _ActionBtn(icon: Icons.download_outlined, label: '保存', onTap: _save),
+                    _ActionBtn(
+                      icon: _fav ? Icons.favorite : Icons.favorite_outline,
+                      label: _fav ? '已收藏' : '收藏',
+                      color: _fav ? const Color(0xFFE91E63) : Colors.white,
+                      onTap: _toggleFavorite,
+                    ),
+                    _ActionBtn(
+                      icon: Icons.download_outlined,
+                      label: _saving ? '保存中…' : '保存',
+                      onTap: _save,
+                    ),
                     _ActionBtn(icon: Icons.share_outlined, label: '分享', onTap: _share),
                     _ActionBtn(icon: Icons.link, label: '复制', onTap: _copyLink),
                   ],
@@ -179,11 +290,13 @@ class _ActionBtn extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.color = Colors.white,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
@@ -195,7 +308,7 @@ class _ActionBtn extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: Colors.white),
+            Icon(icon, color: color),
             const SizedBox(height: 2),
             Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
           ],
