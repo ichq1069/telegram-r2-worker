@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../services/providers.dart';
 import 'session_controller.dart';
 
 /// 登录 / 注册 / 兑换。
@@ -64,7 +63,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
   }
 
-  Future<void> _redeem() async {
+  Future<void> _doRedeem() async {
     final code = _redeem.text.trim();
     if (code.isEmpty) {
       _showError('请输入兑换码');
@@ -216,7 +215,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             ),
                             const SizedBox(width: 10),
                             OutlinedButton(
-                              onPressed: busy ? null : () async => _redeem(),
+                              onPressed: busy ? null : () async => _doRedeem(),
                               child: const Text('兑换'),
                             ),
                           ],

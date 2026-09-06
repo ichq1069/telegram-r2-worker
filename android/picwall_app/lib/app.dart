@@ -79,7 +79,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final pages = const <Widget>[
+    const pages = <Widget>[
       DiscoverPage(),
       GalleryPage(),
       MyPage(),
