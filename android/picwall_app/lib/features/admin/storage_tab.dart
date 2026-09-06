@@ -174,7 +174,7 @@ class _StorageTabState extends ConsumerState<StorageTab> {
                 child: Text(
                   _loading
                       ? '加载中…'
-                      : '本页 ${fmtCount(_objectsCount)} 个 · D1 引用 ${fmtCount(_refs)}',
+                      : '已显示 ${fmtCount(_objects.length)} 个 · D1 引用 ${fmtCount(_refs)}',
                   style: theme.textTheme.bodySmall,
                 ),
               ),
