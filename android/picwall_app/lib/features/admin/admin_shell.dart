@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
 import '../../services/providers.dart';
+import 'scrape_tab.dart';
 import 'storage_tab.dart';
 import 'trash_tab.dart';
 
@@ -37,6 +38,7 @@ class _AdminShellPageState extends ConsumerState<AdminShellPage> {
   Widget build(BuildContext context) {
     final pages = <Widget>[
       StatsTab(adminKey: _key),
+      ScrapeTab(adminKey: _key),
       TrashTab(adminKey: _key),
       StorageTab(adminKey: _key),
     ];
@@ -64,6 +66,7 @@ class _AdminShellPageState extends ConsumerState<AdminShellPage> {
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.insert_chart_outlined), label: '统计'),
+          NavigationDestination(icon: Icon(Icons.auto_awesome_mosaic_outlined), label: '采集'),
           NavigationDestination(icon: Icon(Icons.delete_outline), label: '回收站'),
           NavigationDestination(icon: Icon(Icons.storage_outlined), label: '仓储'),
         ],

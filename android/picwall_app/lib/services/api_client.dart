@@ -39,6 +39,9 @@ class ApiClient {
       sendTimeout: long
           ? const Duration(milliseconds: AppDefaults.uploadTimeoutMs)
           : const Duration(milliseconds: AppDefaults.connectTimeoutMs),
+      receiveTimeout: long
+          ? const Duration(seconds: 240)
+          : const Duration(seconds: 60),
     );
   }
 

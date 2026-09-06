@@ -379,4 +379,84 @@ class GalleryRepository {
       refused: refusedDesc,
     );
   }
+
+  /// 解析采集页（POST /admin/api/scrape/analyze）。
+  /// 返回 {url,title,count,total,filtered,images:[...]}。
+  Future<Map<String, dynamic>> adminScrapeAnalyze(
+    String adminKey, {
+    required String url,
+    String cookie = '',
+    String ignoreKw = '',
+    String ignoreExt = '',
+    String must = '',
+  }) async {
+    final resp = await _api.postRaw(
+      '/admin/api/scrape/analyze',
+      body: {
+        'url': url,
+        'cookie': cookie,
+        'ignore_kw': ignoreKw,
+        'ignore_ext': ignoreExt,
+        'must': must,
+      },
+      query: _adminQuery(adminKey),
+      noKey: true,
+      long: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '解析失败').toString());
+    }
+    final d = resp['data'];
+    if (d is Map) return Map<String, dynamic>.from(d);
+    throw ApiException('服务器返回结构异常');
+  }
+
+  /// 单张抓取入库（POST /admin/api/scrape/grab_one）。
+  /// status: added/exists/ignored/failed；reason 为补充说明。
+  Future<({String status, String reason})> adminScrapeGrabOne(
+    String adminKey, {
+    required String url,
+    required String title,
+    String tags = '',
+    String level = 'pt',
+    String ref = '',
+    String ignoreKw = '',
+    String ignoreExt = '',
+    String must = '',
+    int? maxMb,
+    String cookie = '',
+    int seq = 0,
+  }) async {
+    final body = <String, dynamic>{
+      'url': url,
+      'title': title,
+      'tags': tags,
+      'level': level,
+      'ref': ref,
+      'ignore_kw': ignoreKw,
+      'ignore_ext': ignoreExt,
+      'must': must,
+      'cookie': cookie,
+      'seq': seq,
+    };
+    if (maxMb != null && maxMb > 0) body['max_mb'] = maxMb;
+    final resp = await _api.postRaw(
+      '/admin/api/scrape/grab_one',
+      body: body,
+      query: _adminQuery(adminKey),
+      noKey: true,
+      long: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '抓取失败').toString());
+    }
+    final d = resp['data'];
+    if (d is Map) {
+      return (
+        status: (d['status'] ?? 'failed').toString(),
+        reason: (d['reason'] ?? '').toString(),
+      );
+    }
+    throw ApiException('服务器返回结构异常');
+  }
 }
