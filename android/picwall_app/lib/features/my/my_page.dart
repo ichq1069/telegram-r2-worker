@@ -3,135 +3,206 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/constants.dart';
 import '../../data/models/user.dart';
-import '../../data/repositories/gallery_repository.dart';
 import '../../services/providers.dart';
 import '../auth/login_page.dart';
 import '../auth/session_controller.dart';
-import '../gallery/paged_media_grid.dart';
+import '../library/local_grid_page.dart';
+import 'my_files_page.dart';
 
-/// 我的文件 loader：/api/v1/user/files
-Future<PagedMedia> loadMyFiles(GalleryRepository repo, int page) {
-  return repo.myFiles(page: page, pageSize: 20);
-}
-
-/// 我的：资料卡 + 我的图片 + 退出。
-class MyPage extends ConsumerWidget {
+/// 我的：资料卡（级别/到期/配额）+ 我的图片/收藏/历史 + 设置 + 退出。
+class MyPage extends ConsumerStatefulWidget {
   const MyPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sessionCtl = ref.watch(sessionControllerProvider);
-    final session = sessionCtl.session;
-    if (session == null) return const LoginPage();
-    final settings = ref.watch(settingsControllerProvider);
+  ConsumerState<MyPage> createState() => _MyPageState();
+}
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('我的')),
-      body: ListView(
-        children: [
-          _ProfileCard(session: session),
-          const SizedBox(height: 8),
-          ListTile(
-            leading: const Icon(Icons.photo_outlined),
-            title: const Text('我的图片'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const PagedMediaGrid(
-                    title: '我的图片',
-                    loader: loadMyFiles,
-                  ),
-                ),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.settings_outlined),
-            title: const Text('设置'),
-            subtitle: Text(
-              settings.settings.apiBase,
-              style: Theme.of(context).textTheme.bodySmall,
-              overflow: TextOverflow.ellipsis,
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _openSettings(context, ref),
-          ),
-          const Divider(height: 1),
-          ListTile(
-            leading: const Icon(Icons.logout),
-            title: const Text('退出登录'),
-            onTap: () async {
-              await ref.read(sessionControllerProvider).logout();
-            },
-          ),
-        ],
-      ),
-    );
+class _MyPageState extends ConsumerState<MyPage> {
+  QuotaInfo? _quota;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadQuota());
   }
 
-  void _openSettings(BuildContext context, WidgetRef ref) {
+  Future<void> _loadQuota() async {
+    try {
+      final q = await ref.read(galleryRepositoryProvider).quota();
+      if (mounted) setState(() => _quota = q);
+    } catch (_) {
+      // 配额展示失败不阻塞页面
+    }
+  }
+
+  void _push(Widget page) {
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+
+  void _openSettings() {
     // TODO: 完整设置页见 T4.2；本轮提供退出与服务器信息占位。
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('完整设置页将在后续版本提供')),
     );
   }
-}
-
-class _ProfileCard extends StatelessWidget {
-  const _ProfileCard({required this.session});
-
-  final UserSession session;
 
   @override
   Widget build(BuildContext context) {
-    final s = session;
+    final sessionCtl = ref.watch(sessionControllerProvider);
+    final session = sessionCtl.session;
+    if (session == null) return const LoginPage();
 
-    return Card(
-      margin: const EdgeInsets.all(12),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
+    return Scaffold(
+      appBar: AppBar(title: const Text('我的')),
+      body: RefreshIndicator(
+        onRefresh: _loadQuota,
+        child: ListView(
           children: [
-            CircleAvatar(
-              radius: 26,
-              backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
-              child: Text(
-                s.username.isNotEmpty ? s.username[0].toUpperCase() : 'U',
-                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-              ),
+            _ProfileCard(session: session, quota: _quota),
+            const SizedBox(height: 8),
+            _entry(Icons.photo_outlined, '我的图片', () => _push(const MyFilesPage())),
+            _entry(Icons.favorite_outline, '我的收藏', () => _push(const LocalGridPage(
+                  title: '我的收藏',
+                  kind: LocalKind.favorite,
+                  emptyText: '还没有收藏，在详情页点 ♥ 收藏',
+                ))),
+            _entry(Icons.history, '浏览历史', () => _push(const LocalGridPage(
+                  title: '浏览历史',
+                  kind: LocalKind.history,
+                  emptyText: '还没有浏览记录',
+                ))),
+            _entry(Icons.settings_outlined, '设置', _openSettings),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.logout, color: Color(0xFFE53935)),
+              title: const Text('退出登录', style: TextStyle(color: Color(0xFFE53935))),
+              onTap: () async {
+                await ref.read(sessionControllerProvider).logout();
+              },
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    s.name.isNotEmpty ? s.name : s.username,
-                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      _LevelChip(level: s.level),
-                      if (s.expiresAt.isNotEmpty)
-                        Text(
-                          '到期 ${s.expiresAt}',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                    ],
-                  ),
-                ],
+            const SizedBox(height: 24),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text(
+                'API：${ref.watch(settingsControllerProvider).settings.apiBase}',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  fontSize: 11,
+                ),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _entry(IconData icon, String title, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(title),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
+    );
+  }
+}
+
+class _ProfileCard extends StatelessWidget {
+  const _ProfileCard({required this.session, this.quota});
+
+  final UserSession session;
+  final QuotaInfo? quota;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = session;
+    final q = quota;
+
+    return Card(
+      margin: const EdgeInsets.all(12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 26,
+                  backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
+                  child: Text(
+                    s.username.isNotEmpty ? s.username[0].toUpperCase() : 'U',
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        s.name.isNotEmpty ? s.name : s.username,
+                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          _LevelChip(level: s.level),
+                          if (s.expiresAt.isNotEmpty)
+                            Text(
+                              '到期 ${s.expiresAt}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (q != null && q.uploadQuota > 0) ...[
+              const SizedBox(height: 16),
+              Text(
+                '上传配额 ${q.uploadUsed} / ${q.uploadQuota} 张',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 6),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: q.ratio,
+                  minHeight: 6,
+                  backgroundColor: Colors.white12,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '存储已用 ${_fmtBytes(q.storageUsed)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _fmtBytes(int bytes) {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    }
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    }
+    return '$bytes B';
   }
 }
 

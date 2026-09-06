@@ -1,7 +1,6 @@
 import '../../services/api_client.dart';
 import '../models/media_item.dart';
 import '../models/user.dart';
-
 /// 分页结果封装（兼容 gallery/data 的 data.items 与 user/files 的顶层 total）。
 class PagedMedia {
   const PagedMedia({
@@ -99,6 +98,35 @@ class GalleryRepository {
   Future<void> deleteMyFile(String id) async {
     final clean = id.replaceAll(RegExp(r'[^0-9]'), '');
     await _api.deleteRaw('/api/v1/user/files/$clean');
+  }
+
+  /// 打标（POST /api/v1/user/files/:id/tags，body {tags:[...]}）。
+  Future<void> updateFileTags(String id, List<String> tags) async {
+    final clean = id.replaceAll(RegExp(r'[^0-9]'), '');
+    final resp = await _api.postRaw(
+      '/api/v1/user/files/$clean/tags',
+      body: {'tags': tags},
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '打标失败').toString());
+    }
+  }
+
+  /// 随机抽取共享库（/api/v1/random?count&type&tags，最多 10 张/次）。
+  Future<List<MediaItem>> randomPool({
+    int count = 10,
+    String type = '',
+    String tags = '',
+  }) async {
+    final data = await _api.getData(
+      '/api/v1/random',
+      query: {'count': count, 'type': type, 'tags': tags},
+    ) as Map<String, dynamic>;
+    final raw = data['items'] is List ? data['items'] as List : <dynamic>[];
+    return raw
+        .whereType<Map>()
+        .map((e) => MediaItem.fromPoolJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   /// 配额。

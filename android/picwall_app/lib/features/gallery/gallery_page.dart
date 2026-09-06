@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/repositories/gallery_repository.dart';
 import 'paged_media_grid.dart';
 
-/// 图库：共享库瀑布流，支持类型筛选（photo/video）。
+/// 图库：共享库瀑布流，支持类型筛选（photo/video）+ 无限滚动。
 class GalleryPage extends ConsumerStatefulWidget {
   const GalleryPage({super.key});
 
@@ -14,7 +14,6 @@ class GalleryPage extends ConsumerStatefulWidget {
 
 class _GalleryPageState extends ConsumerState<GalleryPage> {
   String _type = '';
-  bool _showMine = false;
 
   void _onType(String type) {
     if (_type == type) return;
@@ -22,9 +21,6 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   }
 
   Future<PagedMedia> _loader(GalleryRepository repo, int page) {
-    if (_showMine) {
-      return repo.myFiles(page: page, pageSize: 30);
-    }
     return repo.galleryData(limit: 60, offset: (page - 1) * 60, type: _type);
   }
 
@@ -33,63 +29,33 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('图库'),
-        actions: [
-          IconButton(
-            tooltip: '我的图片',
-            icon: Icon(
-              _showMine ? Icons.public : Icons.person_outline,
-            ),
-            onPressed: () => setState(() => _showMine = !_showMine),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (!_showMine)
-            _TypeFilterBar(current: _type, onChanged: _onType),
-          Expanded(
-            child: PagedMediaGrid(
-              key: ValueKey('$_type-$_showMine'),
-              title: '',
-              embedded: true,
-              loader: _loader,
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(52),
+          child: SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              children: [
+                for (final (value, label) in const [('', '全部'), ('photo', '图片'), ('video', '视频')])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text(label),
+                      selected: _type == value,
+                      onSelected: (_) => _onType(value),
+                    ),
+                  ),
+              ],
             ),
           ),
-        ],
+        ),
       ),
-    );
-  }
-}
-
-class _TypeFilterBar extends StatelessWidget {
-  const _TypeFilterBar({required this.current, required this.onChanged});
-
-  final String current;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    const opts = [
-      ('', '全部'),
-      ('photo', '图片'),
-      ('video', '视频'),
-    ];
-    return SizedBox(
-      height: 52,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        children: [
-          for (final (value, label) in opts)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text(label),
-                selected: current == value,
-                onSelected: (_) => onChanged(value),
-              ),
-            ),
-        ],
+      body: PagedMediaGrid(
+        key: ValueKey('$_type'),
+        title: '图库',
+        embedded: true,
+        loader: _loader,
       ),
     );
   }

@@ -220,8 +220,3 @@ class _CenterBox extends StatelessWidget {
     );
   }
 }
-
-/// 共享库 loader：/gallery/data
-Future<PagedMedia> loadSharedPool(GalleryRepository repo, int page) {
-  return repo.galleryData(limit: 60, offset: (page - 1) * 60);
-}
