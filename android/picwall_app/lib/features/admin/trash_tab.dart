@@ -18,8 +18,6 @@ class TrashTab extends ConsumerStatefulWidget {
 }
 
 class _TrashTabState extends ConsumerState<TrashTab> {
-  static const _titles = ['回收站', '未入库'];
-
   int _kind = 0;
   final List<AdminFile> _rows = [];
   bool _loading = false;
@@ -42,6 +40,12 @@ class _TrashTabState extends ConsumerState<TrashTab> {
   void dispose() {
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 200) {
+      _loadMore();
+    }
   }
 
   bool get _hasMore => _page < _totalPages;
