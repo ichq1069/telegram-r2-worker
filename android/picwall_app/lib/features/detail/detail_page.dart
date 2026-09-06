@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../data/models/media_item.dart';
+import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 
@@ -102,6 +103,94 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     }
   }
 
+  void _showDetail() {
+    final item = _current;
+    final rows = <_DetailRow>[
+      if (item.title.isNotEmpty) _DetailRow('文件名', item.title),
+      _DetailRow('类型', item.fileTypeLabel),
+      if (item.width != null && item.height != null)
+        _DetailRow('尺寸', '${item.width} × ${item.height}'),
+      if (item.fileSize != null)
+        _DetailRow('大小', _fmtSize(item.fileSize!)),
+      if (item.source.isNotEmpty) _DetailRow('来源', item.source),
+      if (item.createdAt.isNotEmpty) _DetailRow('时间', item.createdAt),
+      if (item.tags.isNotEmpty) _DetailRow('标签', item.tags.join(', ')),
+      _DetailRow('等级', item.level.label),
+    ];
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.4,
+        minChildSize: 0.2,
+        maxChildSize: 0.7,
+        expand: false,
+        builder: (ctx, ctrl) => ListView(
+          controller: ctrl,
+          padding: const EdgeInsets.all(20),
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text('文件详情',
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 16),
+            for (final r in rows) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 64,
+                    child: Text(r.label,
+                        style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                  ),
+                  Expanded(
+                    child: Text(r.value,
+                        style: const TextStyle(color: Colors.white, fontSize: 13)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: item.url));
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                      const SnackBar(content: Text('直链已复制')));
+                },
+                icon: const Icon(Icons.copy, size: 16, color: Colors.white70),
+                label: const Text('复制直链',
+                    style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _fmtSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1048576) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1073741824) return '${(bytes / 1048576).toStringAsFixed(1)} MB';
+    return '${(bytes / 1073741824).toStringAsFixed(1)} GB';
+  }
+
   Future<void> _share() async {
     final url = _current.url;
     if (!mounted) return;
@@ -176,7 +265,10 @@ class _DetailPageState extends ConsumerState<DetailPage> {
             onPageChanged: _onPage,
             itemBuilder: (context, i) {
               final item = widget.items[i];
-              return _MediaViewer(item: item);
+              return _MediaViewer(
+                item: item,
+                apiClient: ref.read(apiClientProvider),
+              );
             },
           ),
           // 顶部信息
@@ -233,7 +325,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                       onTap: _save,
                     ),
                     _ActionBtn(icon: Icons.share_outlined, label: '分享', onTap: _share),
-                    _ActionBtn(icon: Icons.link, label: '复制', onTap: _copyLink),
+                    _ActionBtn(icon: Icons.info_outline, label: '详情', onTap: _showDetail),
                   ],
                 ),
               ),
@@ -256,9 +348,10 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 }
 
 class _MediaViewer extends StatelessWidget {
-  const _MediaViewer({required this.item});
+  const _MediaViewer({required this.item, required this.apiClient});
 
   final MediaItem item;
+  final ApiClient apiClient;
 
   @override
   Widget build(BuildContext context) {
@@ -267,7 +360,7 @@ class _MediaViewer extends StatelessWidget {
       color: Colors.black,
       alignment: Alignment.center,
       child: item.isVideo
-          ? _VideoTile(url: item.url)
+          ? _VideoTile(url: item.url, apiClient: apiClient)
           : InteractiveViewer(
               maxScale: 5,
               child: Image.network(
@@ -290,9 +383,10 @@ class _MediaViewer extends StatelessWidget {
 
 /// 视频查看：首次点击初始化播放器（延迟联网），支持播放/暂停、循环。
 class _VideoTile extends StatefulWidget {
-  const _VideoTile({required this.url});
+  const _VideoTile({required this.url, required this.apiClient});
 
   final String url;
+  final ApiClient apiClient;
 
   @override
   State<_VideoTile> createState() => _VideoTileState();
@@ -318,7 +412,10 @@ class _VideoTileState extends State<_VideoTile> {
       _loading = true;
       _failed = false;
     });
-    final c = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+    final c = VideoPlayerController.networkUrl(
+      Uri.parse(widget.url),
+      httpHeaders: const {'Accept': '*/*'},
+    );
     _controller = c;
     c.setLooping(true);
     try {
@@ -332,6 +429,7 @@ class _VideoTileState extends State<_VideoTile> {
         _loading = false;
         _failed = true;
       });
+      DebugService.instance.recordError('VideoTile.init', e);
     }
   }
 
@@ -467,4 +565,10 @@ class _ActionBtn extends StatelessWidget {
       ),
     );
   }
+}
+
+class _DetailRow {
+  const _DetailRow(this.label, this.value);
+  final String label;
+  final String value;
 }
