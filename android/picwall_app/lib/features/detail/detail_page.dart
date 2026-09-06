@@ -102,7 +102,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     if (!mounted) return;
     try {
       final title = _current.title.isNotEmpty ? _current.title : 'PicWall 图片';
-      await Share.share(url, subject: title);
+      await SharePlus.instance.share(ShareParams(text: url, subject: title));
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
