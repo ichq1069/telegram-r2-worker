@@ -16,6 +16,9 @@ name: Deploy Worker
 on:
   push:
     branches: [main]
+    # 安卓端目录的改动只构建 APK（见 build-android.yml），不触发 Worker 部署
+    paths-ignore:
+      - 'android/**'
 
 jobs:
   deploy:

@@ -1,0 +1,78 @@
+# GitHub Actions：仅当 android/picwall_app 工程代码变动时构建 PicWall APK
+# （android/specs 等文档改动不触发；specs 同时也不触发 Worker 部署）
+# M1 阶段产出 debug 包；发布签名（release keystore）在 M4/T4.6 接入。
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/picwall_app/**'
+      - '.github/workflows/build-android.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if Flutter project not present yet
+        id: check
+        run: |
+          if [ -f android/picwall_app/pubspec.yaml ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Flutter
+        if: steps.check.outputs.present == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Android artifacts / Java
+        if: steps.check.outputs.present == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Scaffold Android platform (repo keeps Dart source only)
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: flutter create --platforms=android --org com.picwall --project-name picwall_app .
+
+      - name: Flutter pub get
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: flutter pub get
+
+      - name: Analyze
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: flutter analyze
+
+      - name: Test
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: flutter test
+
+      - name: Build debug APK (M1; 发布签名将在 M4/T4.6 引入)
+        if: steps.check.outputs.present == 'true'
+        id: build
+        working-directory: android/picwall_app
+        run: |
+          flutter build apk --debug
+          echo "apk_path=build/app/outputs/flutter-apk/app-debug.apk" >> "$GITHUB_OUTPUT"
+          echo "apk_name=picwall-debug.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        if: steps.check.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.apk_name }}
+          path: android/picwall_app/${{ steps.build.outputs.apk_path }}
+          if-no-files-found: error

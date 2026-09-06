@@ -1,0 +1,20 @@
+# Flutter/Dart 通用忽略
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
+
+# 平台壳由 CI flutter create 生成，不入库
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+
+# IDE
+.idea/
+*.iml
+.vscode/
