@@ -138,9 +138,9 @@ class _SyncFilterSheetState extends State<SyncFilterSheet> {
               ],
             ),
             const SizedBox(height: 14),
-            Text(
+            const Text(
               '格式（不选 = 全部格式）',
-              style: const TextStyle(fontWeight: FontWeight.w600),
+              style: TextStyle(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             Wrap(
