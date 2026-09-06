@@ -186,4 +186,23 @@ class GalleryRepository {
     }
     throw ApiException('上传失败：服务器未返回文件结果');
   }
+
+  /// 管理员总览统计。密钥校验规则见 worker.js：
+  /// `api_key`（query 或 X-API-Key header）=== env.API_KEY 才可访问 /admin/api/*。
+  Future<Map<String, dynamic>> adminStats(String adminKey) async {
+    final body = await _api.getRaw(
+      '/admin/api/stats',
+      query: {'api_key': adminKey},
+      noKey: true,
+    );
+    if (body['ok'] != true) {
+      throw ApiException(
+        (body['error'] ?? '管理员密钥无效').toString(),
+        hint: body['hint']?.toString(),
+      );
+    }
+    final d = body['data'];
+    if (d is Map) return Map<String, dynamic>.from(d);
+    return const {};
+  }
 }

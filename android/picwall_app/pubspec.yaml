@@ -22,6 +22,7 @@ dependencies:
   connectivity_plus: ^6.0.5
   http_parser: ^4.0.2
   photo_manager: ^3.12.0
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
-import '../../core/constants.dart';
 import '../../data/models/user.dart';
 import '../../services/providers.dart';
+import '../admin/admin_page.dart';
 import '../auth/login_page.dart';
 import '../auth/session_controller.dart';
 import '../library/local_grid_page.dart';
@@ -21,11 +22,34 @@ class MyPage extends ConsumerStatefulWidget {
 
 class _MyPageState extends ConsumerState<MyPage> {
   QuotaInfo? _quota;
+  String? _version;
+  int _versionTaps = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadQuota());
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(
+            () => _version = '${info.version} (${info.buildNumber})');
+      }
+    } catch (_) {
+      // 版本读取失败不影响页面
+    }
+  }
+
+  void _onVersionTap() {
+    _versionTaps++;
+    if (_versionTaps >= 5) {
+      _versionTaps = 0;
+      _push(const AdminPage());
+    }
   }
 
   Future<void> _loadQuota() async {
@@ -95,13 +119,37 @@ class _MyPageState extends ConsumerState<MyPage> {
             const SizedBox(height: 24),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                'API：${ref.watch(settingsControllerProvider).settings.apiBase}',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 11,
-                ),
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  GestureDetector(
+                    onTap: _onVersionTap,
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        _version == null
+                            ? 'PicWall'
+                            : 'PicWall v$_version',
+                        style: TextStyle(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'API：${ref.watch(settingsControllerProvider).settings.apiBase}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontSize: 11,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
           ],
