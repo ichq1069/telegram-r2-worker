@@ -504,4 +504,44 @@ class GalleryRepository {
     }
     return groups;
   }
+
+  /// files 全量库检索（GET /admin/api/files，支持 type/keyword 过滤）。
+  Future<(int total, List<AdminFileRecord> items)> adminFilesSearch(
+    String adminKey, {
+    int page = 1,
+    int pageSize = 40,
+    String keyword = '',
+    String type = '',
+  }) async {
+    final resp = await _api.getRaw(
+      '/admin/api/files',
+      query: {
+        ..._adminQuery(adminKey),
+        'page': page,
+        'page_size': pageSize,
+        if (keyword.trim().isNotEmpty) 'keyword': keyword.trim(),
+        if (type.isNotEmpty) 'type': type,
+      },
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '检索失败').toString());
+    }
+    final d = resp['data'];
+    final items = <AdminFileRecord>[];
+    if (d is Map) {
+      final raw = d['items'];
+      if (raw is List) {
+        for (final e in raw) {
+          if (e is Map) {
+            items.add(AdminFileRecord.fromJson(Map<String, dynamic>.from(e)));
+          }
+        }
+      }
+    }
+    return (
+      d is Map && d['total'] is num ? (d['total'] as num).toInt() : items.length,
+      items,
+    );
+  }
 }

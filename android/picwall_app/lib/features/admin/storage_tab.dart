@@ -4,8 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/format.dart';
 import '../../data/models/admin_file.dart';
 import '../../services/providers.dart';
+import 'files_search_panel.dart';
 
-/// R2 仓储：对象浏览 + 孤儿清理。
+enum _Pane { objects, files }
+
+/// R2 仓储：对象浏览 + 孤儿清理 + files 全量库文件检索。
 /// - 前缀过滤 + cursor 分页浏览（/admin/api/r2/list）；
 /// - 仅孤儿对象可勾选删除（服务端 state=orphan 强校验），D1 引用对象/备份只读；
 /// - 不做全量 cleanup（服务端会把未引用的 backups/ 一并删除，风险高）。
@@ -28,6 +31,7 @@ class _StorageTabState extends ConsumerState<StorageTab> {
   int _refs = 0;
   final Set<String> _sel = {};
   bool _acting = false;
+  _Pane _pane = _Pane.objects;
 
   @override
   void initState() {
@@ -139,11 +143,44 @@ class _StorageTabState extends ConsumerState<StorageTab> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: SizedBox(
+            width: double.infinity,
+            child: SegmentedButton<_Pane>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(
+                    value: _Pane.objects,
+                    label: Text('R2 对象'),
+                    icon: Icon(Icons.storage_outlined, size: 18)),
+                ButtonSegment(
+                    value: _Pane.files,
+                    label: Text('文件检索'),
+                    icon: Icon(Icons.manage_search, size: 18)),
+              ],
+              selected: {_pane},
+              onSelectionChanged: (s) => setState(() => _pane = s.first),
+            ),
+          ),
+        ),
+        Expanded(
+          child: _pane == _Pane.objects
+              ? _buildObjects()
+              : FilesSearchPanel(adminKey: widget.adminKey),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildObjects() {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
           child: Row(
             children: [
               Expanded(

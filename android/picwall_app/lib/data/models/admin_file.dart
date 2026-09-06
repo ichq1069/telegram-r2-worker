@@ -195,3 +195,69 @@ class RuleGroup {
         'must': must,
       };
 }
+
+/// 管理端 files 全量库检索项（对齐服务端 /admin/api/files items）。
+class AdminFileRecord {
+  const AdminFileRecord({
+    required this.id,
+    required this.url,
+    this.fileName = '',
+    this.fileType = '',
+    this.mimeType = '',
+    this.fileSize,
+    this.width,
+    this.height,
+    this.caption = '',
+    this.tags = '',
+    this.level = 'pt',
+    this.isPrivate = false,
+    this.chatTitle = '',
+    this.createdAt = '',
+    this.poolState = '',
+  });
+
+  final int id;
+  final String url;
+  final String fileName;
+  final String fileType;
+  final String mimeType;
+  final int? fileSize;
+  final int? width;
+  final int? height;
+  final String caption;
+  final String tags;
+  final String level;
+  final bool isPrivate;
+  final String chatTitle;
+  final String createdAt;
+  final String poolState;
+
+  factory AdminFileRecord.fromJson(Map<String, dynamic> j) {
+    String pick(Iterable<String> keys, {String def = ''}) {
+      for (final k in keys) {
+        final v = j[k];
+        if (v != null && v.toString().isNotEmpty) return v.toString();
+      }
+      return def;
+    }
+
+    final fileSize = j['file_size'];
+    return AdminFileRecord(
+      id: j['id'] is num ? (j['id'] as num).toInt() : 0,
+      url: pick(['display_url', 'r2_url', 'proxy_url']),
+      fileName: (j['file_name'] ?? '').toString(),
+      fileType: (j['file_type'] ?? '').toString(),
+      mimeType: (j['mime_type'] ?? '').toString(),
+      fileSize: fileSize is num ? fileSize.toInt() : null,
+      width: j['width'] is num ? (j['width'] as num).toInt() : null,
+      height: j['height'] is num ? (j['height'] as num).toInt() : null,
+      caption: (j['caption'] ?? '').toString(),
+      tags: (j['tags'] ?? '').toString(),
+      level: (j['level'] ?? 'pt').toString(),
+      isPrivate: j['is_private'] == 1,
+      chatTitle: (j['chat_title'] ?? '').toString(),
+      createdAt: (j['created_at'] ?? '').toString(),
+      poolState: (j['pool_state'] ?? '').toString(),
+    );
+  }
+}
