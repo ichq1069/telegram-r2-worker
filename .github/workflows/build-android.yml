@@ -58,6 +58,7 @@ jobs:
               '    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>\n'
               '    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>\n'
               '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
+              '    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>\n'
               '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n'
               '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n'
           )
