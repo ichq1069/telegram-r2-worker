@@ -19,6 +19,7 @@ class AppSettings {
     this.lockEnabled = false,
     this.lockBiometric = false,
     this.lockPattern = '',
+    this.themeMode = 'dark',
   });
 
   String apiBase;
@@ -32,6 +33,9 @@ class AppSettings {
 
   /// 存储为 `salt:sha256hex`；仅在解锁校验时本地比对，不落明文。
   String lockPattern;
+
+  /// 外观：system / light / dark。
+  String themeMode;
 
   bool get hasPattern => lockPattern.isNotEmpty;
 
@@ -112,6 +116,7 @@ class SettingsController extends ChangeNotifier {
         lockEnabled: map['lockEnabled'] == '1',
         lockBiometric: map['lockBiometric'] == '1',
         lockPattern: map['lockPattern'] ?? '',
+        themeMode: map['themeMode'] ?? 'dark',
       );
       _loaded = true;
     } catch (e) {
@@ -136,7 +141,6 @@ class SettingsController extends ChangeNotifier {
     if (wifiOnlyUpload != null) _settings.wifiOnlyUpload = wifiOnlyUpload;
     await _persist();
   }
-
   Future<void> saveApiKey(String key) async {
     _settings.apiKey = key;
     await _persist();
@@ -165,6 +169,12 @@ class SettingsController extends ChangeNotifier {
     await _persist();
   }
 
+  Future<void> saveThemeMode(String mode) async {
+    if (mode != 'system' && mode != 'light' && mode != 'dark') return;
+    _settings.themeMode = mode;
+    await _persist();
+  }
+
   Future<void> _persist() async {
     await _secure.writeSettings({
       'apiBase': _settings.apiBase,
@@ -176,6 +186,7 @@ class SettingsController extends ChangeNotifier {
       'lockEnabled': _settings.lockEnabled ? '1' : '0',
       'lockBiometric': _settings.lockBiometric ? '1' : '0',
       'lockPattern': _settings.lockPattern,
+      'themeMode': _settings.themeMode,
     });
     notifyListeners();
   }

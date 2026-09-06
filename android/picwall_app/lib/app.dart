@@ -19,13 +19,18 @@ class PicWallApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(settingsControllerProvider).settings.themeMode;
     return MaterialApp(
       title: 'PicWall',
       debugShowCheckedModeBanner: false,
       navigatorKey: rootNavigatorKey,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      themeMode: ThemeMode.dark,
+      themeMode: switch (mode) {
+        'system' => ThemeMode.system,
+        'light' => ThemeMode.light,
+        _ => ThemeMode.dark,
+      },
       home: const RootGate(),
     );
   }
