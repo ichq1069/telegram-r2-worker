@@ -530,8 +530,10 @@ class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
       }
     } catch (e) {
       DebugService.instance.recordError('VideoDownload', e);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('下载失败: ${e.toString().substring(0, 50)}')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('下载失败: ${e.toString().substring(0, 50)}')));
+      }
     } finally {
       if (mounted) setState(() { _downloading = false; _progress = null; });
     }
