@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/media_item.dart';
+import '../models/upload_task.dart';
 
 /// 本地条目（收藏/历史），media 存归一化 JSON。
 class LocalEntry {
@@ -34,7 +35,7 @@ class LocalDb {
     final path = '${await getDatabasesPath()}/$_dbName';
     final db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE favorites(
@@ -50,6 +51,12 @@ class LocalDb {
             viewed_at INTEGER NOT NULL
           )
         ''');
+        await _createUploadQueue(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await _createUploadQueue(db);
+        }
       },
     );
     _open = db;
@@ -118,6 +125,55 @@ class LocalDb {
 
   Future<void> clearHistoryKey(String key) async {
     await _db.delete('history', where: 'key = ?', whereArgs: [key]);
+  }
+
+  // ---------------- 上传队列 ----------------
+
+  static Future<void> _createUploadQueue(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS upload_queue(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'unknown',
+        tags TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL DEFAULT 'queued',
+        error TEXT,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        finished_at INTEGER
+      )
+    ''');
+  }
+
+  Future<int> insertUploadTask(UploadTask task) async {
+    return _db.insert('upload_queue', task.toDb());
+  }
+
+  Future<void> updateUploadTask(UploadTask task) async {
+    final id = task.id;
+    if (id == null) return;
+    final data = task.toDb()..remove('id');
+    await _db.update(
+      'upload_queue',
+      data,
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> deleteUploadTask(int id) async {
+    await _db.delete('upload_queue', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// 未完成任务（queued/uploading/failed 且文件仍存在），old→new。
+  Future<List<UploadTask>> listPendingUploads() async {
+    final rows = await _db.query(
+      'upload_queue',
+      orderBy: 'created_at ASC',
+    );
+    final tasks = rows.map((r) => UploadTask.fromDb(r)).toList();
+    return tasks.where((t) => t.state != UploadState.done).toList();
   }
 
   List<LocalEntry> _rowsToEntries(List<Map<String, Object?>> rows, String timeCol) {

@@ -1,3 +1,6 @@
+import 'package:dio/dio.dart';
+import 'package:http_parser/http_parser.dart';
+
 import '../../services/api_client.dart';
 import '../models/media_item.dart';
 import '../models/user.dart';
@@ -133,5 +136,54 @@ class GalleryRepository {
   Future<QuotaInfo> quota() async {
     final d = await _api.getData('/api/v1/user/quota') as Map<String, dynamic>;
     return QuotaInfo.fromJson(d);
+  }
+
+  /// 逐张上传单个本地文件。
+  /// 上传成功返回 true；失败（含后端 results 里的 error 条目）抛 ApiException。
+  Future<void> uploadLocalFile({
+    required String filePath,
+    required String fileName,
+    String tags = '',
+  }) async {
+    final ext = fileName.contains('.')
+        ? fileName.split('.').last.toLowerCase()
+        : '';
+    final MediaType? mt = switch (ext) {
+      'jpg' || 'jpeg' => MediaType('image', 'jpeg'),
+      'png' => MediaType('image', 'png'),
+      'webp' => MediaType('image', 'webp'),
+      'gif' => MediaType('image', 'gif'),
+      'heic' || 'heif' => MediaType('image', 'heic'),
+      'mp4' => MediaType('video', 'mp4'),
+      'mov' => MediaType('video', 'quicktime'),
+      'webm' => MediaType('video', 'webm'),
+      _ => null,
+    };
+    final mp = await MultipartFile.fromFile(
+      filePath,
+      filename: fileName,
+      contentType: mt,
+    );
+    final query = tags.trim().isEmpty ? null : {'tags': tags.trim()};
+    final resp = await _api.postMultipart(
+      '/api/v1/user/upload',
+      files: [mp],
+      query: query,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '上传失败').toString());
+    }
+    final data = resp['data'];
+    if (data is Map) {
+      final results = data['results'];
+      if (results is List && results.isNotEmpty) {
+        final first = results.first;
+        if (first is Map && (first['error'] as String?)?.isNotEmpty == true) {
+          throw ApiException((first['error'] as String).toString());
+        }
+        if (first is Map && first['id'] != null) return;
+      }
+    }
+    throw ApiException('上传失败：服务器未返回文件结果');
   }
 }

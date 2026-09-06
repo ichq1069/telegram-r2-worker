@@ -11,6 +11,7 @@ class AppSettings {
     this.apiKey = '',
     this.adminKey = '',
     this.onboarded = false,
+    this.wifiOnlyUpload = false,
   });
 
   String apiBase;
@@ -18,6 +19,7 @@ class AppSettings {
   String apiKey;
   String adminKey;
   bool onboarded;
+  bool wifiOnlyUpload;
 
   bool get configured => apiBase.isNotEmpty;
 
@@ -57,6 +59,7 @@ class SettingsController extends ChangeNotifier {
         apiKey: map['apiKey'] ?? '',
         adminKey: map['adminKey'] ?? '',
         onboarded: map['onboarded'] == '1',
+        wifiOnlyUpload: map['wifiOnlyUpload'] == '1',
       );
       _loaded = true;
     } catch (e) {
@@ -69,6 +72,7 @@ class SettingsController extends ChangeNotifier {
     String? apiBase,
     String? cdnBase,
     bool? onboarded,
+    bool? wifiOnlyUpload,
   }) async {
     if (apiBase != null && apiBase.trim().isNotEmpty) {
       _settings.apiBase = normalizeHost(apiBase);
@@ -77,6 +81,7 @@ class SettingsController extends ChangeNotifier {
       _settings.cdnBase = normalizeHost(cdnBase);
     }
     if (onboarded != null) _settings.onboarded = onboarded;
+    if (wifiOnlyUpload != null) _settings.wifiOnlyUpload = wifiOnlyUpload;
     await _persist();
   }
 
@@ -97,6 +102,7 @@ class SettingsController extends ChangeNotifier {
       'apiKey': _settings.apiKey,
       'adminKey': _settings.adminKey,
       'onboarded': _settings.onboarded ? '1' : '0',
+      'wifiOnlyUpload': _settings.wifiOnlyUpload ? '1' : '0',
     });
     notifyListeners();
   }

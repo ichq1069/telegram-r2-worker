@@ -7,6 +7,7 @@ import '../../services/providers.dart';
 import '../auth/login_page.dart';
 import '../auth/session_controller.dart';
 import '../library/local_grid_page.dart';
+import '../upload/upload_page.dart';
 import 'my_files_page.dart';
 
 /// 我的：资料卡（级别/到期/配额）+ 我的图片/收藏/历史 + 设置 + 退出。
@@ -39,6 +40,13 @@ class _MyPageState extends ConsumerState<MyPage> {
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
   }
 
+  Future<void> _openUpload() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const UploadPage()),
+    );
+    await _loadQuota();
+  }
+
   void _openSettings() {
     // TODO: 完整设置页见 T4.2；本轮提供退出与服务器信息占位。
     ScaffoldMessenger.of(context).showSnackBar(
@@ -60,6 +68,7 @@ class _MyPageState extends ConsumerState<MyPage> {
           children: [
             _ProfileCard(session: session, quota: _quota),
             const SizedBox(height: 8),
+            _entry(Icons.cloud_upload_outlined, '上传图片', _openUpload),
             _entry(Icons.photo_outlined, '我的图片', () => _push(const MyFilesPage())),
             _entry(Icons.favorite_outline, '我的收藏', () => _push(const LocalGridPage(
                   title: '我的收藏',

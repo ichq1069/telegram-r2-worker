@@ -15,10 +15,19 @@ class ApiClient {
             receiveTimeout: const Duration(seconds: 60),
             headers: {'Content-Type': 'application/json'},
           ),
+        ),
+        _upDio = Dio(
+          BaseOptions(
+            baseUrl: baseUrl,
+            connectTimeout: const Duration(milliseconds: AppDefaults.connectTimeoutMs),
+            receiveTimeout: const Duration(seconds: 120),
+            sendTimeout: const Duration(milliseconds: AppDefaults.uploadTimeoutMs),
+          ),
         );
 
   final String _apiKey;
   final Dio _dio;
+  final Dio _upDio;
 
   Dio get dio => _dio;
 
@@ -113,6 +122,33 @@ class ApiClient {
       options: _opts(noKey: noKey),
     );
     return resp.data ?? const {};
+  }
+
+  /// 上传：multipart POST，files 统一以字段名 [field] 提交。
+  /// 返回后端完整响应 map（data.results 含每张结果）。
+  Future<Map<String, dynamic>> postMultipart(
+    String path, {
+    required List<MultipartFile> files,
+    String field = 'files',
+    Map<String, dynamic>? query,
+    bool noKey = false,
+  }) async {
+    final form = FormData();
+    for (final f in files) {
+      form.files.add(MapEntry(field, f));
+    }
+    final resp = await _upDio.post<Map<String, dynamic>>(
+      path,
+      data: form,
+      queryParameters: query,
+      options: Options(
+        headers: noKey || _apiKey.isEmpty ? null : {'X-API-Key': _apiKey},
+        sendTimeout: const Duration(milliseconds: AppDefaults.uploadTimeoutMs),
+      ),
+    );
+    final body = resp.data;
+    if (body == null) throw ApiException('空响应');
+    return body;
   }
 
   void _ensureOk(Map<String, dynamic> body) {
