@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/local/local_db.dart';
 import '../data/repositories/auth_repository.dart';
 import '../data/repositories/gallery_repository.dart';
 import 'api_client.dart';
@@ -38,4 +39,9 @@ final authRepositoryProvider = Provider<AuthRepository>(
 /// 图库仓库。
 final galleryRepositoryProvider = Provider<GalleryRepository>(
   (ref) => GalleryRepository(ref.watch(apiClientProvider)),
+);
+
+/// 本地库（收藏/历史，sqflite）。懒加载：仅进入收藏/历史/详情页时打开。
+final localDbProvider = FutureProvider<LocalDb>(
+  (ref) => LocalDb.open(),
 );

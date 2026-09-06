@@ -96,6 +96,42 @@ class MediaItem {
     );
   }
 
+  /// 本地库（收藏/历史）持久化用归一化 JSON。
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'url': url,
+        'thumbUrl': thumbUrl,
+        'title': title,
+        'tags': tags,
+        'level': level.wire,
+        'isPrivate': isPrivate,
+        'fileType': fileType,
+        'width': width,
+        'height': height,
+        'fileSize': fileSize,
+        'source': source,
+        'createdAt': createdAt,
+      };
+
+  /// 从 toJson 结果还原；缺字段有兜底。
+  factory MediaItem.fromLocalJson(Map<String, dynamic> j) {
+    return MediaItem(
+      id: _str(j['id']),
+      url: _str(j['url']),
+      thumbUrl: j['thumbUrl'] is String ? j['thumbUrl'] as String : null,
+      title: _str(j['title']),
+      tags: _tags(j['tags']),
+      level: levelFromWire(j['level']?.toString()),
+      isPrivate: _bool(j['isPrivate']),
+      fileType: _str(j['fileType'], fallback: 'photo'),
+      width: j['width'] is num ? (j['width'] as num).toInt() : null,
+      height: j['height'] is num ? (j['height'] as num).toInt() : null,
+      fileSize: j['fileSize'] is num ? (j['fileSize'] as num).toInt() : null,
+      source: _str(j['source']),
+      createdAt: _str(j['createdAt']),
+    );
+  }
+
   static String _str(dynamic v, {String fallback = ''}) {
     if (v == null) return fallback;
     return v.toString();
