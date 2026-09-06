@@ -87,3 +87,72 @@ class AdminListPage<T> {
     );
   }
 }
+
+/// R2 对象（/admin/api/r2/list 单条）。
+class R2Object {
+  const R2Object({
+    required this.key,
+    required this.size,
+    required this.uploaded,
+    required this.state,
+    required this.publicUrl,
+  });
+
+  final String key;
+  final int size;
+  final String uploaded;
+  final String state;
+  final String publicUrl;
+
+  /// state：page(站点静态页) / backup(备份) / used(D1 有引用) / orphan(孤儿)。
+  bool get isOrphan => state == 'orphan';
+
+  factory R2Object.fromJson(Map<String, dynamic> j) {
+    return R2Object(
+      key: (j['key'] ?? '').toString(),
+      size: j['size'] is num ? (j['size'] as num).toInt() : 0,
+      uploaded: (j['uploaded'] ?? '').toString(),
+      state: (j['state'] ?? '').toString(),
+      publicUrl: (j['public_url'] ?? '').toString(),
+    );
+  }
+}
+
+/// R2 列表页（cursor 分页）。
+class R2ListPage {
+  const R2ListPage({
+    required this.objects,
+    required this.objectsCount,
+    required this.refsCount,
+    required this.truncated,
+    required this.publicBase,
+    this.cursor,
+  });
+
+  final List<R2Object> objects;
+  final int objectsCount;
+  final int refsCount;
+  final bool truncated;
+  final String publicBase;
+  final String? cursor;
+
+  bool get hasMore => truncated && cursor != null;
+
+  factory R2ListPage.fromJson(Map<String, dynamic> d) {
+    final objects = <R2Object>[];
+    final raw = d['objects'];
+    if (raw is List) {
+      for (final e in raw) {
+        if (e is Map) objects.add(R2Object.fromJson(Map<String, dynamic>.from(e)));
+      }
+    }
+    return R2ListPage(
+      objects: objects,
+      objectsCount: d['objects_count'] is num ? (d['objects_count'] as num).toInt() : objects.length,
+      refsCount: d['refs_count'] is num ? (d['refs_count'] as num).toInt() : 0,
+      truncated: d['truncated'] == true,
+      publicBase: (d['public_base'] ?? '').toString(),
+      cursor: d['cursor']?.toString(),
+    );
+  }
+}

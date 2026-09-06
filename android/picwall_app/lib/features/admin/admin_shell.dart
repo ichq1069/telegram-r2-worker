@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
 import '../../services/providers.dart';
+import 'storage_tab.dart';
 import 'trash_tab.dart';
 
 /// 管理模式壳：承载 统计 / 回收站 / 仓储 三个运维 Tab。
@@ -37,7 +38,7 @@ class _AdminShellPageState extends ConsumerState<AdminShellPage> {
     final pages = <Widget>[
       StatsTab(adminKey: _key),
       TrashTab(adminKey: _key),
-      const _StoragePlaceholder(),
+      StorageTab(adminKey: _key),
     ];
     return Scaffold(
       appBar: AppBar(
@@ -233,33 +234,4 @@ String _types(List list) {
     }
   }
   return parts.isEmpty ? '—' : parts.join('，');
-}
-
-/// 仓储模块占位（下一迭代接入 R2 对象浏览）。
-class _StoragePlaceholder extends StatelessWidget {
-  const _StoragePlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.storage_outlined,
-                size: 56, color: theme.colorScheme.outline),
-            const SizedBox(height: 12),
-            const Text('R2 仓储',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            const SizedBox(height: 6),
-            Text('对象浏览 / 孤儿清理 / 用量预警将在下一迭代接入',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
-          ],
-        ),
-      ),
-    );
-  }
 }

@@ -320,4 +320,63 @@ class GalleryRepository {
       pageSize: 0,
     );
   }
+
+  /// R2 对象列表（GET /admin/api/r2/list?limit&prefix&cursor）。
+  Future<R2ListPage> adminR2List(
+    String adminKey, {
+    int limit = 200,
+    String prefix = '',
+    String? cursor,
+  }) async {
+    final resp = await _api.getRaw(
+      '/admin/api/r2/list',
+      query: {
+        ..._adminQuery(adminKey),
+        'limit': limit,
+        if (prefix.isNotEmpty) 'prefix': prefix,
+        if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+      },
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '获取 R2 列表失败').toString());
+    }
+    final d = resp['data'];
+    if (d is Map) return R2ListPage.fromJson(Map<String, dynamic>.from(d));
+    throw ApiException('服务器返回结构异常');
+  }
+
+  /// 删除孤儿对象（POST /admin/api/r2/delete，仅允许 state=orphan）。
+  Future<({int deleted, List<String> refused})> adminR2Delete(
+    String adminKey, {
+    required List<String> keys,
+  }) async {
+    final resp = await _api.postRaw(
+      '/admin/api/r2/delete',
+      body: {'keys': keys},
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '删除失败').toString());
+    }
+    final data = resp['data'];
+    if (data is! Map) throw ApiException('服务器返回结构异常');
+    final deletedRaw = data['deleted'];
+    final refusedRaw = data['refused'];
+    final refusedDesc = <String>[];
+    if (refusedRaw is List) {
+      for (final e in refusedRaw) {
+        if (e is Map) {
+          final key = (e['key'] ?? '').toString();
+          final reason = (e['error'] ?? e['state'] ?? '').toString();
+          refusedDesc.add(reason.isEmpty ? key : '$key($reason)');
+        }
+      }
+    }
+    return (
+      deleted: deletedRaw is List ? deletedRaw.length : 0,
+      refused: refusedDesc,
+    );
+  }
 }
