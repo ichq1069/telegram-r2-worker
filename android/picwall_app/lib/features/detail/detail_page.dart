@@ -6,6 +6,7 @@ import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../core/constants.dart';
 import '../../data/models/media_item.dart';
 import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
@@ -93,13 +94,6 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       if (mounted) setState(() => _fav = !_fav);
     } finally {
       if (mounted) setState(() => _favBusy = false);
-    }
-  }
-
-  Future<void> _copyLink() async {
-    await Clipboard.setData(ClipboardData(text: _current.url));
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('直链已复制')));
     }
   }
 
