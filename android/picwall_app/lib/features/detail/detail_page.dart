@@ -229,7 +229,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         }
       }
       await Gal.putImageBytes(Uint8List.fromList(bytes),
-          name: item.title.isNotEmpty ? item.title : null);
+          name: item.title.isNotEmpty ? item.title : 'picwall_video');
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('视频已保存到相册')));
     } catch (e) {
@@ -515,7 +515,7 @@ class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
           return;
         }
       }
-      await Gal.putImageBytes(Uint8List.fromList(bytes), name: widget.item.title.isNotEmpty ? widget.item.title : null);
+      await Gal.putImageBytes(Uint8List.fromList(bytes), name: widget.item.title.isNotEmpty ? widget.item.title : 'picwall_video');
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('视频已保存到相册')));
     } catch (e) {
