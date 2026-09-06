@@ -14,7 +14,6 @@ import 'album_sync_scanner.dart';
 /// - WorkManager 周期任务（≥15 分钟）在应用被杀后唤醒并按需拉起前台服务；
 /// - sqflite `sync_meta` 上的 `sync_running` 锁保证同一时刻只有一端在上传，
 ///   主进程的 UploadEngine 在锁有效时挂起。
-library;
 
 const String kSyncChannelId = 'picwall_sync';
 const String kSyncChannelName = 'PicWall 相册同步';
@@ -35,7 +34,7 @@ class SyncTaskHandler extends TaskHandler {
   void onRepeatEvent(DateTime timestamp) {}
 
   @override
-  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {}
+  Future<void> onDestroy(DateTime timestamp) async {}
 }
 
 /// 后台同步门面：供 UI 与 WorkManager 调用。
@@ -58,7 +57,11 @@ class SyncService {
         showWhen: true,
       ),
       iosNotificationOptions: const IOSNotificationOptions(),
-      foregroundTaskOptions: const ForegroundTaskOptions(),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(
+          const Duration(minutes: 1),
+        ),
+      ),
     );
     if (_inited) return;
     _inited = true;
@@ -73,7 +76,6 @@ class SyncService {
     if (enabled == null) return false;
     await db.setSyncRunning(true);
     final res = await FlutterForegroundTask.startService(
-      serviceTypes: [ForegroundServiceTypes.dataSync],
       notificationTitle: 'PicWall 相册同步',
       notificationText: '正在准备同步「${enabled.albumName}」…',
       callback: syncTaskCallback,
@@ -105,7 +107,6 @@ class SyncService {
       kSyncPeriodicTask,
       kSyncPeriodicTask,
       frequency: const Duration(minutes: 15),
-      existingPeriodicWorkPolicy: ExistingPeriodicWorkPolicy.update,
     );
   }
 

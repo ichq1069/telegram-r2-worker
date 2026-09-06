@@ -29,9 +29,7 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   bool _ready = false;
   bool _auto = false;
   bool _running = false;
-  bool _hasPermission = false;
   bool _busy = false;
-  String? _error;
   QueueSnapshot? _snap;
   Timer? _poll;
 
@@ -94,7 +92,6 @@ class _SyncPageState extends ConsumerState<SyncPage> {
     try {
       final state = await PhotoManager.requestPermissionExtend();
       if (!mounted) return;
-      setState(() => _hasPermission = state.hasAccess);
       if (!state.hasAccess) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('请在系统设置中允许“照片与视频”访问')),

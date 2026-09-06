@@ -81,7 +81,7 @@ class _AlbumCover extends StatelessWidget {
       final assets =
           await album.getAssetListPaged(page: 0, size: 1);
       if (assets.isEmpty) return null;
-      return assets.first.thumbnailDataWithSize(
+      return await assets.first.thumbnailDataWithSize(
         const ThumbnailSize.square(160),
         quality: 80,
       );
