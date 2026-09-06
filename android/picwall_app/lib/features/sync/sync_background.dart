@@ -58,9 +58,7 @@ class SyncService {
       ),
       iosNotificationOptions: const IOSNotificationOptions(),
       foregroundTaskOptions: ForegroundTaskOptions(
-        eventAction: ForegroundTaskEventAction.repeat(
-          const Duration(minutes: 1),
-        ),
+        eventAction: ForegroundTaskEventAction.repeat(60000),
       ),
     );
     if (_inited) return;
