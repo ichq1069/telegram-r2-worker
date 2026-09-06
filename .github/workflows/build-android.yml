@@ -105,6 +105,20 @@ jobs:
           chmod 600 "$HOME/.android/debug.keystore"
           echo "Fixed debug keystore restored."
 
+      - name: Auto-increment build number
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: |
+          python3 - <<'PY'
+          import re
+          p = 'pubspec.yaml'
+          s = open(p).read()
+          run = '${{ github.run_number }}'
+          s = re.sub(r'(version:\s+\d+\.\d+\.\d+\+)\d+', rf'\g<1>{run}', s)
+          open(p, 'w').write(s)
+          print(f'build number set to {run}')
+          PY
+
       - name: Build debug APK (M1; 发布签名将在 M4/T4.6 引入)
         if: steps.check.outputs.present == 'true'
         id: build
