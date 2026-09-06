@@ -331,7 +331,7 @@ String _typeText(List list) {
     if (e is Map) {
       final t = (e['file_type'] ?? '').toString();
       final c = e['c'] is num ? (e['c'] as num).toInt() : 0;
-      if (t.isNotEmpty) parts.add('$t ×$_nf(c)');
+      if (t.isNotEmpty) parts.add('$t ×${_nf(c)}');
     }
   }
   return parts.isEmpty ? '—' : parts.join('，');
