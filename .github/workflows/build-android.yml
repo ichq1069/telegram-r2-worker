@@ -60,6 +60,16 @@ jobs:
         working-directory: android/picwall_app
         run: flutter test
 
+      - name: Restore fixed debug keystore (stable APK signature for updates)
+        if: steps.check.outputs.present == 'true' && env.KEYSTORE_B64 != ''
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          mkdir -p "$HOME/.android"
+          echo "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          echo "Fixed debug keystore restored."
+
       - name: Build debug APK (M1; 发布签名将在 M4/T4.6 引入)
         if: steps.check.outputs.present == 'true'
         id: build
