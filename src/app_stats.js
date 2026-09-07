@@ -154,50 +154,31 @@ export async function handleAppInstalls(request, env) {
   }
 }
 
-// ─── 应用更新源（Worker 侧代理 GitHub releases/latest） ──
-// App 端直连 api.github.com 可能因网络/限流不稳定，改走同源 Worker：
-// 既能拿到最新版本号，也能拼出 R2 上的 APK 直链（R2_PUBLIC_URL 更快更稳）。
+// ─── 应用更新源（Worker 侧读取 R2 公开静态托管清单） ──
+// GitHub 仓库是私有的，App/Worker 匿名访问 api.github.com 都会 404，不能作为更新源。
+// 改为：CI 构建成功后把 APK 与 apk/latest.json 上传到 R2 公开桶（R2_PUBLIC_URL 指向的
+// 静态站点），App 通过同源 Worker /api/app/update 读取清单拿版本号与 APK 直链。
+// latest.json 结构：{ "version": "0.1.0+54", "body": "...", "published_at": "..." }，
+// download_url 固定拼 R2_PUBLIC_URL/apk/picwall-latest.apk（文件名稳定、免编码问题）。
 export async function handleAppUpdate(env) {
   try {
-    const resp = await fetch('https://api.github.com/repos/ichq1069/telegram-r2-worker/releases/latest', {
-      headers: {
-        'User-Agent': 'picwall-worker',
-        'Accept': 'application/vnd.github.v3+json'
-      }
-    });
-    if (!resp.ok) {
-      return json({ ok: false, error: 'github upstream ' + resp.status }, 502);
-    }
-    const rel = await resp.json();
-    const tag = String(rel.tag_name || '').trim();
-    if (!tag) return json({ ok: false, error: 'no latest release' }, 404);
-    const version = tag.replace(/^[vV]/, '');
+    if (!env.R2_BUCKET) return json({ ok: false, error: 'r2 not configured' }, 500);
+    const obj = await env.R2_BUCKET.get('apk/latest.json');
+    if (!obj) return json({ ok: false, error: 'update manifest not found' }, 404);
+    const meta = await obj.json().catch(() => null);
+    const version = String((meta && meta.version) || '').trim().replace(/^[vV]/, '');
+    if (!version) return json({ ok: false, error: 'bad manifest' }, 502);
 
-    // 首选 R2 公开直链（版本化文件名，GitHub Actions 构建后同步上传）
     const publicBase = (env.R2_PUBLIC_URL || '').replace(/\/+$/, '');
-    let downloadUrl = '';
-    if (publicBase) {
-      downloadUrl = publicBase + '/apk/picwall-' + encodeURIComponent(version) + '.apk';
-    }
-    // 兜底：GitHub Release asset
-    if (!downloadUrl) {
-      const assets = rel.assets || [];
-      for (const a of assets) {
-        const n = String(a.name || '');
-        if (n.endsWith('.apk')) {
-          downloadUrl = a.browser_download_url || '';
-          break;
-        }
-      }
-    }
+    const downloadUrl = publicBase ? publicBase + '/apk/picwall-latest.apk' : '';
 
     return json({
       ok: true,
       version: version,
-      tag: tag,
+      tag: 'v' + version,
       download_url: downloadUrl,
-      body: String(rel.body || '').slice(0, 2000),
-      published_at: String(rel.published_at || '')
+      body: String((meta && meta.body) || '').slice(0, 2000),
+      published_at: String((meta && meta.published_at) || '')
     });
   } catch (e) {
     console.error('app update error:', e.message);
