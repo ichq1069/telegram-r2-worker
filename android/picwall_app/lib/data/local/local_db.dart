@@ -378,12 +378,16 @@ class LocalDb {
       switch (r['state']) {
         case 'queued':
           queued = c;
+          break;
         case 'uploading':
           uploading = c;
+          break;
         case 'done':
           done = c;
+          break;
         case 'failed':
           failed = c;
+          break;
       }
     }
     return QueueSnapshot(

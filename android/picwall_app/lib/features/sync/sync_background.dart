@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:workmanager/workmanager.dart';
@@ -160,18 +162,23 @@ class SyncService {
 
       final scanner = AlbumSyncScanner(db: db, engine: engine);
       var lastCount = 0;
-      final added = await scanner.syncAlbum(
-        album,
-        filter: filter,
-        onProgress: (n, s) {
-          if (n != lastCount && (s % 25 == 0 || n % 10 == 0)) {
-            lastCount = n;
-            _notify('PicWall 相册同步', '扫描中：已发现新增 $n 张（已查 $s）…');
-          }
-        },
-      );
-      _notify('PicWall 相册同步',
-          added > 0 ? '发现 $added 张新照片，开始上传…' : '没有新增内容');
+      Future<int> scanOnce() {
+        return scanner.syncAlbum(
+          album,
+          filter: filter,
+          onProgress: (n, s) {
+            if (n != lastCount && (s % 25 == 0 || n % 10 == 0)) {
+              lastCount = n;
+              _notify('PicWall 相册同步', '扫描中：已发现新增 $n 张（已查 $s）…');
+            }
+          },
+        );
+      }
+
+      final firstNew = await scanOnce();
+      if (firstNew > 0) {
+        _notify('PicWall 相册同步', '发现 $firstNew 张新照片，开始上传…');
+      }
 
       var totalScanned = 0;
       engine.addListener(() {
@@ -182,13 +189,39 @@ class SyncService {
         totalScanned = done + failed + queued + uploading;
         if (totalScanned > 0 && (uploading > 0 || queued > 0)) {
           final pct = totalScanned > 0 ? ((done / totalScanned) * 100).round() : 0;
+          final inflight = uploading > 1 ? ' · 同时上传 $uploading' : '';
           _notify(
             'PicWall 相册同步',
-            '上传中 $pct%：剩余 $queued · 成功 $done · 失败 $failed',
+            '上传中 $pct%：剩余 $queued$inflight · 成功 $done · 失败 $failed',
           );
         }
       });
-      await engine.start();
+
+      // 上传进行中每 6 秒补扫一次相册：中途新拍/新加进相册的照片立即入队，
+      // 待同步（队列）数量随之上涨；主进程持锁，只有本服务在上传，无并发冲突。
+      // ignoreSyncLock：同步前台服务本身就是锁持有者，需要绕过队列启动检查。
+      final rescanTimer = Timer.periodic(
+        const Duration(seconds: 6),
+        (_) async {
+          if (!await db.isSyncRunning()) return;
+          try {
+            await scanOnce();
+          } catch (_) {}
+        },
+      );
+
+      await engine.start(ignoreSyncLock: true);
+      rescanTimer.cancel();
+
+      // 收尾补扫，确保上传末尾新出现的照片也不被漏掉，追平后才结束本轮。
+      if (!engine.networkPaused && await db.isSyncRunning()) {
+        for (var i = 0; i < 2; i++) {
+          final extra = await scanOnce();
+          if (extra == 0) break;
+          await engine.start(ignoreSyncLock: true);
+          if (engine.networkPaused) break;
+        }
+      }
 
       if (engine.networkPaused) {
         await _notify('PicWall 相册同步', '已挂起：当前非 Wi-Fi 网络，任务保留待连接 Wi-Fi');
@@ -196,7 +229,8 @@ class SyncService {
         await _notify('PicWall 相册同步',
             '本轮结束：成功 ${engine.doneCount} · 失败 ${engine.failedCount}，可手动重试');
       } else {
-        await _notify('PicWall 相册同步', '本轮同步完成，共上传 ${engine.doneCount} 张');
+        await _notify('PicWall 相册同步',
+            engine.doneCount > 0 ? '本轮同步完成，共上传 ${engine.doneCount} 张' : '没有新增内容');
       }
     } catch (e, st) {
       DebugService.instance.recordError('SyncService.runPass', e, st);

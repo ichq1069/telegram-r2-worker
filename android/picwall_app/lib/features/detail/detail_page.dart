@@ -37,6 +37,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   bool _favBusy = false;
   bool _saving = false;
 
+  /// 当前配置的 API 根地址（用于把相对直链补成绝对地址）。
+  String get _base => ref.read(settingsControllerProvider).settings.apiBase;
+
   @override
   void initState() {
     super.initState();
@@ -175,7 +178,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
                 onPressed: () {
-                  Clipboard.setData(ClipboardData(text: item.url));
+                  Clipboard.setData(
+                      ClipboardData(text: _abs(_base, item.url)));
                   ScaffoldMessenger.of(ctx).showSnackBar(
                       const SnackBar(content: Text('直链已复制')));
                 },
@@ -255,7 +259,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   }
 
   Future<void> _share() async {
-    final url = _current.url;
+    final url = _abs(_base, _current.url);
     if (!mounted) return;
     try {
       final title = _current.title.isNotEmpty ? _current.title : 'PicWall 图片';
@@ -331,6 +335,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
               return _MediaViewer(
                 item: item,
                 apiClient: ref.read(apiClientProvider),
+                apiBase: _base,
               );
             },
           ),
@@ -417,19 +422,26 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 }
 
 class _MediaViewer extends StatelessWidget {
-  const _MediaViewer({required this.item, required this.apiClient});
+  const _MediaViewer({
+    required this.item,
+    required this.apiClient,
+    required this.apiBase,
+  });
 
   final MediaItem item;
   final ApiClient apiClient;
+  final String apiBase;
 
   @override
   Widget build(BuildContext context) {
-    final url = item.displayThumb;
+    // 服务端可能返回相对路径（如 /file/tg/…），补齐 scheme/host 后展示/播放。
+    final url = _abs(apiBase, item.displayThumb);
+    final videoUrl = _abs(apiBase, item.url);
     return Container(
       color: Colors.black,
       alignment: Alignment.center,
       child: item.isVideo
-          ? _VideoTile(url: item.url, item: item, apiClient: apiClient)
+          ? _VideoTile(url: videoUrl, item: item, apiClient: apiClient)
           : InteractiveViewer(
               maxScale: 5,
               child: Image.network(
@@ -589,6 +601,15 @@ class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
       ),
     );
   }
+}
+
+/// 相对路径(/file/…)拼上根地址；已是绝对直链则原样返回。
+String _abs(String base, String u) {
+  if (u.isEmpty) return u;
+  if (u.startsWith('http://') || u.startsWith('https://')) return u;
+  if (base.isEmpty) return u;
+  if (u.startsWith('/')) return '$base$u';
+  return '$base/$u';
 }
 
 class _ActionBtn extends StatelessWidget {

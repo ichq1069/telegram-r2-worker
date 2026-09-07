@@ -108,7 +108,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             apiBase: v,
             cdnBase: cdnCtl.text.trim().isEmpty ? null : cdnCtl.text.trim(),
           );
-      StatsService.instance.updateConfig(apiBase: v, apiKey: '');
+      StatsService.instance.updateConfig(apiBase: v);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('已保存，重新连接服务生效')),
@@ -148,7 +148,26 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Future<void> _checkUpdate() async {
     setState(() => _checkingUpdate = true);
     try {
-      await UpdateDialog.checkAndShow(context);
+      final service = UpdateService.instance;
+      final info = await service.checkForUpdate();
+      if (!mounted) return;
+      if (info == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('检查更新失败：无法连接或暂无发布')),
+        );
+        return;
+      }
+      if (!info.hasUpdate) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已是最新版本 v${info.latestVersion}')),
+        );
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => UpdateDialog(info: info),
+      );
     } finally {
       if (mounted) setState(() => _checkingUpdate = false);
     }

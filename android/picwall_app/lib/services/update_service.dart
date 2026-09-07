@@ -32,16 +32,26 @@ class UpdateInfo {
 
   bool get hasUpdate => _compareVersions(latestVersion, currentVersion) > 0;
 
-  /// 语义化版本比较：返回 >0 表示 a > b。
+  /// 语义化版本比较（含 build 号）：返回 >0 表示 a > b。
+  /// 解析时兼容 v 前缀与 `X.Y.Z+build` / `X.Y.Z-build` 写法。
   static int _compareVersions(String a, String b) {
-    final pa = a.split('.').map(int.tryParse).toList();
-    final pb = b.split('.').map(int.tryParse).toList();
-    for (var i = 0; i < 3; i++) {
-      final va = (i < pa.length ? pa[i] : 0) ?? 0;
-      final vb = (i < pb.length ? pb[i] : 0) ?? 0;
+    final pa = _parts(a);
+    final pb = _parts(b);
+    final n = pa.length > pb.length ? pa.length : pb.length;
+    for (var i = 0; i < n; i++) {
+      final va = i < pa.length ? pa[i] : 0;
+      final vb = i < pb.length ? pb[i] : 0;
       if (va != vb) return va - vb;
     }
     return 0;
+  }
+
+  static List<int> _parts(String v) {
+    final clean = v.trim().replaceFirst(RegExp(r'^[vV]'), '');
+    return clean
+        .split(RegExp(r'[.\-+]'))
+        .map((s) => int.tryParse(s) ?? 0)
+        .toList();
   }
 }
 
@@ -85,11 +95,17 @@ class UpdateService {
       final data = resp.data;
       if (data == null) return null;
 
-      final tagName = (data['tag_name'] ?? '').toString().replaceFirst('v', '');
+      final tagName = (data['tag_name'] ?? '')
+          .toString()
+          .replaceFirst(RegExp(r'^[vV]'), '');
       if (tagName.isEmpty) return null;
 
       final currentInfo = await PackageInfo.fromPlatform();
-      final currentVersion = currentInfo.version;
+      // 带上 build 号比较，保证仅 bump 构建号时也能识别到新版本。
+      final build = currentInfo.buildNumber.trim();
+      final currentVersion = build.isEmpty
+          ? currentInfo.version
+          : '${currentInfo.version}+$build';
 
       // 查找 APK 下载链接
       String downloadUrl = '';

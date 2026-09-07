@@ -76,7 +76,7 @@ class _RootGateState extends ConsumerState<RootGate>
   void _initStats() {
     final s = ref.read(settingsControllerProvider).settings;
     if (s.apiBase.isNotEmpty) {
-      StatsService.instance.init(apiBase: s.apiBase, apiKey: '');
+      StatsService.instance.init(apiBase: s.apiBase);
     }
   }
 

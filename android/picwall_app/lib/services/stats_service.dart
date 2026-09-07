@@ -4,14 +4,16 @@ import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:uuid/uuid.dart';
 
 import 'debug_service.dart';
 
 /// App 统计服务：安装上报 + 心跳保活。
 ///
-/// 首次启动生成唯一 device_id（持久化到本地），上报安装信息；
+/// 首次启动生成唯一 device_id（持久化到应用私有目录），上报安装信息；
 /// 之后每 30 分钟发送一次心跳，服务端据此计算在线数和存活率。
+/// 上报接口无需鉴权，仅需配置好 apiBase。
 class StatsService {
   StatsService._();
   static final StatsService instance = StatsService._();
@@ -20,13 +22,11 @@ class StatsService {
   Timer? _heartbeatTimer;
   String? _deviceId;
   String _apiBase = '';
-  String _apiKey = '';
 
   /// 初始化统计服务：生成/读取 device_id，上报安装，启动心跳。
-  Future<void> init({required String apiBase, required String apiKey}) async {
+  Future<void> init({required String apiBase}) async {
     _apiBase = apiBase;
-    _apiKey = apiKey;
-    if (_apiBase.isEmpty || _apiKey.isEmpty) return;
+    if (_apiBase.isEmpty) return;
     try {
       _deviceId = await _getOrCreateDeviceId();
       await _reportInstall();
@@ -37,14 +37,13 @@ class StatsService {
   }
 
   /// 更新 API 配置（切换服务器时调用）。
-  void updateConfig({required String apiBase, required String apiKey}) {
+  void updateConfig({required String apiBase}) {
     _apiBase = apiBase;
-    _apiKey = apiKey;
     if (_heartbeatTimer != null) {
       _heartbeatTimer!.cancel();
       _heartbeatTimer = null;
     }
-    if (_apiBase.isNotEmpty && _apiKey.isNotEmpty) {
+    if (_apiBase.isNotEmpty) {
       _reportInstall().catchError((e) => DebugService.instance.recordError('StatsService.reinstall', e));
       _startHeartbeat();
     }
@@ -69,7 +68,6 @@ class StatsService {
       final info = await PackageInfo.fromPlatform();
       final dio = Dio(BaseOptions(
         baseUrl: _apiBase,
-        headers: {'X-API-Key': _apiKey},
         connectTimeout: const Duration(seconds: 10),
         receiveTimeout: const Duration(seconds: 10),
       ));
@@ -90,7 +88,6 @@ class StatsService {
       final deviceInfo = await _getDeviceInfo();
       final dio = Dio(BaseOptions(
         baseUrl: _apiBase,
-        headers: {'X-API-Key': _apiKey},
         connectTimeout: const Duration(seconds: 10),
         receiveTimeout: const Duration(seconds: 10),
       ));
@@ -135,11 +132,16 @@ class StatsService {
     return {};
   }
 
-  /// 生成或读取持久化 device_id（基于 UUID v4，存入本地文件）。
+  /// 生成或读取持久化 device_id（基于 UUID v4，存入应用支持目录）。
   Future<String> _getOrCreateDeviceId() async {
-    // 使用简单文件存储，避免引入额外依赖
-    final dir = Directory.current;
-    final idFile = File('${dir.path}/.picwall_device_id');
+    Directory dir;
+    try {
+      dir = await getApplicationSupportDirectory();
+    } catch (_) {
+      // 测试等无插件环境兜底到系统临时目录
+      dir = Directory.systemTemp;
+    }
+    final idFile = File('${dir.path}${Platform.pathSeparator}.picwall_device_id');
     if (await idFile.exists()) {
       final id = (await idFile.readAsString()).trim();
       if (id.isNotEmpty) return id;

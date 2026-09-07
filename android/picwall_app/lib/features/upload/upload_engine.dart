@@ -35,11 +35,12 @@ Future<NetworkKind> probeNetworkNow() async {
   }
 }
 
-/// 上传引擎：内存任务队列 + 本地 upload_queue 表 + 逐张上传。
+/// 上传引擎：内存任务队列 + 本地 upload_queue 表 + 分批并发上传。
 ///
 /// 行为：
 /// - [tasks] 在内存保持，任何变更同步回 sqflite（重启后可恢复 queued/failed）。
-/// - 队列逐张 `POST /api/v1/user/upload`；单张失败标记 failed 并记录错误，不中断后续。
+/// - 队列并发上传，最多同时 [UploadEngine.maxConcurrent] 个 `POST /api/v1/user/upload`；
+///   单张失败标记 failed 并记录错误，不中断后续。
 /// - WiFi-only 时：非 Wi-Fi 网络暂停队列（[networkPaused]），Wi-Fi 恢复后继续。
 class UploadEngine extends ChangeNotifier {
   UploadEngine({
@@ -61,6 +62,10 @@ class UploadEngine extends ChangeNotifier {
   bool _running = false;
   bool _networkPaused = false;
   String? _lastError;
+
+  /// 并行上传上限：同一时间最多发起 [maxConcurrent] 个请求，
+  /// 在提速的同时避免连接数/带宽被占满。
+  static const int maxConcurrent = 3;
 
   bool get wifiOnly => _wifiOnly;
   bool get running => _running;
@@ -137,10 +142,11 @@ class UploadEngine extends ChangeNotifier {
   }
 
   /// 启动队列（幂等）。若 wifiOnly 且当前非 Wi-Fi，则进入挂起态。
-  /// 后台同步前台服务持锁运行期间不主动上传，避免双上传。
-  Future<void> start() async {
+  /// 后台同步前台服务持锁运行期间不主动上传，避免双上传；
+  /// 同步服务自身（[ignoreSyncLock] = true）就是锁持有者，需绕过此检查。
+  Future<void> start({bool ignoreSyncLock = false}) async {
     if (_running) return;
-    if (await _db.isSyncRunning()) return;
+    if (!ignoreSyncLock && await _db.isSyncRunning()) return;
     if (wifiOnly) {
       final net = await _networkProbe();
       if (!net.isUnlimited) {
@@ -196,9 +202,15 @@ class UploadEngine extends ChangeNotifier {
           }
         }
         _networkPaused = false;
-        final next = _next();
-        if (next == null) break;
-        await _uploadOne(next);
+        // 每轮最多并行取 maxConcurrent 个待传任务；
+        // 同步服务运行中向队列追加的新任务会在后续轮次被接走。
+        final batch = <UploadTask>[];
+        for (final t in tasks) {
+          if (batch.length >= maxConcurrent) break;
+          if (t.state == UploadState.queued) batch.add(t);
+        }
+        if (batch.isEmpty) break;
+        await Future.wait(batch.map(_uploadOne));
       }
     } finally {
       _running = false;
@@ -279,22 +291,15 @@ class UploadEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  UploadTask? _next() {
-    for (final t in tasks) {
-      if (t.state == UploadState.queued) return t;
-    }
-    return null;
-  }
-
-  List<UploadTask> _where(UploadState s) =>
-      tasks.where((t) => t.state == s).toList();
-
   UploadTask? _find(UploadState s) {
     for (final t in tasks) {
       if (t.state == s) return t;
     }
     return null;
   }
+
+  List<UploadTask> _where(UploadState s) =>
+      tasks.where((t) => t.state == s).toList();
 
   void _set(UploadTask task) {
     final i = tasks.indexWhere((t) => t.id == task.id);
