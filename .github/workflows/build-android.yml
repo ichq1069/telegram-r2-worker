@@ -16,6 +16,9 @@ on:
         required: false
         default: ''
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -168,3 +171,20 @@ jobs:
           name: ${{ steps.build.outputs.apk_name }}
           path: android/picwall_app/${{ steps.build.outputs.apk_path }}
           if-no-files-found: error
+
+      - name: Publish rolling GitHub Release (in-app update source)
+        if: steps.check.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(sed -n 's/^version: //p' android/picwall_app/pubspec.yaml | tr -d ' \r')
+          echo "Releasing PicWall v${VERSION}"
+          # 清掉上一个滚动发布，保证 /releases/latest 始终指向最新构建
+          gh release list --limit 50 --json tagName --jq '.[].tagName' | while IFS= read -r t; do
+            gh release delete "$t" --yes --cleanup-tag || true
+          done
+          gh release create "v${VERSION}" \
+            android/picwall_app/build/app/outputs/flutter-apk/app-debug.apk \
+            --title "PicWall ${VERSION}" \
+            --notes "自动构建 ${VERSION} · commit ${GITHUB_SHA:0:7}" \
+            --target "${GITHUB_SHA}"
