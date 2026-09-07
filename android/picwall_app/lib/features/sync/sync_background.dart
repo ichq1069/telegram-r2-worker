@@ -159,12 +159,14 @@ class SyncService {
         await _notify('PicWall 相册同步', '同步相册已被移除，请在应用内重新选择');
         return;
       }
+      // 固定为不可空局部变量：nullable 的 album 被闭包捕获后无法做空提升。
+      final targetAlbum = album;
 
       final scanner = AlbumSyncScanner(db: db, engine: engine);
       var lastCount = 0;
       Future<int> scanOnce() {
         return scanner.syncAlbum(
-          album,
+          targetAlbum,
           filter: filter,
           onProgress: (n, s) {
             if (n != lastCount && (s % 25 == 0 || n % 10 == 0)) {
