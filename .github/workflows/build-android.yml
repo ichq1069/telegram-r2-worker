@@ -172,7 +172,7 @@ jobs:
           path: android/picwall_app/${{ steps.build.outputs.apk_path }}
           if-no-files-found: error
 
-      - name: Publish rolling GitHub Release (in-app update source)
+      - name: Publish rolling GitHub Release (artifact backup only)
         if: steps.check.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -188,3 +188,36 @@ jobs:
             --title "PicWall ${VERSION}" \
             --notes "自动构建 ${VERSION} · commit ${GITHUB_SHA:0:7}" \
             --target "${GITHUB_SHA}"
+
+      # 应用内更新源切到 R2 公开静态托管（telegramup.wo58.cn，GitHub 仓库私有不可作更新源）：
+      # 上传固定文件名 apk/picwall-latest.apk + 版本清单 apk/latest.json，Worker /api/app/update 读取。
+      - name: Upload APK + latest.json to R2 (in-app update source)
+        if: steps.check.outputs.present == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -e
+          VERSION=$(sed -n 's/^version: //p' android/picwall_app/pubspec.yaml | tr -d ' \r')
+          APK=android/picwall_app/build/app/outputs/flutter-apk/app-debug.apk
+
+          # 固定文件名，避免版本号里 '+' 等字符在 URL/缓存上的麻烦
+          npx --yes wrangler@4.128.0 r2 object put bot-telegram/apk/picwall-latest.apk \
+            --file="$APK" --content-type application/vnd.android.package-archive \
+            --cache-control "no-cache" --remote
+
+          python3 - "$VERSION" <<'PY'
+          import json, sys, os, datetime
+          ver = sys.argv[1]
+          manifest = {
+            "version": ver,
+            "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "body": "自动构建 v{} · commit {}".format(ver, os.environ.get("GITHUB_SHA", "")[:7]),
+          }
+          open("latest.json", "w").write(json.dumps(manifest, ensure_ascii=False))
+          PY
+
+          npx --yes wrangler@4.128.0 r2 object put bot-telegram/apk/latest.json \
+            --file=latest.json --content-type application/json \
+            --cache-control "no-cache" --remote
+          echo "R2 update source updated: v${VERSION}"
