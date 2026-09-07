@@ -6,8 +6,10 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../../services/settings.dart';
+import '../../services/update_service.dart';
 import '../admin/admin_page.dart';
 import '../lock/lock_settings_sheet.dart';
+import 'update_dialog.dart';
 
 /// 完整设置页：外观/网络/行为/管理/关于。
 class SettingsPage extends ConsumerStatefulWidget {
@@ -20,11 +22,18 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   String? _version;
   bool _clearingCache = false;
+  bool _checkingUpdate = false;
 
   @override
   void initState() {
     super.initState();
     _loadVersion();
+    // 启动时自动检查更新
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (UpdateService.instance.autoCheck) {
+        UpdateDialog.checkAndShow(context);
+      }
+    });
   }
 
   Future<void> _loadVersion() async {
@@ -134,6 +143,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
+  Future<void> _checkUpdate() async {
+    setState(() => _checkingUpdate = true);
+    try {
+      await UpdateDialog.checkAndShow(context);
+    } finally {
+      if (mounted) setState(() => _checkingUpdate = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final settingsCtl = ref.watch(settingsControllerProvider);
@@ -187,6 +205,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             leading: const Icon(Icons.info_outline),
             title: const Text('PicWall / 图墙'),
             subtitle: Text(_version == null ? '' : 'v$_version'),
+          ),
+          const Divider(height: 1, indent: 16),
+          SwitchListTile(
+            secondary: const Icon(Icons.update),
+            title: const Text('自动检查更新'),
+            subtitle: const Text('启动时检查 GitHub 新版本'),
+            value: UpdateService.instance.autoCheck,
+            onChanged: (v) {
+              UpdateService.instance.setAutoCheck(v);
+              setState(() {});
+            },
+          ),
+          const Divider(height: 1, indent: 16),
+          _row(
+            Icons.system_update_outlined,
+            '检查更新',
+            _checkingUpdate ? '检查中…' : null,
+            _checkingUpdate ? null : _checkUpdate,
           ),
           const Divider(height: 1, indent: 16),
           SwitchListTile(
