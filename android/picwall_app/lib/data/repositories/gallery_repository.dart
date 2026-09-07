@@ -104,6 +104,44 @@ class GalleryRepository {
     await _api.deleteRaw('/api/v1/user/files/$clean');
   }
 
+  /// 拉取当前账号已上传文件的“云端签名”（文件名|大小，小写归一）。
+  ///
+  /// 相册同步每轮前先比对这份清单，文件已存在则跳过入队，避免换机/重装
+  /// 后本地去重记录丢失导致的重复上传。page_size 用服务端上限 100，
+  /// 最多翻 [maxPages] 页（默认 200 页 ≈ 2 万文件）作为安全阀。
+  Future<Set<String>> fetchCloudUploadSignatures({int maxPages = 200}) async {
+    const pageSize = 100;
+    final sigs = <String>{};
+    var page = 1;
+    while (page <= maxPages) {
+      final d = await _api.getRaw(
+        '/api/v1/user/files',
+        query: {'page': page, 'page_size': pageSize},
+      );
+      if (d['ok'] != true) break;
+      final raw = d['data'];
+      if (raw is! List || raw.isEmpty) break;
+      var matched = 0;
+      for (final e in raw) {
+        if (e is! Map) continue;
+        matched++;
+        final name = (e['file_name'] ?? e['title'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase();
+        if (name.isEmpty) continue;
+        final size =
+            e['file_size'] is num ? (e['file_size'] as num).toInt() : 0;
+        sigs.add('$name|$size');
+      }
+      final total = d['total'] is num ? (d['total'] as num).toInt() : 0;
+      final fetched = (page - 1) * pageSize + matched;
+      if (fetched >= total || matched < pageSize) break;
+      page++;
+    }
+    return sigs;
+  }
+
   /// 打标（POST /api/v1/user/files/:id/tags，body {tags:[...]}）。
   Future<void> updateFileTags(String id, List<String> tags) async {
     final clean = id.replaceAll(RegExp(r'[^0-9]'), '');

@@ -9,6 +9,7 @@ import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
 import '../../services/secure_store.dart';
+import '../../services/sync_lock.dart';
 import '../upload/upload_engine.dart';
 import 'album_sync_scanner.dart';
 
@@ -69,10 +70,11 @@ class SyncService {
     await Workmanager().initialize(syncWorkDispatcher);
   }
 
-  /// 读取当前用户配置并起一个前台同步服务实例（幂等：已有锁则跳过）。
+  /// 读取当前用户配置并起一个前台同步服务实例（幂等：锁有效且服务存活则跳过，
+  /// 陈旧锁会自动清除，避免上次进程被杀后无法再次同步）。
   static Future<bool> startPass() async {
     final db = await LocalDb.open();
-    if (await db.isSyncRunning()) return false;
+    if (await SyncLock.activeOrHeal(db)) return false;
     final enabled = await db.getEnabledAlbum();
     if (enabled == null) return false;
     await db.setSyncRunning(true);
@@ -146,6 +148,16 @@ class SyncService {
       final engine = UploadEngine(repository: repo, db: db, wifiOnly: wifiOnly);
       await engine.loadFromDb();
 
+      // 每轮同步前拉取该账号云端已上传清单（文件名|大小），本地去重记录
+      // 丢失（重装/换机）时也可跳过已存在的文件，避免重复上传。
+      // 拉取失败不阻断同步，仅退化为纯本地去重。
+      Set<String> cloudSigs = const {};
+      try {
+        cloudSigs = await repo.fetchCloudUploadSignatures();
+      } catch (e, st) {
+        DebugService.instance.recordError('SyncService.cloudSigs', e, st);
+      }
+
       final filter = await db.loadSyncFilter();
       final albums = await PhotoManager.getAssetPathList(type: RequestType.common);
       AssetPathEntity? album;
@@ -168,6 +180,7 @@ class SyncService {
         return scanner.syncAlbum(
           targetAlbum,
           filter: filter,
+          cloudSignatures: cloudSigs,
           onProgress: (n, s) {
             if (n != lastCount && (s % 25 == 0 || n % 10 == 0)) {
               lastCount = n;

@@ -9,6 +9,7 @@ import '../../data/models/album_sync_state.dart';
 import '../../data/models/sync_filter.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
+import '../../services/sync_lock.dart';
 import 'album_grid_picker.dart';
 import 'sync_background.dart';
 import 'sync_filter_sheet.dart';
@@ -77,7 +78,9 @@ class _SyncPageState extends ConsumerState<SyncPage> {
   Future<void> _refreshRunning() async {
     final db = _db;
     if (db == null) return;
-    final running = await db.isSyncRunning();
+    // 用真实服务存活状态校准锁：进程被杀留下的陈旧锁会被清除，
+    // 否则界面会一直显示“同步中”，导致筛选弹层/重新同步都触发不了。
+    final running = await SyncLock.activeOrHeal(db);
     final snap = await db.queueSnapshot();
     final enabled = await db.getEnabledAlbum();
     if (!mounted) return;

@@ -162,28 +162,9 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
               for (var i = 0; i < _items.length; i++)
                 SizedBox(
                   width: cellW,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      MediaThumb(
-                        item: _items[i],
-                        onTap: () => _openDetail(i),
-                      ),
-                      const SizedBox(height: 4),
-                      SizedBox(
-                        width: double.infinity,
-                        child: TextButton.icon(
-                          onPressed: () => _openDetail(i),
-                          icon: const Icon(Icons.info_outline, size: 14),
-                          label: const Text('详情', style: TextStyle(fontSize: 12)),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 2),
-                            minimumSize: Size.zero,
-                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                          ),
-                        ),
-                      ),
-                    ],
+                  child: MediaThumb(
+                    item: _items[i],
+                    onTap: () => _openDetail(i),
                   ),
                 ),
               if (_loadingMore)

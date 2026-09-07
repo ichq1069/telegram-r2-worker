@@ -8,6 +8,7 @@ import '../../data/local/local_db.dart';
 import '../../data/models/upload_task.dart';
 import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
+import '../../services/sync_lock.dart';
 
 /// 当前网络类型（供上传引擎判定 WiFi-only）。
 enum NetworkKind {
@@ -105,7 +106,7 @@ class UploadEngine extends ChangeNotifier {
       final src = File(path);
       if (!await src.exists()) continue;
       final name = nameOf(path);
-      final safe = _sanitize(name);
+      final safe = sanitizeName(name);
       final target = File(
         '${staging.path}${Platform.pathSeparator}${DateTime.now().microsecondsSinceEpoch}_$safe',
       );
@@ -146,7 +147,10 @@ class UploadEngine extends ChangeNotifier {
   /// 同步服务自身（[ignoreSyncLock] = true）就是锁持有者，需绕过此检查。
   Future<void> start({bool ignoreSyncLock = false}) async {
     if (_running) return;
-    if (!ignoreSyncLock && await _db.isSyncRunning()) return;
+    if (!ignoreSyncLock) {
+      // 服务存活才算“正在同步”；陈旧锁（进程被杀遗留）自动清除后继续上传。
+      if (await SyncLock.activeOrHeal(_db)) return;
+    }
     if (wifiOnly) {
       final net = await _networkProbe();
       if (!net.isUnlimited) {
@@ -314,7 +318,7 @@ class UploadEngine extends ChangeNotifier {
     await _db.updateUploadTask(task);
   }
 
-  static String _sanitize(String name) {
+  static String sanitizeName(String name) {
     final cleaned = name
         .replaceAll(RegExp(r'[\\/:*?"<>|\s]'), '_')
         .replaceAll(RegExp(r'_+'), '_');
