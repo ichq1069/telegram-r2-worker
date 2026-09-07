@@ -30,6 +30,7 @@ import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
 import { mysqlFailoverGet, mysqlRows, mysqlGet, mysqlExec } from './src/mysql.js';
 import { handleParseLink, handleGetCobaltConfig, handleSaveCobaltConfig } from './src/parser.js';
+import { handleAppInstall, handleAppHeartbeat, handleAppStats, handleAppInstalls } from './src/app_stats.js';
 
 
 
@@ -155,6 +156,8 @@ export default {
     if (m === 'POST' && p === '/admin/api/scrape/rule-groups') return isAdmin ? handleAdminScrapeRuleGroupsSave(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/files/import') return isAdmin ? handleAdminFilesImport(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/stats') return isAdmin ? handleStats(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/app/stats') return isAdmin ? handleAppStats(env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/app/installs') return isAdmin ? handleAppInstalls(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/bot-info') return isAdmin ? handleBotGetMeApi(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/dedup') return isAdmin ? handleDedup(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/dedup/stats') return isAdmin ? handleDedupStats(env) : json({ok:false,error:'Unauthorized'},401);
@@ -408,6 +411,10 @@ export default {
       }
       return handleUserCallStats(rec, env);
     }
+
+    // App 安装统计（无需认证，APP 直接调用）
+    if (m === 'POST' && p === '/api/app/stats/install') return handleAppInstall(request, env);
+    if (m === 'POST' && p === '/api/app/stats/heartbeat') return handleAppHeartbeat(request, env);
 
     // API routes (require auth)
     const apiKey = request.headers.get('X-API-Key') || url.searchParams.get('api_key');

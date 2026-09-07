@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../../services/settings.dart';
+import '../../services/stats_service.dart';
 import '../../services/update_service.dart';
 import '../admin/admin_page.dart';
 import '../lock/lock_settings_sheet.dart';
@@ -107,6 +108,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             apiBase: v,
             cdnBase: cdnCtl.text.trim().isEmpty ? null : cdnCtl.text.trim(),
           );
+      StatsService.instance.updateConfig(apiBase: v, apiKey: '');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('已保存，重新连接服务生效')),

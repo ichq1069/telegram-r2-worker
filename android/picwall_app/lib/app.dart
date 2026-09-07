@@ -11,6 +11,7 @@ import 'features/settings/onboarding_page.dart';
 import 'features/lock/lock_screen.dart';
 import 'features/debug/debug_error_overlay.dart';
 import 'services/providers.dart';
+import 'services/stats_service.dart';
 import 'ui/app_widgets.dart';
 
 /// 全局根导航 key：切后台补锁屏覆盖路由用。
@@ -56,7 +57,11 @@ class _RootGateState extends ConsumerState<RootGate>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final settings = ref.read(settingsControllerProvider);
-      if (!settings.loaded) settings.load();
+      if (!settings.loaded) {
+        settings.load().then((_) => _initStats());
+      } else {
+        _initStats();
+      }
       ref.read(sessionControllerProvider).restore();
     });
   }
@@ -64,7 +69,15 @@ class _RootGateState extends ConsumerState<RootGate>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    StatsService.instance.stop();
     super.dispose();
+  }
+
+  void _initStats() {
+    final s = ref.read(settingsControllerProvider).settings;
+    if (s.apiBase.isNotEmpty) {
+      StatsService.instance.init(apiBase: s.apiBase, apiKey: '');
+    }
   }
 
   @override

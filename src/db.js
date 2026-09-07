@@ -5,7 +5,7 @@ let _tablesEnsured = false;
 // 已迁移的 schema 版本标记。冷启动时只查一次 settings 即可跳过全部 CREATE/迁移，
 // 避免每次冷启动 15+ 次串行 D1 往返（此前冷启动接口要数秒到数十秒）。
 // 今后新增列/表时递增此版本号，旧版标记会重新跑完整迁移并写入新版本。
-const SCHEMA_VERSION = '12';
+const SCHEMA_VERSION = '13';
 
 // Run ensureTables only once per isolate (cold start), then reuse. Avoids multi-second
 // D1 setup overhead on every request (previously made /show etc. take 3s+).
@@ -64,7 +64,12 @@ export async function ensureTables(db) {
     "CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);" +
     "CREATE TABLE IF NOT EXISTS user_uploads (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, url TEXT NOT NULL, thumb_url TEXT, file_name TEXT, file_size INTEGER, file_type TEXT, width INTEGER, height INTEGER, tags TEXT DEFAULT '', created_at TEXT, deleted_at TEXT);" +
     "CREATE INDEX IF NOT EXISTS idx_user_uploads_user ON user_uploads(user_id);" +
-    "CREATE INDEX IF NOT EXISTS idx_user_uploads_created ON user_uploads(created_at);"
+    "CREATE INDEX IF NOT EXISTS idx_user_uploads_created ON user_uploads(created_at);" +
+    "CREATE TABLE IF NOT EXISTS app_installs (id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL, app_version TEXT DEFAULT '', build_number INTEGER DEFAULT 0, platform TEXT DEFAULT 'android', model TEXT DEFAULT '', os_version TEXT DEFAULT '', screen_width INTEGER DEFAULT 0, screen_height INTEGER DEFAULT 0, installed_at TEXT, last_heartbeat_at TEXT, heartbeat_count INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1);" +
+    "CREATE INDEX IF NOT EXISTS idx_app_installs_device ON app_installs(device_id);" +
+    "CREATE INDEX IF NOT EXISTS idx_app_installs_version ON app_installs(app_version);" +
+    "CREATE INDEX IF NOT EXISTS idx_app_installs_active ON app_installs(is_active);" +
+    "CREATE INDEX IF NOT EXISTS idx_app_installs_heartbeat ON app_installs(last_heartbeat_at);"
   );
 
   // Reliable column migration fallback: check with PRAGMA, then ALTER individually (old DBs only)
@@ -218,6 +223,15 @@ export async function ensureTables(db) {
     try {
       await db.exec("CREATE TABLE IF NOT EXISTS webhook_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, status INTEGER DEFAULT 200, ok INTEGER DEFAULT 1, source TEXT DEFAULT 'webhook', error TEXT DEFAULT '', created_at TEXT)");
     } catch (e11) { console.error('webhook_logs table:', e11.message); }
+    // app_installs：App 安装统计表（设备心跳 / 版本分布 / 存活统计）
+    try {
+      await db.exec("CREATE TABLE IF NOT EXISTS app_installs (id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL, app_version TEXT DEFAULT '', build_number INTEGER DEFAULT 0, platform TEXT DEFAULT 'android', model TEXT DEFAULT '', os_version TEXT DEFAULT '', screen_width INTEGER DEFAULT 0, screen_height INTEGER DEFAULT 0, installed_at TEXT, last_heartbeat_at TEXT, heartbeat_count INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_app_installs_device ON app_installs(device_id)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_app_installs_version ON app_installs(app_version)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_app_installs_active ON app_installs(is_active)");
+      await db.exec("CREATE INDEX IF NOT EXISTS idx_app_installs_heartbeat ON app_installs(last_heartbeat_at)");
+      console.log('migrated: app_installs table');
+    } catch (e12) { console.error('app_installs table:', e12.message); }
     // api_keys 表索引：加速 key/username 查询
     try {
       await db.exec("CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key)");
