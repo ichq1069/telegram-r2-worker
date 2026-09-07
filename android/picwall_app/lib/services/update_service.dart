@@ -2,17 +2,8 @@ import 'package:dio/dio.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../core/constants.dart';
 import 'debug_service.dart';
-
-/// GitHub 仓库信息（用于版本检查和 APK 下载）。
-class GitHubRepo {
-  const GitHubRepo({required this.owner, required this.repo});
-  final String owner;
-  final String repo;
-
-  String get releasesUrl =>
-      'https://api.github.com/repos/$owner/$repo/releases/latest';
-}
 
 /// 版本检查结果。
 class UpdateInfo {
@@ -55,19 +46,20 @@ class UpdateInfo {
   }
 }
 
-/// 应用更新服务：检查 GitHub Releases + 下载 APK。
+/// 应用更新服务：请求同源 Worker `/api/app/update`（Worker 读 R2 公开静态托管清单）。
+///
+/// 更新链路：CI 构建成功 → 上传 APK + apk/latest.json 到 R2（telegramup.wo58.cn）
+/// → App 请求 `{apiBase}/api/app/update` 拿最新版本号与 APK 直链 → 下载安装。
 class UpdateService {
   UpdateService._();
-  static final instance = UpdateService._();
-
-  static const _repo = GitHubRepo(owner: 'ichq1069', repo: 'telegram-r2-worker');
+  static final UpdateService instance = UpdateService._();
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 10),
     receiveTimeout: const Duration(seconds: 30),
-    headers: {'Accept': 'application/vnd.github.v3+json'},
   ));
 
+  String _apiBase = '';
   DateTime? _lastCheck;
   bool _autoCheck = true;
   bool _checking = false;
@@ -76,29 +68,44 @@ class UpdateService {
   bool get autoCheck => _autoCheck;
   DateTime? get lastCheck => _lastCheck;
 
-  /// 初始化：从本地存储恢复设置。
-  void init({DateTime? lastCheck, bool autoCheck = true}) {
+  /// 用当前配置的 API 根地址驱动更新检查。
+  void init({DateTime? lastCheck, bool autoCheck = true, String? apiBase}) {
     _lastCheck = lastCheck;
     _autoCheck = autoCheck;
+    if (apiBase != null && apiBase.trim().isNotEmpty) {
+      _apiBase = apiBase.trim().replaceAll(RegExp(r'/+$'), '');
+    }
+  }
+
+  /// 切换服务器后同步更新源地址。
+  void updateConfig({required String apiBase}) {
+    _apiBase = apiBase.trim().replaceAll(RegExp(r'/+$'), '');
   }
 
   void setAutoCheck(bool value) {
     _autoCheck = value;
   }
 
-  /// 检查是否有新版本。
+  String _base() {
+    if (_apiBase.isNotEmpty) return _apiBase;
+    return AppDefaults.apiBase.replaceAll(RegExp(r'/+$'), '');
+  }
+
+  /// 检查是否有新版本（Worker 读取 R2 清单，返回 ok + version + download_url）。
   Future<UpdateInfo?> checkForUpdate() async {
     if (_checking) return null;
     _checking = true;
     try {
-      final resp = await _dio.get<Map<String, dynamic>>(_repo.releasesUrl);
+      final base = _base();
+      final resp = await _dio.get<Map<String, dynamic>>('$base/api/app/update');
       final data = resp.data;
       if (data == null) return null;
+      if (data['ok'] != true) return null;
 
-      final tagName = (data['tag_name'] ?? '')
+      final version = (data['version'] ?? '')
           .toString()
           .replaceFirst(RegExp(r'^[vV]'), '');
-      if (tagName.isEmpty) return null;
+      if (version.isEmpty) return null;
 
       final currentInfo = await PackageInfo.fromPlatform();
       // 带上 build 号比较，保证仅 bump 构建号时也能识别到新版本。
@@ -107,30 +114,18 @@ class UpdateService {
           ? currentInfo.version
           : '${currentInfo.version}+$build';
 
-      // 查找 APK 下载链接
-      String downloadUrl = '';
-      final assets = data['assets'] as List<dynamic>?;
-      if (assets != null) {
-        for (final asset in assets) {
-          final name = (asset['name'] ?? '').toString();
-          if (name.endsWith('.apk')) {
-            downloadUrl = (asset['browser_download_url'] ?? '').toString();
-            break;
-          }
-        }
-      }
-
-      final body = (data['body'] ?? '').toString();
-      final publishedAt = (data['published_at'] ?? '').toString();
+      final downloadUrl = (data['download_url'] ?? '').toString();
+      // 清单缺 APK 直链（R2_PUBLIC_URL 未配置等）视为暂无可用更新源，避免可更新但下载必败。
+      if (downloadUrl.isEmpty) return null;
 
       _lastCheck = DateTime.now();
 
       return UpdateInfo(
-        latestVersion: tagName,
+        latestVersion: version,
         currentVersion: currentVersion,
         downloadUrl: downloadUrl,
-        body: body,
-        publishedAt: publishedAt,
+        body: (data['body'] ?? '').toString(),
+        publishedAt: (data['published_at'] ?? '').toString(),
       );
     } catch (e) {
       DebugService.instance.recordError('UpdateService.check', e);

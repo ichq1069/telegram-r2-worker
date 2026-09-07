@@ -109,6 +109,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             cdnBase: cdnCtl.text.trim().isEmpty ? null : cdnCtl.text.trim(),
           );
       StatsService.instance.updateConfig(apiBase: v);
+      UpdateService.instance.updateConfig(apiBase: v);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('已保存，重新连接服务生效')),
@@ -231,7 +232,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           SwitchListTile(
             secondary: const Icon(Icons.update),
             title: const Text('自动检查更新'),
-            subtitle: const Text('启动时检查 GitHub 新版本'),
+            subtitle: const Text('启动时检查服务器新版本'),
             value: UpdateService.instance.autoCheck,
             onChanged: (v) {
               UpdateService.instance.setAutoCheck(v);

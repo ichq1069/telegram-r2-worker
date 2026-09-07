@@ -12,6 +12,7 @@ import 'features/lock/lock_screen.dart';
 import 'features/debug/debug_error_overlay.dart';
 import 'services/providers.dart';
 import 'services/stats_service.dart';
+import 'services/update_service.dart';
 import 'ui/app_widgets.dart';
 
 /// 全局根导航 key：切后台补锁屏覆盖路由用。
@@ -77,6 +78,7 @@ class _RootGateState extends ConsumerState<RootGate>
     final s = ref.read(settingsControllerProvider).settings;
     if (s.apiBase.isNotEmpty) {
       StatsService.instance.init(apiBase: s.apiBase);
+      UpdateService.instance.updateConfig(apiBase: s.apiBase);
     }
   }
 

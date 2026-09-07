@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/api_client.dart';
 import '../../services/providers.dart';
 import '../../services/settings.dart';
+import '../../services/update_service.dart';
 
 /// 首次启动引导：确认服务器地址。
 class OnboardingPage extends ConsumerStatefulWidget {
@@ -75,6 +76,8 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
           cdnBase: _cdnBase.text,
           onboarded: true,
         );
+    // 让更新检查在当次会话内就指向新服务器，避免重启前仍探测默认域
+    UpdateService.instance.updateConfig(apiBase: _apiBase.text);
     // 保存后由 RootGate 依据 onboarded 状态切换到登录页
   }
 
