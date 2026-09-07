@@ -55,6 +55,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
         key: ValueKey(_type),
         title: '图库',
         embedded: true,
+        tabIndex: 1,
         loader: _loader,
       ),
     );

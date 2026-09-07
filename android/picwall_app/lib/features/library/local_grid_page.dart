@@ -5,6 +5,7 @@ import '../../data/local/local_db.dart';
 import '../../services/providers.dart';
 import '../detail/detail_page.dart';
 import '../gallery/media_thumb.dart';
+import '../video/feed_video_autoplay.dart';
 
 /// 本地条目列表页（收藏 / 浏览历史），长按可移除单条。
 class LocalGridPage extends ConsumerStatefulWidget {
@@ -26,6 +27,8 @@ class LocalGridPage extends ConsumerStatefulWidget {
 enum LocalKind { favorite, history }
 
 class _LocalGridPageState extends ConsumerState<LocalGridPage> {
+  final ScrollController _scroll = ScrollController();
+  final FeedVideoAutoplay _feed = FeedVideoAutoplay();
   List<LocalEntry> _entries = const [];
   bool _loading = true;
   String? _error;
@@ -33,7 +36,16 @@ class _LocalGridPageState extends ConsumerState<LocalGridPage> {
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_feed.onScroll);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_feed.onScroll);
+    _scroll.dispose();
+    _feed.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -179,33 +191,41 @@ class _LocalGridPageState extends ConsumerState<LocalGridPage> {
         ),
       );
     }
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final cellW = (constraints.maxWidth - 30) / 2;
-          return SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(10),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                for (var i = 0; i < _entries.length; i++)
-                  SizedBox(
-                    width: cellW,
-                    child: GestureDetector(
-                      onLongPress: () => _removeWithConfirm(i),
-                      child: MediaThumb(
-                        item: _entries[i].item,
-                        onTap: () => _openDetail(i),
+    return FeedGate(
+      feed: _feed,
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final cellW = (constraints.maxWidth - 30) / 2;
+            final base = ref.read(settingsControllerProvider).settings.apiBase;
+            return SingleChildScrollView(
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(10),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (var i = 0; i < _entries.length; i++)
+                    SizedBox(
+                      width: cellW,
+                      child: GestureDetector(
+                        onLongPress: () => _removeWithConfirm(i),
+                        child: MediaThumb(
+                          item: _entries[i].item,
+                          onTap: () => _openDetail(i),
+                          autoplay: _feed,
+                          autoplayIndex: i,
+                          baseUrl: base,
+                        ),
                       ),
                     ),
-                  ),
-              ],
-            ),
-          );
-        },
+                ],
+              ),
+            );
+          },
+        ),
       ),
     );
   }

@@ -7,6 +7,7 @@ import '../../services/api_client.dart';
 import '../../services/providers.dart';
 import '../detail/detail_page.dart';
 import '../gallery/media_thumb.dart';
+import '../video/feed_video_autoplay.dart';
 
 /// 我的图片：分页网格 + 关键词搜索 + 类型筛选 + 长按打标/删除。
 class MyFilesPage extends ConsumerStatefulWidget {
@@ -19,6 +20,7 @@ class MyFilesPage extends ConsumerStatefulWidget {
 class _MyFilesPageState extends ConsumerState<MyFilesPage> {
   final ScrollController _scroll = ScrollController();
   final TextEditingController _kw = TextEditingController();
+  final FeedVideoAutoplay _feed = FeedVideoAutoplay();
   final List<MediaItem> _items = [];
   String _type = '';
   int _page = 1;
@@ -32,13 +34,16 @@ class _MyFilesPageState extends ConsumerState<MyFilesPage> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    _scroll.addListener(_feed.onScroll);
     _load();
   }
 
   @override
   void dispose() {
+    _scroll.removeListener(_feed.onScroll);
     _scroll.dispose();
     _kw.dispose();
+    _feed.dispose();
     super.dispose();
   }
 
@@ -353,49 +358,56 @@ class _MyFilesPageState extends ConsumerState<MyFilesPage> {
         ),
       );
     }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final cellW = (constraints.maxWidth - 30) / 2;
-        return RefreshIndicator(
-          onRefresh: _load,
-          child: SingleChildScrollView(
-            controller: _scroll,
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(10),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                for (var i = 0; i < _items.length; i++)
-                  SizedBox(
-                    width: cellW,
-                    child: GestureDetector(
-                      onLongPress: () => _onItemLongPress(_items[i]),
-                      child: MediaThumb(
-                        item: _items[i],
-                        onTap: () => _openDetail(i),
-                      ),
-                    ),
-                  ),
-                if (_loadingMore)
-                  const SizedBox(
-                    width: double.infinity,
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Center(
-                        child: SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+    return FeedGate(
+      feed: _feed,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cellW = (constraints.maxWidth - 30) / 2;
+          final base = ref.read(settingsControllerProvider).settings.apiBase;
+          return RefreshIndicator(
+            onRefresh: _load,
+            child: SingleChildScrollView(
+              controller: _scroll,
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(10),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (var i = 0; i < _items.length; i++)
+                    SizedBox(
+                      width: cellW,
+                      child: GestureDetector(
+                        onLongPress: () => _onItemLongPress(_items[i]),
+                        child: MediaThumb(
+                          item: _items[i],
+                          onTap: () => _openDetail(i),
+                          autoplay: _feed,
+                          autoplayIndex: i,
+                          baseUrl: base,
                         ),
                       ),
                     ),
-                  ),
-              ],
+                  if (_loadingMore)
+                    const SizedBox(
+                      width: double.infinity,
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Center(
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-        );
-      },
+          );
+        },
+      ),
     );
   }
 }

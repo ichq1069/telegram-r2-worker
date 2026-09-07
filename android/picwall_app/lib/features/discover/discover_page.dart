@@ -7,6 +7,7 @@ import '../../services/providers.dart';
 import '../../ui/app_widgets.dart';
 import '../detail/detail_page.dart';
 import '../gallery/media_thumb.dart';
+import '../video/feed_video_autoplay.dart';
 
 /// 发现页：共享库随机推荐（每次取一批，可换一批/筛选类型）。
 class DiscoverPage extends ConsumerStatefulWidget {
@@ -17,6 +18,8 @@ class DiscoverPage extends ConsumerStatefulWidget {
 }
 
 class _DiscoverPageState extends ConsumerState<DiscoverPage> {
+  final ScrollController _scroll = ScrollController();
+  final FeedVideoAutoplay _feed = FeedVideoAutoplay();
   List<MediaItem> _items = const [];
   String _type = '';
   bool _loading = true;
@@ -26,7 +29,16 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
   @override
   void initState() {
     super.initState();
+    _scroll.addListener(_feed.onScroll);
     _loadRandom();
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_feed.onScroll);
+    _scroll.dispose();
+    _feed.dispose();
+    super.dispose();
   }
 
   Future<void> _loadRandom() async {
@@ -114,7 +126,13 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
               ],
             ),
           ),
-          Expanded(child: _body(context)),
+          Expanded(
+            child: FeedGate(
+              feed: _feed,
+              tabIndex: 0,
+              child: _body(context),
+            ),
+          ),
         ],
       ),
       floatingActionButton: _loading || _hasError || _items.isEmpty
@@ -150,7 +168,9 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final cellW = (constraints.maxWidth - 30) / 2;
+          final base = ref.read(settingsControllerProvider).settings.apiBase;
           return SingleChildScrollView(
+            controller: _scroll,
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.all(10),
             child: Wrap(
@@ -163,6 +183,9 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
                     child: MediaThumb(
                       item: _items[i],
                       onTap: () => _openDetail(i),
+                      autoplay: _feed,
+                      autoplayIndex: i,
+                      baseUrl: base,
                     ),
                   ),
               ],

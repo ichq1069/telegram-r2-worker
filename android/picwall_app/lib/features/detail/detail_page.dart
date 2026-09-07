@@ -4,12 +4,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
-import 'video_player_page.dart';
+import '../video/native_video_player.dart';
 
 import '../../core/constants.dart';
 import '../../core/time_utils.dart';
 import '../../data/models/media_item.dart';
-import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 
@@ -334,8 +333,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
               final item = widget.items[i];
               return _MediaViewer(
                 item: item,
-                apiClient: ref.read(apiClientProvider),
                 apiBase: _base,
+                active: i == _index,
               );
             },
           ),
@@ -424,28 +423,39 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 class _MediaViewer extends StatelessWidget {
   const _MediaViewer({
     required this.item,
-    required this.apiClient,
     required this.apiBase,
+    required this.active,
   });
 
   final MediaItem item;
-  final ApiClient apiClient;
   final String apiBase;
+
+  /// 是否为 PageView 当前页：仅当前页的视频原生自动播放，邻页保持封面。
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
     // 服务端可能返回相对路径（如 /file/tg/…），补齐 scheme/host 后展示/播放。
-    final url = _abs(apiBase, item.displayThumb);
+    final thumb = _abs(apiBase, item.displayThumb);
     final videoUrl = _abs(apiBase, item.url);
     return Container(
       color: Colors.black,
       alignment: Alignment.center,
       child: item.isVideo
-          ? _VideoTile(url: videoUrl, item: item, apiClient: apiClient)
+          ? (active
+              ? NativeVideoPlayer(
+                  url: videoUrl,
+                  posterUrl: thumb,
+                  autoplay: true,
+                  loop: true,
+                  muted: true,
+                  controls: true,
+                )
+              : _VideoPoster(url: thumb))
           : InteractiveViewer(
               maxScale: 5,
               child: Image.network(
-                url,
+                thumb,
                 fit: BoxFit.contain,
                 loadingBuilder: (_, child, progress) {
                   if (progress == null) return child;
@@ -462,143 +472,48 @@ class _MediaViewer extends StatelessWidget {
   }
 }
 
-/// 视频查看：应用内 WebView 播放，支持下载。
-class _VideoTile extends StatelessWidget {
-  const _VideoTile({required this.url, required this.item, required this.apiClient});
+/// 非当前页（滑动过渡中可见）的视频封面占位：图片 + 播放提示。
+class _VideoPoster extends StatelessWidget {
+  const _VideoPoster({required this.url});
 
   final String url;
-  final MediaItem item;
-  final ApiClient apiClient;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () {
-        Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => VideoPlayerPage(url: url, title: item.title),
-        ));
-      },
-      child: Container(
-        color: Colors.black,
-        alignment: Alignment.center,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.play_circle_outline, size: 80, color: Colors.white54),
-            const SizedBox(height: 12),
-            const Text('点击播放视频', style: TextStyle(color: Colors.white70, fontSize: 15)),
-            const SizedBox(height: 20),
-            _VideoDownloadBtn(url: url, item: item, apiClient: apiClient),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// 视频下载按钮
-class _VideoDownloadBtn extends StatefulWidget {
-  const _VideoDownloadBtn({required this.url, required this.item, required this.apiClient});
-
-  final String url;
-  final MediaItem item;
-  final ApiClient apiClient;
-
-  @override
-  State<_VideoDownloadBtn> createState() => _VideoDownloadBtnState();
-}
-
-class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
-  bool _downloading = false;
-  double? _progress;
-
-  Future<void> _download() async {
-    if (_downloading) return;
-    setState(() { _downloading = true; _progress = null; });
-    try {
-      // 使用 apiClient dio，自动带 X-API-Key；ResponseType.bytes 避免编码截断。
-      final resp = await widget.apiClient.dio.get<List<int>>(
-        widget.url,
-        options: Options(
-          responseType: ResponseType.bytes,
-          followRedirects: true,
-          maxRedirects: 5,
-        ),
-        onReceiveProgress: (received, total) {
-          if (total > 0 && mounted) {
-            setState(() => _progress = received / total);
-          }
-        },
-      );
-      final bytes = resp.data;
-      if (bytes == null || bytes.isEmpty) throw StateError('empty response');
-      final accessible = await Gal.hasAccess();
-      if (!accessible) {
-        final granted = await Gal.requestAccess();
-        if (!granted) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('需要相册权限才能保存')));
-          }
-          return;
-        }
-      }
-      await Gal.putImageBytes(
-        Uint8List.fromList(bytes),
-        name: widget.item.title.isNotEmpty ? widget.item.title : 'picwall_video',
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('视频已保存到相册')));
-      }
-    } on DioException catch (e) {
-      final status = e.response?.statusCode;
-      final msg = status != null ? 'HTTP $status' : e.message ?? 'unknown';
-      DebugService.instance.recordError('VideoDownload', e);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('下载失败: $msg')));
-      }
-    } catch (e) {
-      DebugService.instance.recordError('VideoDownload', e);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('下载失败: $e')));
-      }
-    } finally {
-      if (mounted) setState(() { _downloading = false; _progress = null; });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_downloading) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 160,
-            child: LinearProgressIndicator(
-              value: _progress,
-              backgroundColor: Colors.white24,
-              color: const Color(0xFF6C7CFF),
-            ),
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.network(
+          url,
+          fit: BoxFit.contain,
+          loadingBuilder: (_, child, progress) {
+            if (progress == null) return child;
+            return const Center(
+              child: CircularProgressIndicator(color: Colors.white54),
+            );
+          },
+          errorBuilder: (_, __, ___) => Container(
+            color: Colors.black,
+            alignment: Alignment.center,
+            child: const Icon(Icons.play_circle_outline,
+                size: 64, color: Colors.white38),
           ),
-          const SizedBox(height: 6),
-          Text(_progress != null ? '${(_progress! * 100).toStringAsFixed(0)}%' : '下载中...',
-              style: const TextStyle(color: Colors.white54, fontSize: 12)),
-        ],
-      );
-    }
-    return OutlinedButton.icon(
-      onPressed: _download,
-      icon: const Icon(Icons.download_outlined, size: 18, color: Colors.white70),
-      label: const Text('下载视频', style: TextStyle(color: Colors.white70, fontSize: 13)),
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: Colors.white30),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      ),
+        ),
+        const Center(
+          child: Icon(Icons.play_circle_outline,
+              size: 64, color: Colors.white70),
+        ),
+        const Positioned(
+          bottom: 24,
+          left: 0,
+          right: 0,
+          child: Text(
+            '当前页自动播放',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70, fontSize: 13),
+          ),
+        ),
+      ],
     );
   }
 }

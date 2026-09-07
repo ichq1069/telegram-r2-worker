@@ -10,6 +10,7 @@ import 'features/discover/discover_page.dart';
 import 'features/settings/onboarding_page.dart';
 import 'features/lock/lock_screen.dart';
 import 'features/debug/debug_error_overlay.dart';
+import 'features/video/feed_video_autoplay.dart';
 import 'services/providers.dart';
 import 'services/stats_service.dart';
 import 'services/update_service.dart';
@@ -28,6 +29,7 @@ class PicWallApp extends ConsumerWidget {
       title: 'PicWall',
       debugShowCheckedModeBanner: false,
       navigatorKey: rootNavigatorKey,
+      navigatorObservers: <NavigatorObserver>[appRouteObserver],
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
       themeMode: switch (mode) {
@@ -148,6 +150,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
   @override
+  void initState() {
+    super.initState();
+    ref.read(homeTabIndexProvider.notifier).state = 0;
+  }
+
+  @override
   Widget build(BuildContext context) {
     const pages = <Widget>[
       DiscoverPage(),
@@ -158,7 +166,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) {
+          ref.read(homeTabIndexProvider.notifier).state = i;
+          setState(() => _index = i);
+        },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.explore_outlined), label: '发现'),
           NavigationDestination(icon: Icon(Icons.photo_library_outlined), label: '图库'),

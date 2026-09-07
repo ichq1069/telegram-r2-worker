@@ -9,6 +9,11 @@ import 'api_client.dart';
 import 'secure_store.dart';
 import 'settings.dart';
 
+/// HomeShell 底部当前选中 Tab（0 发现 / 1 图库 / 2 我的）。
+///
+/// 用于让隐藏 Tab 中的列表视频自动播放暂停；由 HomeShell 在切换时写入。
+final homeTabIndexProvider = StateProvider<int>((ref) => 0);
+
 /// 安全存储。
 final secureStoreProvider = Provider<SecureStore>(
   (ref) => SecureStore(),
