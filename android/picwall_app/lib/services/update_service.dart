@@ -1,7 +1,4 @@
-import 'dart:io';
-
 import 'package:dio/dio.dart';
-import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -54,8 +51,6 @@ class UpdateService {
   static final instance = UpdateService._();
 
   static const _repo = GitHubRepo(owner: 'ichq1069', repo: 'telegram-r2-worker');
-  static const _lastCheckKey = 'last_update_check';
-  static const _autoCheckKey = 'auto_update_check';
 
   final Dio _dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 10),
