@@ -171,8 +171,9 @@ export async function groupItems(env, groupStr, limit) {
     // 公开页匿名访问：仅 pt 且非私密（私密内容仅 vvip 密钥可见）
     const stmt = env.D1_DB.prepare('SELECT id, url, thumb_url, title, tags FROM random_pool WHERE id IN (' + ids.map(function(){ return '?'; }).join(',') + ') AND level=\'pt\' AND is_private=0');
     const d = await stmt.bind(...ids).all();
+    const decorated = await decoratePoolList(d.results || [], '/', env);
     const map = {};
-    (d.results || []).forEach(function(r) { map[r.id] = r; });
+    decorated.forEach(function(r) { map[r.id] = r; });
     ids.forEach(function(id) {
       const r = map[id];
       if (!r) return;
@@ -261,7 +262,9 @@ export async function handleShowData(request, env) {
   else if (pg && pg.source === 'manual') { w += " AND source='manual'"; }
   try {
     const d = await env.D1_DB.prepare('SELECT url, thumb_url, title, tags FROM random_pool ' + w + (shuffle ? ' ORDER BY RANDOM()' : ' ORDER BY id DESC') + ' LIMIT ?').bind(...p, count).all();
-    const items = (d.results || []).map(function(r) {
+    const origin = new URL(request.url).origin;
+    const decorated = await decoratePoolList(d.results || [], origin, env);
+    const items = decorated.map(function(r) {
       return { url: r.url, thumb_url: r.thumb_url || r.url, title: r.title || '', tags: splitTags(r.tags) };
     });
     return json({ ok: true, data: { cfg: cfg, program: pgName ? { name: pgName } : null, items: items } });
@@ -294,7 +297,9 @@ export async function handleGalleryData(request, env) {
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
     const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
-    return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, level: keyLevel, items: (d.results || []).map(poolFileJson) } });
+    const origin = new URL(request.url).origin;
+    const decorated = await decoratePoolList(d.results || [], origin, env);
+    return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, level: keyLevel, items: decorated.map(poolFileJson) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -887,7 +892,9 @@ export async function handlePublicFiles(request, env, keyLevel) {
     });
     const mapper = fromPool ? poolFileJson : publicFileJson;
     const rows = (selR.source === 'd1' || selR.source === 'mysql') ? selR.rows : [];
-    return json({ ok: true, data: { total: (countR.row && countR.row.total) || 0, limit: limit, offset: offset, source: selR.source, items: rows.map(mapper) } });
+    const origin = new URL(request.url).origin;
+    const decorated = fromPool ? await decoratePoolList(rows, origin, env) : rows;
+    return json({ ok: true, data: { total: (countR.row && countR.row.total) || 0, limit: limit, offset: offset, source: selR.source, items: decorated.map(mapper) } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -912,7 +919,9 @@ export async function handlePublicRandom(request, env, keyLevel) {
       run: () => env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY RANDOM() LIMIT ?').bind(...p, mode === 'img' ? 1 : count).all(),
       mysqlFn: () => mysqlRows(env, 'SELECT * FROM random_pool ' + w + ' ' + myOrder, p.concat([mode === 'img' ? 1 : count]))
     });
-    const items = (selR.rows || []).map(poolFileJson);
+    const origin = new URL(request.url).origin;
+    const decorated = await decoratePoolList(selR.rows || [], origin, env);
+    const items = decorated.map(poolFileJson);
     if (mode === 'img') {
       if (!items.length) return json({ ok: false, error: 'No file matches' }, 404);
       return new Response('', { status: 302, headers: { Location: items[0].url } });
@@ -930,6 +939,60 @@ export function poolFileJson(r) {
     file_type: r.file_type || 'photo', width: r.width, height: r.height, file_size: r.file_size,
     source: r.source, created_at: r.created_at
   };
+}
+
+// ── 代理直链签名修复 ─────────────────────────────────────
+// 历史原因：部分 random_pool / files 行只存了"未签名占位符"代理直链（/file/tg/<id> 或
+// /file/tg/placeholder），App 直接拿来播放/下载会命中签名校验而 403。列表接口输出前统一
+// 把这类未签名路径重写为 当前请求 origin + 签名直链（/file/tg/<token>/<id>.<ext>）。
+// 已是绝对直链（http/https 且非 /file/tg/ 代理形态）的行原样返回。
+
+// 解析"未签名代理直链"：形如 /file/tg/<纯数字>(可带 .ext 尾缀)；/file/tg/placeholder 是"待转存占位"。
+// 返回 { id, ext }（ext 可为空字符串）；不是代理直链返回 null。
+function unsignedProxyId(value) {
+  if (!value) return null;
+  let s = String(value).trim();
+  const m = s.match(/^\/file\/tg\/(\d+)(\.[A-Za-z0-9]+)?$/);
+  if (m) return { id: parseInt(m[1], 10) || 0, ext: (m[2] || '').replace(/^\./, '') };
+  if (/^\/file\/tg\/placeholder$/i.test(s)) return { id: -1, ext: '' }; // 待转存占位
+  return null;
+}
+
+// 代理直链扩展名：优先沿用原 URL 尾缀（如 .mp4），否则按 file_type 兜底。
+function proxyExtOf(value, fileType) {
+  if (value) return value;
+  switch (String(fileType || '')) {
+    case 'video': return 'mp4';
+    case 'document': return 'bin';
+    case 'audio': return 'mp3';
+    case 'gif': return 'gif';
+    default: return 'jpg';
+  }
+}
+
+// 单条：把 url/thumb_url 中未签名的 /file/tg/<id> 改为签名绝对直链。返回新对象。
+export async function decoratePoolRow(row, origin, env) {
+  const out = Object.assign({}, row);
+  const pu = unsignedProxyId(row.url);
+  const id = (pu && pu.id) || (row.tg_file_id ? (parseInt(row.tg_file_id, 10) || 0) : 0);
+  if (id <= 0) return out;
+  try {
+    const tok = await fileTok(id, env);
+    const pt = unsignedProxyId(row.thumb_url);
+    const signed = origin + '/file/tg/' + tok + '/' + id + '.' + proxyExtOf(pu ? pu.ext : '', row.file_type);
+    if (pu) out.url = signed;
+    if (pt && pt.id === id) out.thumb_url = signed;
+  } catch (e) { /* 保持原样 */ }
+  return out;
+}
+
+// 批量装饰列表行（保持行序）。
+export async function decoratePoolList(rows, origin, env) {
+  const decorated = [];
+  for (const row of rows || []) {
+    decorated.push(await decoratePoolRow(row, origin, env));
+  }
+  return decorated;
 }
 
 // ==================== Public upload API ====================
@@ -3364,7 +3427,7 @@ export async function handleUserRandom(request, env) {
       }
     }
     
-    return json({ ok: true, data: results });
+    return json({ ok: true, data: await decoratePoolList(results, new URL(request.url).origin, env) });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

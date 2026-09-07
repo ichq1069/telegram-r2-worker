@@ -30,7 +30,7 @@ import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
 import { mysqlFailoverGet, mysqlRows, mysqlGet, mysqlExec } from './src/mysql.js';
 import { handleParseLink, handleGetCobaltConfig, handleSaveCobaltConfig } from './src/parser.js';
-import { handleAppInstall, handleAppHeartbeat, handleAppStats, handleAppInstalls } from './src/app_stats.js';
+import { handleAppInstall, handleAppHeartbeat, handleAppStats, handleAppInstalls, handleAppUpdate } from './src/app_stats.js';
 
 
 
@@ -415,6 +415,7 @@ export default {
     // App 安装统计（无需认证，APP 直接调用）
     if (m === 'POST' && p === '/api/app/stats/install') return handleAppInstall(request, env);
     if (m === 'POST' && p === '/api/app/stats/heartbeat') return handleAppHeartbeat(request, env);
+    if (m === 'GET' && p === '/api/app/update') return handleAppUpdate(env);
 
     // API routes (require auth)
     const apiKey = request.headers.get('X-API-Key') || url.searchParams.get('api_key');

@@ -1,29 +1,54 @@
-// App 安装统计：安装上报 / 心跳 / 管理后台查询
+// App 安装统计：安装上报 / 心跳 / 管理后台查询 / 更新源查询
+// 注意：D1 绑定名是 D1_DB（wrangler.toml 里 [[d1_databases]] binding = "D1_DB"），
+// 不要写成 env.DB —— 那会导致 prepare 未定义而 500。
 import { json } from "./util.js";
+
+function dbOf(env) {
+  return env.D1_DB;
+}
+
+// 上报/心跳统一 UPSERT：user_uploads 之类的 device_id 无唯一约束，先查后写。
+async function upsertInstall(env, data) {
+  const db = dbOf(env);
+  const {
+    device_id, app_version, build_number, platform,
+    model, os_version, screen_width, screen_height
+  } = data;
+  const now = new Date().toISOString();
+  const existing = await db.prepare('SELECT id FROM app_installs WHERE device_id = ?1').bind(device_id).first();
+  if (existing && existing.id) {
+    // 心跳/覆盖安装：保留首次 installed_at，刷新版本与设备信息，心跳计数 +1
+    await db.prepare(
+      `UPDATE app_installs SET
+         app_version=?2, build_number=?3, platform=?4,
+         model=?5, os_version=?6, screen_width=?7, screen_height=?8,
+         last_heartbeat_at=?9, heartbeat_count=heartbeat_count+1, is_active=1
+       WHERE id=?1`
+    ).bind(
+      existing.id, app_version || '', build_number || 0, platform || 'android',
+      model || '', os_version || '', screen_width || 0, screen_height || 0, now
+    ).run();
+    return { created: false };
+  }
+  await db.prepare(
+    `INSERT INTO app_installs
+       (device_id, app_version, build_number, platform, model, os_version,
+        screen_width, screen_height, installed_at, last_heartbeat_at, heartbeat_count, is_active)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 1, 1)`
+  ).bind(
+    device_id, app_version || '', build_number || 0, platform || 'android',
+    model || '', os_version || '', screen_width || 0, screen_height || 0, now
+  ).run();
+  return { created: true };
+}
 
 // ─── 安装上报 ───────────────────────────────────────────
 export async function handleAppInstall(request, env) {
   try {
     const body = await request.json();
-    const {
-      device_id, app_version, build_number, platform,
-      model, os_version, screen_width, screen_height
-    } = body;
+    const { device_id } = body;
     if (!device_id) return json({ ok: false, error: 'device_id required' }, 400);
-    const now = new Date().toISOString();
-    // UPSERT：同一 device_id 只保留一条记录，更新版本和设备信息
-    await env.DB.prepare(
-      `INSERT INTO app_installs (device_id, app_version, build_number, platform, model, os_version, screen_width, screen_height, installed_at, last_heartbeat_at, heartbeat_count, is_active)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 1, 1)
-       ON CONFLICT(device_id) DO UPDATE SET
-         app_version=excluded.app_version, build_number=excluded.build_number,
-         platform=excluded.platform, model=excluded.model, os_version=excluded.os_version,
-         screen_width=excluded.screen_width, screen_height=excluded.screen_height,
-         last_heartbeat_at=excluded.last_heartbeat_at, is_active=1`
-    ).bind(
-      device_id, app_version || '', build_number || 0, platform || 'android',
-      model || '', os_version || '', screen_width || 0, screen_height || 0, now
-    ).run();
+    await upsertInstall(env, body);
     return json({ ok: true });
   } catch (e) {
     console.error('app install error:', e.message);
@@ -35,18 +60,9 @@ export async function handleAppInstall(request, env) {
 export async function handleAppHeartbeat(request, env) {
   try {
     const body = await request.json();
-    const { device_id, app_version, build_number } = body;
+    const { device_id } = body;
     if (!device_id) return json({ ok: false, error: 'device_id required' }, 400);
-    const now = new Date().toISOString();
-    // UPSERT：心跳时若设备不存在则自动创建
-    await env.DB.prepare(
-      `INSERT INTO app_installs (device_id, app_version, build_number, platform, installed_at, last_heartbeat_at, heartbeat_count, is_active)
-       VALUES (?1, ?2, ?3, 'android', ?4, ?4, 1, 1)
-       ON CONFLICT(device_id) DO UPDATE SET
-         app_version=excluded.app_version, build_number=excluded.build_number,
-         last_heartbeat_at=excluded.last_heartbeat_at,
-         heartbeat_count=heartbeat_count+1, is_active=1`
-    ).bind(device_id, app_version || '', build_number || 0, now).run();
+    await upsertInstall(env, body);
     return json({ ok: true });
   } catch (e) {
     console.error('app heartbeat error:', e.message);
@@ -57,7 +73,7 @@ export async function handleAppHeartbeat(request, env) {
 // ─── 管理后台：概览统计 ─────────────────────────────────
 export async function handleAppStats(env) {
   try {
-    const db = env.DB;
+    const db = dbOf(env);
     // 总安装数
     const total = await db.prepare("SELECT COUNT(*) as c FROM app_installs").first();
     // 活跃设备（5 分钟内心跳）
@@ -116,7 +132,7 @@ export async function handleAppInstalls(request, env) {
     const page = Math.max(1, parseInt(url.searchParams.get('page') || '1'));
     const pageSize = Math.min(100, Math.max(1, parseInt(url.searchParams.get('page_size') || '50')));
     const offset = (page - 1) * pageSize;
-    const db = env.DB;
+    const db = dbOf(env);
     const total = await db.prepare("SELECT COUNT(*) as c FROM app_installs").first();
     const rows = await db.prepare(
       "SELECT * FROM app_installs ORDER BY last_heartbeat_at DESC LIMIT ?1 OFFSET ?2"
@@ -134,6 +150,57 @@ export async function handleAppInstalls(request, env) {
     });
   } catch (e) {
     console.error('app installs error:', e.message);
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
+// ─── 应用更新源（Worker 侧代理 GitHub releases/latest） ──
+// App 端直连 api.github.com 可能因网络/限流不稳定，改走同源 Worker：
+// 既能拿到最新版本号，也能拼出 R2 上的 APK 直链（R2_PUBLIC_URL 更快更稳）。
+export async function handleAppUpdate(env) {
+  try {
+    const resp = await fetch('https://api.github.com/repos/ichq1069/telegram-r2-worker/releases/latest', {
+      headers: {
+        'User-Agent': 'picwall-worker',
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    });
+    if (!resp.ok) {
+      return json({ ok: false, error: 'github upstream ' + resp.status }, 502);
+    }
+    const rel = await resp.json();
+    const tag = String(rel.tag_name || '').trim();
+    if (!tag) return json({ ok: false, error: 'no latest release' }, 404);
+    const version = tag.replace(/^[vV]/, '');
+
+    // 首选 R2 公开直链（版本化文件名，GitHub Actions 构建后同步上传）
+    const publicBase = (env.R2_PUBLIC_URL || '').replace(/\/+$/, '');
+    let downloadUrl = '';
+    if (publicBase) {
+      downloadUrl = publicBase + '/apk/picwall-' + encodeURIComponent(version) + '.apk';
+    }
+    // 兜底：GitHub Release asset
+    if (!downloadUrl) {
+      const assets = rel.assets || [];
+      for (const a of assets) {
+        const n = String(a.name || '');
+        if (n.endsWith('.apk')) {
+          downloadUrl = a.browser_download_url || '';
+          break;
+        }
+      }
+    }
+
+    return json({
+      ok: true,
+      version: version,
+      tag: tag,
+      download_url: downloadUrl,
+      body: String(rel.body || '').slice(0, 2000),
+      published_at: String(rel.published_at || '')
+    });
+  } catch (e) {
+    console.error('app update error:', e.message);
     return json({ ok: false, error: e.message }, 500);
   }
 }
