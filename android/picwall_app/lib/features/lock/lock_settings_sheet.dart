@@ -246,6 +246,7 @@ class _LockSettingsSheetState extends ConsumerState<LockSettingsSheet> {
           seq: _cur,
           error: _error,
           onTap: _tap,
+          size: 200,
         ),
       ),
       const SizedBox(height: 10),
@@ -310,76 +311,5 @@ class _LockSettingsSheetState extends ConsumerState<LockSettingsSheet> {
         textAlign: TextAlign.center,
       ),
     ];
-  }
-}
-
-/// 独立的 3x3 图案板（设置流程复用，解锁态用 lock_screen 内实现）。
-class PatternBoard extends StatelessWidget {
-  const PatternBoard({
-    super.key,
-    required this.seq,
-    required this.error,
-    required this.onTap,
-  });
-
-  final List<int> seq;
-  final bool error;
-  final ValueChanged<int> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    const size = 200.0;
-    const r = 15.0;
-    final centers = <Offset>[];
-    const step = (size - r * 2) / 2;
-    for (var row = 0; row < 3; row++) {
-      for (var col = 0; col < 3; col++) {
-        centers.add(Offset(r + step * col, r + step * row));
-      }
-    }
-    return SizedBox(
-      width: size,
-      height: size,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: (d) {
-          final p = d.localPosition;
-          for (var i = 0; i < centers.length; i++) {
-            if ((p - centers[i]).distance <= 30) {
-              onTap(i);
-              return;
-            }
-          }
-        },
-        child: Stack(
-          children: [
-            for (var i = 0; i < 9; i++)
-              Positioned(
-                left: centers[i].dx - r,
-                top: centers[i].dy - r,
-                width: r * 2,
-                height: r * 2,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: seq.contains(i)
-                        ? theme.colorScheme.primary
-                        : (error
-                            ? theme.colorScheme.error.withValues(alpha: 0.6)
-                            : theme.colorScheme.surfaceContainerHighest),
-                    border: Border.all(
-                      color: seq.contains(i)
-                          ? theme.colorScheme.primary
-                          : theme.colorScheme.outlineVariant,
-                      width: 2,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
   }
 }

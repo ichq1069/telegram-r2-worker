@@ -35,7 +35,6 @@ class _LockScreenState extends ConsumerState<LockScreen> {
     if (_bioEnabled) _probeBio();
   }
 
-
   Future<void> _probeBio() async {
     setState(() => _checkingBio = true);
     try {
@@ -43,7 +42,8 @@ class _LockScreenState extends ConsumerState<LockScreen> {
       if (!ok || !mounted) return;
       if (mounted) setState(() => _msg = '指纹解锁已启用');
     } catch (_) {
-      // 设备不支持/无录入时保持图案解锁
+      // 设备不支持/宿主 Activity 不支持时静默降级为图案解锁
+      if (mounted) setState(() => _msg = '绘制图案解锁');
     } finally {
       if (mounted) setState(() => _checkingBio = false);
     }
@@ -64,10 +64,12 @@ class _LockScreenState extends ConsumerState<LockScreen> {
         if (widget.allowPop) Navigator.of(context).pop();
       }
     } catch (e) {
+      // local_auth 依赖 FragmentActivity；异常时不弹原始错误，静默回到图案解锁
       if (mounted) {
         setState(() {
-          _error = true;
-          _msg = '指纹不可用：${e.toString()}';
+          _error = false;
+          _seq.clear();
+          _msg = '指纹不可用，请使用图案解锁';
         });
       }
     } finally {
@@ -139,49 +141,52 @@ class _LockScreenState extends ConsumerState<LockScreen> {
           ),
         ),
         child: SafeArea(
-          child: Column(
-            children: [
-              const Spacer(flex: 2),
-              Icon(Icons.lock_outline,
-                  size: 64, color: theme.colorScheme.primary),
-              const SizedBox(height: 18),
-              Text('PicWall 已锁定',
-                  style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 24),
-              _PatternPad(
-                seq: _seq,
-                error: _error,
-                onTap: _tap,
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: 240,
-                child: PatternConfirmBar(
-                  canSubmit: _seq.length >= 4,
-                  error: _error,
-                  hint: _msg,
-                  onSubmit: _submit,
-                  onClear: _clear,
-                ),
-              ),
-              const Spacer(flex: 1),
-              if (_bioEnabled)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: OutlinedButton.icon(
-                    onPressed: _checkingBio ? null : _unlockWithBio,
-                    icon: _checkingBio
-                        ? const SizedBox(
-                            width: 14,
-                            height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.fingerprint, size: 20),
-                    label: const Text('指纹解锁'),
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lock_outline,
+                      size: 64, color: theme.colorScheme.primary),
+                  const SizedBox(height: 18),
+                  Text('PicWall 已锁定',
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 24),
+                  PatternBoard(
+                    seq: _seq,
+                    error: _error,
+                    onTap: _tap,
                   ),
-                ),
-              const SizedBox(height: 24),
-            ],
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: 240,
+                    child: PatternConfirmBar(
+                      canSubmit: _seq.length >= 4,
+                      error: _error,
+                      hint: _msg,
+                      onSubmit: _submit,
+                      onClear: _clear,
+                    ),
+                  ),
+                  if (_bioEnabled) ...[
+                    const SizedBox(height: 20),
+                    OutlinedButton.icon(
+                      onPressed: _checkingBio ? null : _unlockWithBio,
+                      icon: _checkingBio
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.fingerprint, size: 20),
+                      label: const Text('指纹解锁'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -240,96 +245,165 @@ class PatternConfirmBar extends StatelessWidget {
   }
 }
 
-/// 3x3 图案盘。seq 为已选点（0..8，行优先）。
-class _PatternPad extends StatelessWidget {
-  const _PatternPad({
+/// 3x3 图案盘（公共组件：解锁页与设置页共用）。
+/// 已选点之间绘制连线，支持手指滑动连续选点（类 Android 图案解锁）。
+/// seq 为已选点（0..8，行优先）；[size] 控制整体边长。
+class PatternBoard extends StatefulWidget {
+  const PatternBoard({
+    super.key,
     required this.seq,
     required this.error,
     required this.onTap,
+    this.size = 260,
   });
 
   final List<int> seq;
   final bool error;
   final ValueChanged<int> onTap;
+  final double size;
+
+  @override
+  State<PatternBoard> createState() => _PatternBoardState();
+}
+
+class _PatternBoardState extends State<PatternBoard> {
+  late final double _dotR;
+  late final List<Offset> _centers;
+  late double _hitR;
+
+  @override
+  void initState() {
+    super.initState();
+    _recompute();
+  }
+
+  @override
+  void didUpdateWidget(PatternBoard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.size != widget.size) _recompute();
+  }
+
+  void _recompute() {
+    _dotR = widget.size * 0.16;
+    const hitScale = 0.26;
+    const stepBase = 0.34;
+    final step = widget.size * stepBase;
+    _centers = <Offset>[];
+    for (var row = 0; row < 3; row++) {
+      for (var col = 0; col < 3; col++) {
+        _centers.add(Offset(
+          widget.size * 0.16 + step * col,
+          widget.size * 0.16 + step * row,
+        ));
+      }
+    }
+    _hitR = widget.size * hitScale;
+  }
+
+  int? _hitTest(Offset p) {
+    for (var i = 0; i < _centers.length; i++) {
+      if ((p - _centers[i]).distance <= _hitR) return i;
+    }
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    const size = 240.0;
-    const r = 16.0;
-    final centers = <Offset>[];
-    const step = (size - r * 2) / 2;
-    for (var row = 0; row < 3; row++) {
-      for (var col = 0; col < 3; col++) {
-        centers.add(Offset(r + step * col, r + step * row));
-      }
-    }
+    final color = widget.error
+        ? theme.colorScheme.error
+        : theme.colorScheme.primary;
     return SizedBox(
-      width: size,
-      height: size,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapDown: (d) {
-              final p = d.localPosition;
-              for (var i = 0; i < centers.length; i++) {
-                if ((p - centers[i]).distance <= 34) {
-                  onTap(i);
-                  return;
-                }
-              }
-            },
-            child: Stack(
-              children: [
-                for (var i = 0; i < 9; i++)
-                  Positioned(
-                    left: centers[i].dx - r,
-                    top: centers[i].dy - r,
-                    width: r * 2,
-                    height: r * 2,
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: seq.contains(i)
-                            ? theme.colorScheme.primary
-                            : (error
-                                ? theme.colorScheme.error.withValues(alpha: 0.6)
-                                : theme.colorScheme.surfaceContainerHighest),
-                        border: Border.all(
-                          color: seq.contains(i)
-                              ? theme.colorScheme.primary
-                              : theme.colorScheme.outlineVariant,
-                          width: 2,
-                        ),
-                      ),
-                      child: Center(
-                        child: DecoratedBox(
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.transparent,
-                          ),
-                          child: SizedBox(
-                            width: 8,
-                            height: 8,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: seq.contains(i)
-                                    ? theme.colorScheme.onPrimary
-                                    : Colors.transparent,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          );
+      width: widget.size,
+      height: widget.size,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanDown: (d) {
+          final i = _hitTest(d.localPosition);
+          if (i != null) widget.onTap(i);
         },
+        onPanUpdate: (d) {
+          final i = _hitTest(d.localPosition);
+          if (i != null) widget.onTap(i);
+        },
+        child: CustomPaint(
+          painter: _PatternPainter(
+            centers: _centers,
+            seq: List.unmodifiable(widget.seq),
+            dotR: _dotR,
+            dotColor: color,
+            emptyColor: theme.colorScheme.surfaceContainerHighest,
+            outlineColor: theme.colorScheme.outlineVariant,
+            onPrimary: theme.colorScheme.onPrimary,
+          ),
+        ),
       ),
     );
+  }
+}
+
+class _PatternPainter extends CustomPainter {
+  _PatternPainter({
+    required this.centers,
+    required this.seq,
+    required this.dotR,
+    required this.dotColor,
+    required this.emptyColor,
+    required this.outlineColor,
+    required this.onPrimary,
+  });
+
+  final List<Offset> centers;
+  final List<int> seq;
+  final double dotR;
+  final Color dotColor;
+  final Color emptyColor;
+  final Color outlineColor;
+  final Color onPrimary;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 连线（先画，避免被圆点覆盖）
+    if (seq.length >= 2) {
+      final paint = Paint()
+        ..color = dotColor
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke;
+      for (var i = 1; i < seq.length; i++) {
+        canvas.drawLine(centers[seq[i - 1]], centers[seq[i]], paint);
+      }
+    }
+    // 9 个点
+    for (var i = 0; i < centers.length; i++) {
+      final selected = seq.contains(i);
+      canvas.drawCircle(
+        centers[i],
+        dotR,
+        Paint()
+          ..color = selected ? dotColor : emptyColor
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        centers[i],
+        dotR,
+        Paint()
+          ..color = selected ? dotColor : outlineColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2,
+      );
+      if (selected) {
+        canvas.drawCircle(centers[i], 4.5, Paint()..color = onPrimary);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PatternPainter old) {
+    if (old.dotColor != dotColor || old.seq.length != seq.length) return true;
+    for (var i = 0; i < seq.length; i++) {
+      if (old.seq[i] != seq[i]) return true;
+    }
+    return false;
   }
 }

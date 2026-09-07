@@ -23,20 +23,20 @@ class PicWallApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(settingsControllerProvider).settings.themeMode;
-    return DebugErrorOverlay(
-      child: MaterialApp(
-        title: 'PicWall',
-        debugShowCheckedModeBanner: false,
-        navigatorKey: rootNavigatorKey,
-        theme: AppTheme.light(),
-        darkTheme: AppTheme.dark(),
-        themeMode: switch (mode) {
-          'system' => ThemeMode.system,
-          'light' => ThemeMode.light,
-          _ => ThemeMode.dark,
-        },
-        home: const RootGate(),
-      ),
+    return MaterialApp(
+      title: 'PicWall',
+      debugShowCheckedModeBanner: false,
+      navigatorKey: rootNavigatorKey,
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: switch (mode) {
+        'system' => ThemeMode.system,
+        'light' => ThemeMode.light,
+        _ => ThemeMode.dark,
+      },
+      builder: (context, child) =>
+          DebugErrorOverlay(child: child ?? const SizedBox()),
+      home: const RootGate(),
     );
   }
 }

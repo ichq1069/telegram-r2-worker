@@ -1,5 +1,5 @@
 // App 安装统计：安装上报 / 心跳 / 管理后台查询
-import { json } from "./core.js";
+import { json } from "./util.js";
 
 // ─── 安装上报 ───────────────────────────────────────────
 export async function handleAppInstall(request, env) {

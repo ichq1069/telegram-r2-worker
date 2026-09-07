@@ -1,21 +1,22 @@
-import 'dart:async';
+import 'package:flutter/foundation.dart';
 
 /// 调试模式服务：捕获全应用错误并在 UI 上展示。
-class DebugService {
+/// 继承 [ChangeNotifier]，开关状态/错误列表变化时通知浮层刷新。
+class DebugService extends ChangeNotifier {
   DebugService._();
   static final DebugService instance = DebugService._();
 
   bool _enabled = false;
   final List<DebugError> _errors = [];
-  final _controller = StreamController<DebugError>.broadcast();
 
   bool get enabled => _enabled;
   List<DebugError> get errors => List.unmodifiable(_errors);
-  Stream<DebugError> get errorStream => _controller.stream;
 
   void setEnabled(bool value) {
+    if (_enabled == value) return;
     _enabled = value;
     if (!value) _errors.clear();
+    notifyListeners();
   }
 
   void recordError(String source, Object error, [StackTrace? stack]) {
@@ -28,11 +29,13 @@ class DebugService {
     );
     _errors.insert(0, entry);
     if (_errors.length > 50) _errors.removeLast();
-    _controller.add(entry);
+    notifyListeners();
   }
 
   void clear() {
+    if (_errors.isEmpty) return;
     _errors.clear();
+    notifyListeners();
   }
 }
 

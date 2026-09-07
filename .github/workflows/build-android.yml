@@ -81,6 +81,25 @@ jobs:
           print('manifest permissions/service/label injected')
           PY
 
+      - name: Use FlutterFragmentActivity host (local_auth biometrics)
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: |
+          python3 - <<'PY'
+          import glob, re
+          files = glob.glob('android/app/src/main/kotlin/**/MainActivity.kt', recursive=True)
+          for p in files:
+              s = open(p, encoding='utf-8').read()
+              if 'FlutterFragmentActivity' in s:
+                  print('already FlutterFragmentActivity:', p)
+                  continue
+              s = s.replace('import io.flutter.embedding.android.FlutterActivity',
+                            'import io.flutter.embedding.android.FlutterFragmentActivity')
+              s = s.replace('FlutterActivity()', 'FlutterFragmentActivity()')
+              open(p, 'w', encoding='utf-8').write(s)
+              print('patched to FlutterFragmentActivity:', p)
+          PY
+
       - name: Flutter pub get
         if: steps.check.outputs.present == 'true'
         working-directory: android/picwall_app

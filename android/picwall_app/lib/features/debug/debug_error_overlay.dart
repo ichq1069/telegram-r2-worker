@@ -3,64 +3,57 @@ import 'package:flutter/material.dart';
 import '../../services/debug_service.dart';
 
 /// 调试模式下的错误浮层：右上角红色角标，点击展开最近错误列表。
-class DebugErrorOverlay extends StatefulWidget {
+class DebugErrorOverlay extends StatelessWidget {
   const DebugErrorOverlay({super.key, required this.child});
 
   final Widget child;
 
   @override
-  State<DebugErrorOverlay> createState() => _DebugErrorOverlayState();
-}
-
-class _DebugErrorOverlayState extends State<DebugErrorOverlay> {
-  final _svc = DebugService.instance;
-  int _count = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _svc.errorStream.listen((_) {
-      if (mounted) setState(() => _count = _svc.errors.length);
-    });
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (!_svc.enabled) return widget.child;
-    return Stack(
-      children: [
-        widget.child,
-        if (_count > 0)
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 4,
-            right: 8,
-            child: GestureDetector(
-              onTap: _showErrors,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.red.shade700,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '$_count 错误',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600),
+    return ListenableBuilder(
+      listenable: DebugService.instance,
+      builder: (context, _) {
+        final svc = DebugService.instance;
+        if (!svc.enabled) return child;
+        final count = svc.errors.length;
+        return Stack(
+          children: [
+            child,
+            if (count > 0)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 4,
+                right: 8,
+                child: GestureDetector(
+                  onTap: () => _showErrors(context),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade700,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '$count 错误',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-      ],
+          ],
+        );
+      },
     );
   }
 
-  void _showErrors() {
+  void _showErrors(BuildContext context) {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _ErrorListSheet(errors: _svc.errors),
+      builder: (_) =>
+          _ErrorListSheet(errors: DebugService.instance.errors),
     );
   }
 }
