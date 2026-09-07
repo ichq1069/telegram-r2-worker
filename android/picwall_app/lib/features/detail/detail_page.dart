@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'video_player_page.dart';
 
 import '../../core/constants.dart';
 import '../../core/time_utils.dart';
@@ -450,7 +450,7 @@ class _MediaViewer extends StatelessWidget {
   }
 }
 
-/// 视频查看：点击用外部播放器打开，支持下载。
+/// 视频查看：应用内 WebView 播放，支持下载。
 class _VideoTile extends StatelessWidget {
   const _VideoTile({required this.url, required this.item, required this.apiClient});
 
@@ -462,7 +462,11 @@ class _VideoTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      onTap: () {
+        Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => VideoPlayerPage(url: url, title: item.title),
+        ));
+      },
       child: Container(
         color: Colors.black,
         alignment: Alignment.center,
@@ -501,9 +505,14 @@ class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
     if (_downloading) return;
     setState(() { _downloading = true; _progress = null; });
     try {
+      // 使用 apiClient dio，自动带 X-API-Key；ResponseType.bytes 避免编码截断。
       final resp = await widget.apiClient.dio.get<List<int>>(
         widget.url,
-        options: Options(responseType: ResponseType.bytes),
+        options: Options(
+          responseType: ResponseType.bytes,
+          followRedirects: true,
+          maxRedirects: 5,
+        ),
         onReceiveProgress: (received, total) {
           if (total > 0 && mounted) {
             setState(() => _progress = received / total);
@@ -511,7 +520,7 @@ class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
         },
       );
       final bytes = resp.data;
-      if (bytes == null || bytes.isEmpty) throw StateError('empty');
+      if (bytes == null || bytes.isEmpty) throw StateError('empty response');
       final accessible = await Gal.hasAccess();
       if (!accessible) {
         final granted = await Gal.requestAccess();
@@ -523,16 +532,27 @@ class _VideoDownloadBtnState extends State<_VideoDownloadBtn> {
           return;
         }
       }
-      await Gal.putImageBytes(Uint8List.fromList(bytes), name: widget.item.title.isNotEmpty ? widget.item.title : 'picwall_video');
+      await Gal.putImageBytes(
+        Uint8List.fromList(bytes),
+        name: widget.item.title.isNotEmpty ? widget.item.title : 'picwall_video',
+      );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('视频已保存到相册')));
+      }
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final msg = status != null ? 'HTTP $status' : e.message ?? 'unknown';
+      DebugService.instance.recordError('VideoDownload', e);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('下载失败: $msg')));
       }
     } catch (e) {
       DebugService.instance.recordError('VideoDownload', e);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('下载失败: ${e.toString().substring(0, 50)}')));
+          SnackBar(content: Text('下载失败: $e')));
       }
     } finally {
       if (mounted) setState(() { _downloading = false; _progress = null; });

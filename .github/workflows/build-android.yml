@@ -10,6 +10,11 @@ on:
       - 'android/picwall_app/**'
       - '.github/workflows/build-android.yml'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'App version (e.g. 0.2.0). Leave empty to only increment build number.'
+        required: false
+        default: ''
 
 jobs:
   build:
@@ -106,19 +111,27 @@ jobs:
           chmod 600 "$HOME/.android/debug.keystore"
           echo "Fixed debug keystore restored."
 
-      - name: Auto-increment build number
+      - name: Auto-increment build number and version
         if: steps.check.outputs.present == 'true'
         working-directory: android/picwall_app
         run: |
           python3 - <<'PY'
-          import re
+          import re, os
           p = 'pubspec.yaml'
           s = open(p).read()
-          run = '${{ github.run_number }}'
-          s = re.sub(r'(version:\s+\d+\.\d+\.\d+\+)\d+', rf'\g<1>{run}', s)
+          run = os.environ.get('RUN_NUMBER', '1')
+          ver = os.environ.get('INPUT_VERSION', '').strip()
+          if ver:
+              s = re.sub(r'version:\s+\d+\.\d+\.\d+\+\d+', f'version: {ver}+{run}', s)
+              print(f'version set to {ver}+{run}')
+          else:
+              s = re.sub(r'(version:\s+\d+\.\d+\.\d+\+)\d+', rf'\g<1>{run}', s)
+              print(f'build number set to {run}')
           open(p, 'w').write(s)
-          print(f'build number set to {run}')
           PY
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
 
       - name: Build debug APK (M1; 发布签名将在 M4/T4.6 引入)
         if: steps.check.outputs.present == 'true'
