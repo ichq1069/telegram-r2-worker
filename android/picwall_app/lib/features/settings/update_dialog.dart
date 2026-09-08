@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/update_service.dart';
 
@@ -213,29 +214,34 @@ class _UpdateDialogState extends State<UpdateDialog> {
                 style: TextStyle(fontSize: 12, color: theme.colorScheme.error),
               ),
               const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed: _copyLink,
-                  icon: const Icon(Icons.link, size: 16),
-                  label: const Text('复制下载链接'),
-                  style: OutlinedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    foregroundColor: theme.colorScheme.primary,
-                    side: BorderSide(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.6),
-                    ),
-                  ),
-                ),
-              ),
+              _externalButtons(theme.colorScheme.primary),
               const SizedBox(height: 4),
               Text(
-                'App 内下载失败时，可复制链接到浏览器下载 APK 后手动安装',
+                'App 内下载失败时可复制链接或改用浏览器下载 APK 后手动安装',
                 style: TextStyle(
                   fontSize: 11,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
+            ] else ...[
+              Text(
+                '选择更新方式',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _download,
+                  icon: const Icon(Icons.download, size: 18),
+                  label: const Text('APP 内下载'),
+                ),
+              ),
+              const SizedBox(height: 10),
+              _externalButtons(theme.colorScheme.primary),
             ],
           ],
         ),
@@ -245,20 +251,59 @@ class _UpdateDialogState extends State<UpdateDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('稍后'),
         ),
+        if (_error != null && _apkPath == null && !_downloading)
+          FilledButton(
+            onPressed: _download,
+            child: const Text('重试'),
+          ),
         if (_apkPath != null)
           FilledButton(
             onPressed: _install,
             child: const Text('安装'),
-          )
-        else
-          FilledButton(
-            onPressed: _downloading ? null : _download,
-            child: _downloading
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('更新'),
           ),
       ],
     );
+  }
+
+  /// 外部下载的两条通道：复制链接到浏览器手动下载 / 调起系统浏览器直接下载。
+  Widget _externalButtons(Color accent) {
+    final outlineStyle = OutlinedButton.styleFrom(
+      foregroundColor: accent,
+      side: BorderSide(color: accent.withValues(alpha: 0.6)),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        OutlinedButton.icon(
+          onPressed: _copyLink,
+          style: outlineStyle,
+          icon: const Icon(Icons.link, size: 16),
+          label: const Text('复制下载链接'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _openInBrowser,
+          style: outlineStyle,
+          icon: const Icon(Icons.open_in_browser, size: 16),
+          label: const Text('用浏览器打开'),
+        ),
+      ],
+    );
+  }
+
+  /// 用系统浏览器打开 APK 直链（页面自动触发下载）；打不开时退回复制链接。
+  Future<void> _openInBrowser() async {
+    final ok = await launchUrl(
+      Uri.parse(widget.info.downloadUrl),
+      mode: LaunchMode.externalApplication,
+    );
+    if (ok) return;
+    await Clipboard.setData(ClipboardData(text: widget.info.downloadUrl));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('无法打开浏览器，下载链接已复制')),
+      );
+    }
   }
 
   Widget _versionTag(String text, Color color) {
