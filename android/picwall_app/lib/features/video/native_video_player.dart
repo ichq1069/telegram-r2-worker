@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../services/debug_service.dart';
+import 'software_video.dart';
 
 /// 原生内联视频播放器（基于 video_player / ExoPlayer）。
 ///
@@ -10,6 +11,8 @@ import '../../services/debug_service.dart';
 /// - [controls] 为 true 时显示轻量控制层（点按暂停/播放、声音开关）；
 /// - 应用退后台自动暂停，回前台自动恢复；
 /// - 出错提供重试；dispose 时释放解码器。
+/// - [softwareFallback] 为 true 时，遇到设备解码器不支持的编码/容器
+///   （ExoPlayer MediaCodec 错误）会自动切到内置 ffmpeg 软解继续播放。
 class NativeVideoPlayer extends StatefulWidget {
   const NativeVideoPlayer({
     super.key,
@@ -20,6 +23,7 @@ class NativeVideoPlayer extends StatefulWidget {
     this.muted = true,
     this.controls = false,
     this.fit = BoxFit.contain,
+    this.softwareFallback = false,
   });
 
   /// 绝对直链（http/https）。
@@ -43,6 +47,9 @@ class NativeVideoPlayer extends StatefulWidget {
   /// 视频在画布内的适配方式。
   final BoxFit fit;
 
+  /// ExoPlayer 解码失败时自动切软件解码回退（media_kit/ffmpeg）。
+  final bool softwareFallback;
+
   @override
   State<NativeVideoPlayer> createState() => _NativeVideoPlayerState();
 }
@@ -54,6 +61,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
   bool _failed = false;
   String _errorDetail = '';
   bool _decoderUnsupported = false;
+  bool _useSoft = false;
   bool _muted = true;
   bool _autoPlaying = false;
   bool _lastPlaying = false;
@@ -113,6 +121,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
       _setError(v.errorDescription ?? '播放出错');
       DebugService.instance.recordError(
           'NativeVideoPlayer.play', v.errorDescription ?? 'VideoPlayer error');
+      _scheduleSoftFallback();
       if (mounted) setState(() {});
       return;
     }
@@ -138,6 +147,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
     _failed = false;
     _errorDetail = '';
     _decoderUnsupported = false;
+    _useSoft = false;
     _lastPlaying = false;
     _lastBuffering = false;
     if (mounted) setState(() {});
@@ -160,7 +170,29 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
       _failed = true;
       _setError(_describe(e));
       DebugService.instance.recordError('NativeVideoPlayer.init', e);
+      _scheduleSoftFallback();
       if (mounted) setState(() {});
+    }
+  }
+
+  /// 在下一帧切换软解：避免在 video_player 的监听/异常回调内直接
+  /// dispose 控制器（通知期间销毁同一通知源会触发断言）。
+  void _scheduleSoftFallback() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _maybeSoftFallback();
+    });
+  }
+
+  /// 解码不支持且开启回退时：释放 ExoPlayer，改由软件解码（ffmpeg）接管。
+  void _maybeSoftFallback() {
+    if (!widget.softwareFallback || _useSoft || !_decoderUnsupported) return;
+    _useSoft = true;
+    _initToken++;
+    final old = _controller;
+    _controller = null;
+    if (old != null) {
+      old.removeListener(_onValue);
+      old.dispose();
     }
   }
 
@@ -220,6 +252,15 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
 
   @override
   Widget build(BuildContext context) {
+    if (_useSoft) {
+      return SoftwareVideo(
+        url: widget.url,
+        autoplay: widget.autoplay,
+        loop: widget.loop,
+        muted: widget.muted,
+        controls: widget.controls,
+      );
+    }
     final Widget body;
     if (_failed) {
       body = _buildError();

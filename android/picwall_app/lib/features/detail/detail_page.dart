@@ -450,6 +450,7 @@ class _MediaViewer extends StatelessWidget {
                   loop: true,
                   muted: true,
                   controls: true,
+                  softwareFallback: true,
                 )
               : _VideoPoster(url: thumb))
           : InteractiveViewer(
