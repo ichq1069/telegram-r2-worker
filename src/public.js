@@ -286,6 +286,9 @@ export async function handleGalleryData(request, env) {
   const u = new URL(request.url);
   const tagsParam = u.searchParams.get('tags') || '';
   const type = u.searchParams.get('type') || '';
+  const levelRaw = u.searchParams.get('level') || '';
+  const levelParam = levelRaw ? sanitizeLevel(levelRaw) : '';
+  const sort = u.searchParams.get('sort') || '';
   const limit = clampInt(u.searchParams.get('limit') || '60', 60, 1, 100);
   const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
   let w = 'WHERE enabled=1'; const p = [];
@@ -294,9 +297,12 @@ export async function handleGalleryData(request, env) {
   if (keyLevel !== 'vvip') { w += ' AND is_private=0'; }
   if (type) { w += ' AND file_type=?'; p.push(type); }
   if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
+  // 等级筛选用空串表示「不限」（默认返回密钥可见的全部级别）
+  if (levelParam) { w += ' AND level=?'; p.push(levelParam); }
+  const order = sort === 'asc' ? 'id ASC' : 'id DESC';
   try {
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
-    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY ' + order + ' LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
     const origin = new URL(request.url).origin;
     const decorated = await decoratePoolList(d.results || [], origin, env);
     return json({ ok: true, data: { total: t?.total || 0, limit: limit, offset: offset, level: keyLevel, items: decorated.map(poolFileJson) } });
