@@ -71,7 +71,6 @@ class _SoftwareVideoState extends State<SoftwareVideo>
     for (final s in _subs) {
       s.cancel();
     }
-    _controller?.dispose();
     _player?.dispose();
     super.dispose();
   }
@@ -100,7 +99,6 @@ class _SoftwareVideoState extends State<SoftwareVideo>
       s.cancel();
     }
     _subs.clear();
-    _controller?.dispose();
     _player?.dispose();
     _player = null;
     _controller = null;
