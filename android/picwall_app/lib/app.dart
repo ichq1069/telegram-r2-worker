@@ -58,10 +58,6 @@ class _RootGateState extends ConsumerState<RootGate>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // 登录态变化时同步当前账号到统计服务（上报设备历史登录用户）
-    ref.listen(sessionControllerProvider, (_, s) {
-      StatsService.instance.updateUser(s.session?.username);
-    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final settings = ref.read(settingsControllerProvider);
       if (!settings.loaded) {
@@ -118,6 +114,11 @@ class _RootGateState extends ConsumerState<RootGate>
     final settingsState = ref.watch(settingsControllerProvider);
     final lockCtl = ref.watch(appLockControllerProvider);
     final sessionState = ref.watch(sessionControllerProvider);
+
+    // 登录态变化时同步当前账号到统计服务（上报设备历史登录用户）
+    ref.listen(sessionControllerProvider, (_, s) {
+      StatsService.instance.updateUser(s.session?.username);
+    });
 
     // 配置尚未恢复完成
     if (!settingsState.loaded && settingsState.error == null) {
