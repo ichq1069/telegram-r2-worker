@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -165,6 +167,33 @@ class UpdateService {
       DebugService.instance.recordError('UpdateService.download', e);
       final reason = e is DioException ? (e.message ?? e.type.name) : '$e';
       return (path: null, error: reason);
+    }
+  }
+
+  /// 查询系统是否已允许本应用安装未知来源应用。
+  ///
+  /// 旧构建未注册 canInstall 通道时返回 true：放行让安装流程执行，由安装
+  /// 失败兜底给出引导，避免在新版已注册通道语义下误判成「必须先去授权」。
+  Future<bool> canInstallFromUnknownSources() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _installChannel.invokeMethod<bool>('canInstall') ?? true;
+    } on MissingPluginException {
+      return true;
+    } on PlatformException {
+      return true;
+    }
+  }
+
+  /// 打开系统「允许安装未知应用」设置页；无法打开时返回 false。
+  Future<bool> openInstallSettings() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _installChannel.invokeMethod<bool>('openInstallSettings') ?? false;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException {
+      return false;
     }
   }
 

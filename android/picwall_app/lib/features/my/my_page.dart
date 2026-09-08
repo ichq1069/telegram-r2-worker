@@ -44,7 +44,9 @@ class _MyPageState extends ConsumerState<MyPage> {
       final info = await PackageInfo.fromPlatform();
       if (mounted) {
         setState(
-            () => _version = '${info.version} (${info.buildNumber})');
+            () => _version = info.buildNumber.trim().isEmpty
+                ? info.version
+                : '${info.version}+${info.buildNumber}');
       }
     } catch (e, st) {
       DebugService.instance.recordError('MyPage.loadVersion', e, st);

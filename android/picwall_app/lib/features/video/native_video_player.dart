@@ -53,6 +53,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
   bool _initialized = false;
   bool _failed = false;
   String _errorDetail = '';
+  bool _decoderUnsupported = false;
   bool _muted = true;
   bool _autoPlaying = false;
   bool _lastPlaying = false;
@@ -109,7 +110,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
     if (v == null) return;
     if (v.hasError && !_failed) {
       _failed = true;
-      _errorDetail = v.errorDescription ?? '播放出错';
+      _setError(v.errorDescription ?? '播放出错');
       DebugService.instance.recordError(
           'NativeVideoPlayer.play', v.errorDescription ?? 'VideoPlayer error');
       if (mounted) setState(() {});
@@ -136,6 +137,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
     _initialized = false;
     _failed = false;
     _errorDetail = '';
+    _decoderUnsupported = false;
     _lastPlaying = false;
     _lastBuffering = false;
     if (mounted) setState(() {});
@@ -156,10 +158,29 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
     } catch (e) {
       if (!mounted || token != _initToken || _controller != c) return;
       _failed = true;
-      _errorDetail = _describe(e);
+      _setError(_describe(e));
       DebugService.instance.recordError('NativeVideoPlayer.init', e);
       if (mounted) setState(() {});
     }
+  }
+
+  /// 判断是否为解码器/编码不支持的播放失败（ExoPlayer 报 MediaCodec 渲染错误）。
+  static bool _isDecoderError(String raw) {
+    final low = raw.toLowerCase();
+    return low.contains('mediacodec') ||
+        low.contains('exoplaybackexception') ||
+        (low.contains('codec') && low.contains('renderer')) ||
+        low.contains('unsupported format') ||
+        low.contains('cannot decode') ||
+        low.contains('format not supported');
+  }
+
+  /// 记录错误原文；解码不支持时把展示文案换成可读建议，原文记录进调试日志。
+  void _setError(String raw) {
+    _decoderUnsupported = _isDecoderError(raw);
+    _errorDetail = _decoderUnsupported
+        ? '该视频的编码格式当前设备不支持解码。可复制链接到浏览器观看，或用支持该编码的本地播放器打开。'
+        : raw;
   }
 
   /// 把平台层异常收敛为可读文本（VideoError / PlatformException → 消息 + details）。
@@ -246,11 +267,15 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.error_outline, size: 40, color: Colors.white54),
+          Icon(
+            _decoderUnsupported ? Icons.ondemand_video : Icons.error_outline,
+            size: 40,
+            color: Colors.white54,
+          ),
           const SizedBox(height: 8),
-          const Text(
-            '视频加载失败',
-            style: TextStyle(color: Colors.white70, fontSize: 14),
+          Text(
+            _decoderUnsupported ? '此视频无法在此设备解码' : '视频加载失败',
+            style: const TextStyle(color: Colors.white70, fontSize: 14),
           ),
           if (_errorDetail.isNotEmpty)
             Padding(
@@ -264,18 +289,44 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
               ),
             ),
           const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: _create,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.white,
-              side: const BorderSide(color: Colors.white38),
-            ),
-            icon: const Icon(Icons.refresh, size: 16),
-            label: const Text('重试'),
+          Wrap(
+            spacing: 8,
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _create,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white38),
+                ),
+                icon: const Icon(Icons.refresh, size: 16),
+                label: const Text('重试'),
+              ),
+              if (_decoderUnsupported)
+                OutlinedButton.icon(
+                  onPressed: _copyUrl,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white38),
+                  ),
+                  icon: const Icon(Icons.link, size: 16),
+                  label: const Text('复制链接'),
+                ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  void _copyUrl() {
+    Clipboard.setData(ClipboardData(text: widget.url));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('播放链接已复制，可粘贴到浏览器打开')),
+      );
+    }
   }
 
   Widget _buildVideo() {
