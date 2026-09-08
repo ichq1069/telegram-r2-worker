@@ -31,6 +31,7 @@ class _StorageTabState extends ConsumerState<StorageTab> {
   int _refs = 0;
   final Set<String> _sel = {};
   bool _acting = false;
+  bool _gridMode = false;
   _Pane _pane = _Pane.objects;
 
   @override
@@ -200,6 +201,15 @@ class _StorageTabState extends ConsumerState<StorageTab> {
                 onPressed: _loading ? null : _load,
                 icon: const Icon(Icons.refresh),
               ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: _gridMode ? '切换列表视图' : '切换网格视图',
+                onPressed: () => setState(() => _gridMode = !_gridMode),
+                icon: Icon(
+                  _gridMode ? Icons.view_list_outlined : Icons.grid_view_outlined,
+                  size: 20,
+                ),
+              ),
             ],
           ),
         ),
@@ -266,38 +276,74 @@ class _StorageTabState extends ConsumerState<StorageTab> {
     }
     return RefreshIndicator(
       onRefresh: _load,
-      child: ListView.separated(
-        padding: const EdgeInsets.only(bottom: 8),
-        itemCount: _objects.length,
-        separatorBuilder: (_, __) => const Divider(height: 1, indent: 16),
-        itemBuilder: (context, i) {
-          final o = _objects[i];
-          final lastSegment = o.key.contains('/')
-              ? o.key.substring(o.key.lastIndexOf('/') + 1)
-              : o.key;
-          return ListTile(
-            dense: true,
-            leading: o.isOrphan
-                ? Checkbox(
-                    value: _sel.contains(o.key),
-                    onChanged: (_) => _toggle(o.key),
-                  )
-                : Icon(_stateIcon(o.state),
-                    color: _stateColor(o.state, theme)),
-            title: Text(lastSegment,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13)),
-            subtitle: Text(
-              '${fmtBytes(o.size)} · ${fmtIso(o.uploaded)}',
-              style: const TextStyle(fontSize: 11),
-            ),
-            trailing: _StateBadge(state: o.state),
-            onTap: o.isOrphan ? () => _toggle(o.key) : null,
-          );
-        },
-      ),
+      child: _gridMode ? _buildGrid() : _buildList(),
     );
+  }
+
+  Widget _buildList() {
+    return ListView.separated(
+      padding: const EdgeInsets.only(bottom: 8),
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: _objects.length,
+      separatorBuilder: (_, __) => const Divider(height: 1, indent: 16),
+      itemBuilder: (context, i) {
+        final o = _objects[i];
+        final lastSegment = _nameOf(o.key);
+        return ListTile(
+          dense: true,
+          leading: o.isOrphan
+              ? Checkbox(
+                  value: _sel.contains(o.key),
+                  onChanged: (_) => _toggle(o.key),
+                )
+              : Icon(_stateIcon(o.state),
+                  color: _stateColor(o.state, Theme.of(context))),
+          title: Text(lastSegment,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13)),
+          subtitle: Text(
+            '${fmtBytes(o.size)} · ${fmtIso(o.uploaded)}',
+            style: const TextStyle(fontSize: 11),
+          ),
+          trailing: _StateBadge(state: o.state),
+          onTap: o.isOrphan ? () => _toggle(o.key) : null,
+        );
+      },
+    );
+  }
+
+  /// 网格视图：优先展示对象直链缩略图（图片类），非图片/加载失败回退占位图标。
+  Widget _buildGrid() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cross = ((constraints.maxWidth - 8) / 132).floor().clamp(2, 6);
+        return GridView.builder(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+          physics: const AlwaysScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: cross,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 0.82,
+          ),
+          itemCount: _objects.length,
+          itemBuilder: (context, i) {
+            final o = _objects[i];
+            return _ObjectTile(
+              object: o,
+              selected: _sel.contains(o.key),
+              onTap: o.isOrphan ? () => _toggle(o.key) : null,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  static String _nameOf(String key) {
+    final i = key.lastIndexOf('/');
+    return i >= 0 ? key.substring(i + 1) : key;
   }
 
   static IconData _stateIcon(String state) {
@@ -324,6 +370,151 @@ class _StorageTabState extends ConsumerState<StorageTab> {
       default:
         return theme.colorScheme.error;
     }
+  }
+}
+
+class _ObjectTile extends StatelessWidget {
+  const _ObjectTile({
+    required this.object,
+    required this.selected,
+    this.onTap,
+  });
+
+  final R2Object object;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  static const Set<String> _imgExts = {
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'avif', 'heic',
+  };
+
+  String get _name {
+    final i = object.key.lastIndexOf('/');
+    return i >= 0 ? object.key.substring(i + 1) : object.key;
+  }
+
+  String get _ext {
+    final dot = _name.lastIndexOf('.');
+    if (dot < 0) return '';
+    return _name.substring(dot + 1).toLowerCase();
+  }
+
+  bool get _isImage => _imgExts.contains(_ext);
+
+  (String, Color) get _state {
+    switch (object.state) {
+      case 'used':
+        return ('引用', Colors.lightGreen);
+      case 'backup':
+        return ('备份', Colors.lightBlue);
+      case 'page':
+        return ('页面', Colors.grey);
+      default:
+        return ('孤儿', Colors.redAccent);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final (stateLabel, stateColor) = _state;
+    return Material(
+      color: theme.colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (_isImage && object.publicUrl.isNotEmpty)
+                    Image.network(
+                      object.publicUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _placeholder(theme),
+                      loadingBuilder: (_, child, progress) =>
+                          progress == null ? child : _placeholder(theme),
+                    )
+                  else
+                    _placeholder(theme),
+                  Positioned(
+                    left: 6,
+                    top: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: stateColor.withValues(alpha: 0.22),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(stateLabel,
+                          style: TextStyle(
+                              color: stateColor,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                  if (object.isOrphan)
+                    Positioned(
+                      right: 2,
+                      top: 2,
+                      child: Checkbox(
+                        value: selected,
+                        visualDensity: VisualDensity.compact,
+                        onChanged: (_) => onTap?.call(),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 5, 8, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${fmtBytes(object.size)} · ${fmtIso(object.uploaded)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 10, color: theme.colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _placeholder(ThemeData theme) {
+    return Container(
+      color: theme.colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            _isImage ? Icons.broken_image_outlined : Icons.insert_drive_file_outlined,
+            color: theme.colorScheme.outline,
+            size: 30,
+          ),
+          const SizedBox(height: 4),
+          if (_ext.isNotEmpty)
+            Text('.$_ext',
+                style: TextStyle(color: theme.colorScheme.outline, fontSize: 10)),
+        ],
+      ),
+    );
   }
 }
 
