@@ -3056,13 +3056,15 @@ async function loadAppInstalls(page) {
     '</tr></thead><tbody>';
   for (var i = 0; i < d.items.length; i++) {
     var it = d.items[i];
+    var vlabel = it.app_version || '-';
+    if (it.build_number) vlabel += '+' + it.build_number;
     var isActive = it.is_active === 1;
     var lastHb = it.last_heartbeat_at ? new Date(it.last_heartbeat_at).toLocaleString('zh-CN') : '-';
     var did = it.device_id || '';
     if (did.length > 16) did = did.slice(0, 8) + '...' + did.slice(-6);
     h += '<tr style="border-bottom:1px solid #f1f5f9">' +
       '<td style="padding:6px 8px;font-family:monospace;font-size:11px" title="' + escStr(it.device_id) + '">' + escStr(did) + '</td>' +
-      '<td style="padding:6px 8px;font-weight:600">' + escStr(it.app_version || '-') + '</td>' +
+      '<td style="padding:6px 8px;font-weight:600">' + escStr(vlabel) + '</td>' +
       '<td style="padding:6px 8px">' + escStr(it.model || '-') + '</td>' +
       '<td style="padding:6px 8px">' + escStr(it.os_version || '-') + '</td>' +
       '<td style="padding:6px 8px;text-align:center"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (isActive ? '#10b981' : '#94a3b8') + '"></span> ' + (isActive ? '在线' : '离线') + '</td>' +
