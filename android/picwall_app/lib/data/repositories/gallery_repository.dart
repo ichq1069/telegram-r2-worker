@@ -35,10 +35,14 @@ class GalleryRepository {
 
   final ApiClient _api;
 
-  /// 共享库 /gallery/data?api_key&tags&type&limit&offset
+  /// 共享库 /gallery/data?api_key&tags&type&level&sort&limit&offset
+  /// [level] 内容等级过滤（'' 不限，服务端默认返回密钥可见全部级别）；
+  /// [oldestFirst] true=按时间正序(最旧在前)，false=倒序(最新在前)。
   Future<PagedMedia> galleryData({
     String tags = '',
     String type = '',
+    String level = '',
+    bool oldestFirst = false,
     int limit = 60,
     int offset = 0,
   }) async {
@@ -47,6 +51,8 @@ class GalleryRepository {
       query: {
         'tags': tags,
         'type': type,
+        if (level.isNotEmpty) 'level': level,
+        'sort': oldestFirst ? 'asc' : 'desc',
         'limit': limit,
         'offset': offset,
       },
