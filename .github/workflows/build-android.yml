@@ -103,6 +103,104 @@ jobs:
               print('patched to FlutterFragmentActivity:', p)
           PY
 
+      - name: Wire FileProvider APK install (method channel)
+        if: steps.check.outputs.present == 'true'
+        working-directory: android/picwall_app
+        run: |
+          python3 - <<'PY'
+          import os, re, glob
+
+          # 1) Manifest: declare androidx FileProvider so the app can hand the
+          #    downloaded APK to the system installer over content:// (file://
+          #    triggers FileUriExposedException on API 24+).
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p, encoding='utf-8').read()
+          provider = (
+              '    <provider\n'
+              '        android:name="androidx.core.content.FileProvider"\n'
+              '        android:authorities="${applicationId}.fileprovider"\n'
+              '        android:exported="false"\n'
+              '        android:grantUriPermissions="true">\n'
+              '        <meta-data\n'
+              '            android:name="android.support.FILE_PROVIDER_PATHS"\n'
+              '            android:resource="@xml/file_paths" />\n'
+              '    </provider>\n'
+          )
+          if 'FileProvider' not in s:
+              m = re.search(r'<application\b[^>]*>', s)
+              s = s[:m.end()] + '\n' + provider + s[m.end():]
+              open(p, 'w', encoding='utf-8').write(s)
+              print('fileprovider injected into manifest')
+          else:
+              print('fileprovider already present')
+
+          # 2) Provider path map: APK lands in the app cache dir.
+          os.makedirs('android/app/src/main/res/xml', exist_ok=True)
+          xml = '''<?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <cache-path name="update" path="." />
+              <external-cache-path name="update_ext" path="." />
+          </paths>
+          '''
+          open('android/app/src/main/res/xml/file_paths.xml', 'w', encoding='utf-8').write(xml)
+
+          # 3) MainActivity: MethodChannel "picwall/install" -> ACTION_VIEW with
+          #    FileProvider content URI + read grant.
+          files = glob.glob('android/app/src/main/kotlin/**/MainActivity.kt', recursive=True)
+          for mp in files:
+              src = open(mp, encoding='utf-8').read()
+              if 'picwall/install' in src:
+                  print('install channel already wired:', mp)
+                  continue
+              imports = (
+                  'import android.content.Intent\n'
+                  'import android.net.Uri\n'
+                  'import androidx.core.content.FileProvider\n'
+                  'import io.flutter.embedding.engine.FlutterEngine\n'
+                  'import io.flutter.plugin.common.MethodChannel\n'
+                  'import java.io.File\n'
+              )
+              lines = src.split('\n')
+              last_import = max(i for i, l in enumerate(lines) if l.startswith('import '))
+              lines = lines[:last_import + 1] + imports.rstrip().split('\n') + lines[last_import + 1:]
+              src = '\n'.join(lines)
+              body = '''
+      override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+          super.configureFlutterEngine(flutterEngine)
+          MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "picwall/install").setMethodCallHandler { call, result ->
+              if (call.method != "installApk") {
+                  result.notImplemented()
+                  return@setMethodCallHandler
+              }
+              val path = call.argument<String>("path")
+              if (path == null) {
+                  result.error("bad_argument", "missing apk path", null)
+                  return@setMethodCallHandler
+              }
+              try {
+                  val file = File(path)
+                  val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+                  val intent = Intent(Intent.ACTION_VIEW).apply {
+                      setDataAndType(uri, "application/vnd.android.package-archive")
+                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                  }
+                  startActivity(intent)
+                  result.success(true)
+              } catch (e: android.content.ActivityNotFoundException) {
+                  result.error("no_installer", "未找到可用的安装程序", null)
+              } catch (e: Exception) {
+                  result.error("install_failed", e.message ?: "安装失败", null)
+              }
+          }
+      }
+  '''
+              src = src.rstrip()
+              if src.endswith('}'):
+                  src = src[:-1].rstrip() + '\n' + body + '}\n'
+              open(mp, 'w', encoding='utf-8').write(src)
+              print('install channel wired:', mp)
+          PY
+
       - name: Flutter pub get
         if: steps.check.outputs.present == 'true'
         working-directory: android/picwall_app

@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -58,6 +59,9 @@ class UpdateService {
     connectTimeout: const Duration(seconds: 10),
     receiveTimeout: const Duration(seconds: 30),
   ));
+
+  /// 原生安装通道（Android 侧经 FileProvider 以 content:// 拉起安装器）。
+  static const MethodChannel _installChannel = MethodChannel('picwall/install');
 
   String _apiBase = '';
   DateTime? _lastCheck;
@@ -158,6 +162,32 @@ class UpdateService {
     } catch (e) {
       DebugService.instance.recordError('UpdateService.download', e);
       return null;
+    }
+  }
+
+  /// 拉起系统安装器安装已下载的 APK。
+  ///
+  /// Android 通过 MethodChannel 走 FileProvider（content:// + 读授权），
+  /// 避免 file:// 触发 FileUriExposedException；异常转成可读错误抛出。
+  Future<void> installApk(String path) async {
+    try {
+      final ok = await _installChannel.invokeMethod<bool>('installApk', {
+        'path': path,
+      });
+      if (ok != true) {
+        throw Exception('未能启动安装程序');
+      }
+    } on PlatformException catch (e) {
+      final msg = switch (e.code) {
+        'no_installer' => '未找到可用的安装程序',
+        'bad_argument' => '安装参数无效',
+        _ => (e.message == null || e.message!.isEmpty)
+            ? '无法安装（${e.code}）'
+            : e.message!,
+      };
+      throw Exception(msg);
+    } on MissingPluginException {
+      throw Exception('当前设备不支持自动安装，请手动安装 APK');
     }
   }
 }

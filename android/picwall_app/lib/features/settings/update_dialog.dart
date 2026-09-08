@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/update_service.dart';
 
@@ -47,18 +46,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
   }
 
   Future<void> _install() async {
-    if (_apkPath == null) return;
+    final path = _apkPath;
+    if (path == null) return;
     try {
-      final uri = Uri.file(_apkPath!);
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('无法打开安装程序')),
-          );
-        }
-      }
+      await UpdateService.instance.installApk(path);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
