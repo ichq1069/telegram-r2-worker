@@ -273,14 +273,31 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
 
-      - name: Build debug APK (确定性重签在下一步进行)
+      # 体积说明：此前 --debug 会同时打进 4 个 ABI 的 JIT 引擎与原生库
+      # （+60 时代已 ~130MB，media_kit 软解加入后达 213MB）。改为
+      # --release（AOT + 裁剪）且仅编 android-arm64 单架构，APK 预计降至
+      # 数十 MB 量级；armeabi-v7a(32 位) 旧机暂不支持，后续可按需补发。
+      - name: Ensure debug keystore for release signing
+        if: steps.check.outputs.present == 'true'
+        run: |
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            mkdir -p "$HOME/.android"
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "generated debug keystore for release signing"
+          else
+            echo "debug keystore exists"
+          fi
+      - name: Build release APK arm64 (确定性重签在下一步进行)
         if: steps.check.outputs.present == 'true'
         id: build
         working-directory: android/picwall_app
         run: |
-          flutter build apk --debug
-          echo "apk_path=build/app/outputs/flutter-apk/app-debug.apk" >> "$GITHUB_OUTPUT"
-          echo "apk_name=picwall-debug.apk" >> "$GITHUB_OUTPUT"
+          flutter build apk --release --target-platform android-arm64
+          echo "apk_path=build/app/outputs/flutter-apk/app-release.apk" >> "$GITHUB_OUTPUT"
+          echo "apk_name=picwall.apk" >> "$GITHUB_OUTPUT"
 
       # gradle 每次构建都会用随机生成的 debug.keystore 签名（restore 到 $HOME 不生效，
       # 已取证：+60 与 +61 产物 cert SHA-256 不同）。这里用固定 keystore 对产物做确定性
@@ -292,7 +309,7 @@ jobs:
         working-directory: android/picwall_app
         run: |
           set -e
-          APK=build/app/outputs/flutter-apk/app-debug.apk
+          APK=build/app/outputs/flutter-apk/app-release.apk
           BT=/tmp/android-build-tools
           if [ ! -f "$BT/android-14/apksigner" ] && [ ! -f "$BT/android-14/lib/apksigner.jar" ]; then
             mkdir -p "$BT"
@@ -332,7 +349,7 @@ jobs:
             gh release delete "$t" --yes --cleanup-tag || true
           done
           gh release create "v${VERSION}" \
-            android/picwall_app/build/app/outputs/flutter-apk/app-debug.apk \
+            android/picwall_app/build/app/outputs/flutter-apk/app-release.apk \
             --title "PicWall ${VERSION}" \
             --notes "自动构建 ${VERSION} · commit ${GITHUB_SHA:0:7}" \
             --target "${GITHUB_SHA}"
@@ -347,7 +364,7 @@ jobs:
         run: |
           set -e
           VERSION=$(sed -n 's/^version: //p' android/picwall_app/pubspec.yaml | tr -d ' \r')
-          APK=android/picwall_app/build/app/outputs/flutter-apk/app-debug.apk
+          APK=android/picwall_app/build/app/outputs/flutter-apk/app-release.apk
 
           # 固定文件名，避免版本号里 '+' 等字符在 URL/缓存上的麻烦
           npx --yes wrangler@4.128.0 r2 object put bot-telegram/apk/picwall-latest.apk \
