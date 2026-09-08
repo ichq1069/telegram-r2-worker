@@ -58,18 +58,31 @@ export async function handleTgFileRedirect(request, env, ctx) {
     }
     if (dlUrl) {
       try {
-        const origin = await fetch(dlUrl);
+        // 透传客户端的 Range，让 Telegram CDN 回 206/Content-Range：
+        // 视频播放（ExoPlayer/browser）对 moov 在文件尾的 mp4 会先请求末尾字节定位，
+        // 若上游忽略 Range 每次都回 200 全量，播放器按错误偏移解析会直接判定源错误。
+        const headers = new Headers();
+        const rng = request.headers.get('range');
+        if (rng) headers.set('Range', rng);
+        const origin = await fetch(dlUrl, { headers });
         if (!origin.ok) return json({ ok: false, error: 'origin http ' + origin.status }, 502);
         // 懒转存：返回给用户的同时，异步把文件落到 R2 并更新 D1 直链（之后访问直接走 R2，不再实时拉 TG）
-        if (ctx && ctx.waitUntil && f.telegram_file_id) {
+        if (ctx && ctx.waitUntil && f.telegram_file_id && !rng) {
           ctx.waitUntil(lazyTransferToR2(env, id, f, dlUrl).catch(function(e) { console.error('lazy transfer:', e.message); }));
         }
         env.D1_DB.prepare('UPDATE files SET view_count = view_count + 1 WHERE id=?').bind(id).run().catch(function(){});
-        return new Response(origin.body, { headers: {
+        // 中继上游状态（206 保留）与关键头，确保分片/长度/范围信息完整交给播放器
+        const outHeaders = {
           'Content-Type': f.mime_type || origin.headers.get('content-type') || 'application/octet-stream',
           'Cache-Control': 'public, max-age=300',
-          'Access-Control-Allow-Origin': '*'
-        } });
+          'Access-Control-Allow-Origin': '*',
+          'Accept-Ranges': 'bytes'
+        };
+        const cl = origin.headers.get('content-length');
+        if (cl) outHeaders['Content-Length'] = cl;
+        const cr = origin.headers.get('content-range');
+        if (cr) outHeaders['Content-Range'] = cr;
+        return new Response(origin.body, { status: origin.status, headers: outHeaders });
       } catch (e) { return json({ ok: false, error: 'proxy fail: ' + e.message }, 502); }
     }
     return json({ ok: false, error: 'no url' }, 404);
