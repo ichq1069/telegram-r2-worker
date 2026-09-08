@@ -63,7 +63,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   }
 
   String get _gridKey =>
-      '${_type}|$_level|$_appliedTag|${_oldestFirst ? 'asc' : 'desc'}';
+      '$_type|$_level|$_appliedTag|${_oldestFirst ? 'asc' : 'desc'}';
 
   @override
   Widget build(BuildContext context) {
