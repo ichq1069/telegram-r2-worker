@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../services/update_service.dart';
 
@@ -33,15 +34,18 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
   Future<void> _download() async {
     setState(() { _downloading = true; _progress = 0; _error = null; });
-    final path = await UpdateService.instance.downloadApk(
+    final res = await UpdateService.instance.downloadApk(
       widget.info.downloadUrl,
       onProgress: (p) { if (mounted) setState(() => _progress = p); },
     );
     if (!mounted) return;
-    if (path != null) {
-      setState(() { _apkPath = path; _downloading = false; });
+    if (res.path != null) {
+      setState(() { _apkPath = res.path; _downloading = false; });
     } else {
-      setState(() { _error = '下载失败，请检查网络后重试'; _downloading = false; });
+      final reason = res.error == null || res.error!.isEmpty
+          ? '请检查网络后重试'
+          : res.error!;
+      setState(() { _error = '下载失败：$reason'; _downloading = false; });
     }
   }
 
@@ -56,6 +60,15 @@ class _UpdateDialogState extends State<UpdateDialog> {
           SnackBar(content: Text('安装失败：$e')),
         );
       }
+    }
+  }
+
+  Future<void> _copyLink() async {
+    await Clipboard.setData(ClipboardData(text: widget.info.downloadUrl));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已复制下载链接，粘贴到浏览器下载后手动安装')),
+      );
     }
   }
 
@@ -116,7 +129,36 @@ class _UpdateDialogState extends State<UpdateDialog> {
                 ],
               ),
             ] else if (_error != null) ...[
-              Text(_error!, style: TextStyle(fontSize: 12, color: theme.colorScheme.error)),
+              Text(
+                _error!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: theme.colorScheme.error),
+              ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: _copyLink,
+                  icon: const Icon(Icons.link, size: 16),
+                  label: const Text('复制下载链接'),
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    foregroundColor: theme.colorScheme.primary,
+                    side: BorderSide(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'App 内下载失败时，可复制链接到浏览器下载 APK 后手动安装',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             ],
           ],
         ),

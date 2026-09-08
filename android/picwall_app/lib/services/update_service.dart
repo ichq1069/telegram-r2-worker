@@ -139,8 +139,10 @@ class UpdateService {
     }
   }
 
-  /// 下载 APK 到本地临时目录，返回文件路径。
-  Future<String?> downloadApk(
+  /// 下载 APK 到本地临时目录。
+  ///
+  /// 返回文件路径与错误描述（二选一非空），避免静默丢失失败原因。
+  Future<({String? path, String? error})> downloadApk(
     String url, {
     void Function(double progress)? onProgress,
   }) async {
@@ -158,10 +160,11 @@ class UpdateService {
         },
       );
 
-      return filePath;
+      return (path: filePath, error: null);
     } catch (e) {
       DebugService.instance.recordError('UpdateService.download', e);
-      return null;
+      final reason = e is DioException ? (e.message ?? e.type.name) : '$e';
+      return (path: null, error: reason);
     }
   }
 
