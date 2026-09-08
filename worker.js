@@ -30,7 +30,7 @@ import { handleMigrate } from './src/migrate.js';
 import { currentMode, setMode, resetIsolateState } from './src/dbaccess.js';
 import { mysqlFailoverGet, mysqlRows, mysqlGet, mysqlExec } from './src/mysql.js';
 import { handleParseLink, handleGetCobaltConfig, handleSaveCobaltConfig } from './src/parser.js';
-import { handleAppInstall, handleAppHeartbeat, handleAppStats, handleAppInstalls, handleAppUpdate } from './src/app_stats.js';
+import { handleAppInstall, handleAppHeartbeat, handleAppStats, handleAppInstalls, handleAppDeviceUsers, handleAppUpdate } from './src/app_stats.js';
 
 
 
@@ -158,6 +158,7 @@ export default {
     if (m === 'GET' && p === '/admin/api/stats') return isAdmin ? handleStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/app/stats') return isAdmin ? handleAppStats(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/app/installs') return isAdmin ? handleAppInstalls(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'GET' && p === '/admin/api/app/users') return isAdmin ? handleAppDeviceUsers(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/bot-info') return isAdmin ? handleBotGetMeApi(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/dedup') return isAdmin ? handleDedup(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'GET' && p === '/admin/api/dedup/stats') return isAdmin ? handleDedupStats(env) : json({ok:false,error:'Unauthorized'},401);

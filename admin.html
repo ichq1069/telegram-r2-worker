@@ -3052,6 +3052,7 @@ async function loadAppInstalls(page) {
     '<th style="text-align:center;padding:6px 8px;border-bottom:2px solid var(--border)">状态</th>' +
     '<th style="text-align:right;padding:6px 8px;border-bottom:2px solid var(--border)">心跳次数</th>' +
     '<th style="text-align:right;padding:6px 8px;border-bottom:2px solid var(--border)">最后活跃</th>' +
+    '<th style="text-align:center;padding:6px 8px;border-bottom:2px solid var(--border)">历史用户</th>' +
     '</tr></thead><tbody>';
   for (var i = 0; i < d.items.length; i++) {
     var it = d.items[i];
@@ -3067,6 +3068,7 @@ async function loadAppInstalls(page) {
       '<td style="padding:6px 8px;text-align:center"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (isActive ? '#10b981' : '#94a3b8') + '"></span> ' + (isActive ? '在线' : '离线') + '</td>' +
       '<td style="padding:6px 8px;text-align:right">' + (it.heartbeat_count || 0) + '</td>' +
       '<td style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-secondary)">' + lastHb + '</td>' +
+      '<td style="padding:6px 8px;text-align:center"><button class="btn btn-ghost" onclick="showAppDeviceUsers(' + JSON.stringify(String(it.device_id || '')) + ')">历史</button></td>' +
       '</tr>';
   }
   h += '</tbody></table>';
@@ -3081,6 +3083,44 @@ async function loadAppInstalls(page) {
     pg += ' <button ' + (page >= totalPages ? 'disabled' : '') + ' onclick="loadAppInstalls(' + (page + 1) + ')">下一页</button>';
   }
   document.getElementById("appInstallsPager").innerHTML = pg;
+}
+
+// 设备历史登录用户弹窗：展示该设备曾经登录过的账号（由 APP 心跳携带 username 上报积累）
+function showAppDeviceUsers(deviceId) {
+  if (!deviceId) { toast("缺少 device_id", 0); return; }
+  var did = deviceId.length > 16 ? deviceId.slice(0, 8) + '...' + deviceId.slice(-6) : deviceId;
+  document.getElementById("modalArea").innerHTML =
+    '<div class="modal-bg" id="modalBackdrop"><div class="modal" style="max-width:520px">' +
+    '<h3>设备历史登录用户</h3>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">设备 ' + escStr(did) + ' · 账号随 APP 心跳/安装上报积累</div>' +
+    '<div id="deviceUsersBody"><div class="sk" style="width:80%;height:14px;margin:2px 0"></div><div class="sk" style="width:60%;height:14px;margin:2px 0"></div></div>' +
+    '<div class="modal-actions"><button class="btn btn-ghost" id="deviceUsersClose">关闭</button></div>' +
+    '</div></div>';
+  document.getElementById("deviceUsersClose").onclick = function() { document.getElementById("modalArea").innerHTML = ""; };
+  api("GET", "/admin/api/app/users?device_id=" + encodeURIComponent(deviceId)).then(function(r) {
+    var bodyEl = document.getElementById("deviceUsersBody");
+    if (!r.ok) { bodyEl.innerHTML = '<div style="color:#dc2626;font-size:13px">' + (r.error || "加载失败") + '</div>'; return; }
+    var items = (r.data && r.data.items) || [];
+    if (!items.length) { bodyEl.innerHTML = '<div class="empty">暂无登录记录（更新 APP 后下次心跳开始积累）</div>'; return; }
+    var h = '<table style="width:100%;font-size:12px;border-collapse:collapse"><thead><tr>' +
+      '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border)">账号</th>' +
+      '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border)">首次</th>' +
+      '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid var(--border)">最近</th>' +
+      '<th style="text-align:right;padding:6px 8px;border-bottom:2px solid var(--border)">次数</th>' +
+      '</tr></thead><tbody>';
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      var fmt = function(v) { return v ? new Date(v).toLocaleString('zh-CN') : '-'; };
+      h += '<tr style="border-bottom:1px solid #f1f5f9">' +
+        '<td style="padding:6px 8px;font-weight:600">' + escStr(it.username || '-') + '</td>' +
+        '<td style="padding:6px 8px;font-size:11px;color:var(--text-secondary)">' + fmt(it.first_seen_at) + '</td>' +
+        '<td style="padding:6px 8px;font-size:11px;color:var(--text-secondary)">' + fmt(it.last_seen_at) + '</td>' +
+        '<td style="padding:6px 8px;text-align:right">' + (it.seen_count || 0) + '</td>' +
+        '</tr>';
+    }
+    h += '</tbody></table>';
+    bodyEl.innerHTML = h;
+  });
 }
 
 // ==================== MySQL / Hyperdrive 备库状态（实时 SELECT 1 连通 + 连接信息） ====================

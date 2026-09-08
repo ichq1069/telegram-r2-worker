@@ -28,18 +28,29 @@ async function upsertInstall(env, data) {
       existing.id, app_version || '', build_number || 0, platform || 'android',
       model || '', os_version || '', screen_width || 0, screen_height || 0, now
     ).run();
-    return { created: false };
+  } else {
+    await db.prepare(
+      `INSERT INTO app_installs
+         (device_id, app_version, build_number, platform, model, os_version,
+          screen_width, screen_height, installed_at, last_heartbeat_at, heartbeat_count, is_active)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 1, 1)`
+    ).bind(
+      device_id, app_version || '', build_number || 0, platform || 'android',
+      model || '', os_version || '', screen_width || 0, screen_height || 0, now
+    ).run();
   }
-  await db.prepare(
-    `INSERT INTO app_installs
-       (device_id, app_version, build_number, platform, model, os_version,
-        screen_width, screen_height, installed_at, last_heartbeat_at, heartbeat_count, is_active)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9, 1, 1)`
-  ).bind(
-    device_id, app_version || '', build_number || 0, platform || 'android',
-    model || '', os_version || '', screen_width || 0, screen_height || 0, now
-  ).run();
-  return { created: true };
+  // 记录设备-登录账号关联（历史登录用户弹窗数据源）
+  const uname = String(data.username || '').trim();
+  if (uname) {
+    try {
+      await db.prepare(
+        `INSERT INTO app_device_users (device_id, username, first_seen_at, last_seen_at, seen_count)
+         VALUES (?1, ?2, ?3, ?3, 1)
+         ON CONFLICT(device_id, username) DO UPDATE SET
+           last_seen_at=excluded.last_seen_at, seen_count=seen_count+1`
+      ).bind(device_id, uname, now).run();
+    } catch (e2) { console.error('app_device_users upsert:', e2.message); }
+  }
 }
 
 // ─── 安装上报 ───────────────────────────────────────────
@@ -155,6 +166,22 @@ export async function handleAppInstalls(request, env) {
     });
   } catch (e) {
     console.error('app installs error:', e.message);
+    return json({ ok: false, error: e.message }, 500);
+  }
+}
+
+// ─── 管理后台：设备历史登录用户 ─────────────────────────
+export async function handleAppDeviceUsers(request, env) {
+  try {
+    const db = dbOf(env);
+    const deviceId = String(new URL(request.url).searchParams.get('device_id') || '').trim();
+    if (!deviceId) return json({ ok: false, error: 'device_id required' }, 400);
+    const rows = await db.prepare(
+      "SELECT username, first_seen_at, last_seen_at, seen_count FROM app_device_users WHERE device_id = ?1 ORDER BY last_seen_at DESC LIMIT 100"
+    ).bind(deviceId).all();
+    return json({ ok: true, data: { items: rows?.results || [] } });
+  } catch (e) {
+    console.error('app device users error:', e.message);
     return json({ ok: false, error: e.message }, 500);
   }
 }
