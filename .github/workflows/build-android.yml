@@ -222,16 +222,6 @@ jobs:
         working-directory: android/picwall_app
         run: flutter test
 
-      - name: Restore fixed debug keystore (stable APK signature for updates)
-        if: steps.check.outputs.present == 'true' && env.KEYSTORE_B64 != ''
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
-        run: |
-          mkdir -p "$HOME/.android"
-          echo "$KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-          echo "Fixed debug keystore restored."
-
       - name: Auto-increment build number and version
         if: steps.check.outputs.present == 'true'
         working-directory: android/picwall_app
@@ -254,7 +244,7 @@ jobs:
           RUN_NUMBER: ${{ github.run_number }}
           INPUT_VERSION: ${{ github.event.inputs.version }}
 
-      - name: Build debug APK (M1; 发布签名将在 M4/T4.6 引入)
+      - name: Build debug APK (确定性重签在下一步进行)
         if: steps.check.outputs.present == 'true'
         id: build
         working-directory: android/picwall_app
@@ -262,6 +252,36 @@ jobs:
           flutter build apk --debug
           echo "apk_path=build/app/outputs/flutter-apk/app-debug.apk" >> "$GITHUB_OUTPUT"
           echo "apk_name=picwall-debug.apk" >> "$GITHUB_OUTPUT"
+
+      # gradle 每次构建都会用随机生成的 debug.keystore 签名（restore 到 $HOME 不生效，
+      # 已取证：+60 与 +61 产物 cert SHA-256 不同）。这里用固定 keystore 对产物做确定性
+      # 重签，保证 APK 更新线所有版本同一签名、可被应用内更新无缝覆盖安装。
+      - name: Re-sign APK with fixed keystore (stable in-app update signature)
+        if: steps.check.outputs.present == 'true' && env.KEYSTORE_B64 != ''
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        working-directory: android/picwall_app
+        run: |
+          set -e
+          APK=build/app/outputs/flutter-apk/app-debug.apk
+          BT=/tmp/android-build-tools
+          if [ ! -f "$BT/android-14/apksigner" ] && [ ! -f "$BT/android-14/lib/apksigner.jar" ]; then
+            mkdir -p "$BT"
+            curl -fsSL -o "$BT/bt.zip" https://dl.google.com/android/repository/build-tools_r34-linux.zip
+            unzip -oq "$BT/bt.zip" -d "$BT"
+          fi
+          ZA="$BT/android-14/zipalign"
+          ASJAR="$BT/android-14/lib/apksigner.jar"
+          KS="/tmp/fixed-debug.keystore"
+          echo "$KEYSTORE_B64" | base64 -d > "$KS"
+          chmod 600 "$KS"
+          "$ZA" -f 4 "$APK" /tmp/picwall-aligned.apk
+          java -jar "$ASJAR" sign \
+            --ks "$KS" --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out "$APK" /tmp/picwall-aligned.apk
+          java -jar "$ASJAR" verify --print-certs "$APK"
 
       - name: Upload APK artifact
         if: steps.check.outputs.present == 'true'
