@@ -63,6 +63,7 @@ jobs:
           s = open(p, encoding='utf-8').read()
 
           perms = (
+              '    <uses-permission android:name="android.permission.INTERNET"/>\n'
               '    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>\n'
               '    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>\n'
               '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n'
