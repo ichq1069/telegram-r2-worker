@@ -170,7 +170,6 @@ class _FeedGateState extends ConsumerState<FeedGate> with RouteAware {
   ModalRoute<dynamic>? _route;
   bool _routeVisible = true;
   bool _pendingApply = false;
-  bool _listeningTab = false;
 
   @override
   void didChangeDependencies() {
@@ -180,10 +179,6 @@ class _FeedGateState extends ConsumerState<FeedGate> with RouteAware {
       if (_route != null) appRouteObserver.unsubscribe(this);
       _route = route;
       if (_route != null) appRouteObserver.subscribe(this, _route!);
-    }
-    if (!_listeningTab && widget.tabIndex != null) {
-      _listeningTab = true;
-      ref.listen<int>(homeTabIndexProvider, (_, __) => _scheduleApply());
     }
     _scheduleApply();
   }
@@ -231,5 +226,13 @@ class _FeedGateState extends ConsumerState<FeedGate> with RouteAware {
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) {
+    final tab = widget.tabIndex;
+    if (tab != null) {
+      // ref.listen 仅允许在 build 内调用（didChangeDependencies 中首次执行时
+      // debugDoingBuild 已复位，Riverpod 会抛断言）；每次 build 重注册自动替换旧监听。
+      ref.listen<int>(homeTabIndexProvider, (_, __) => _scheduleApply());
+    }
+    return widget.child;
+  }
 }
