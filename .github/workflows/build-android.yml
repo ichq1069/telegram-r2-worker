@@ -164,36 +164,37 @@ jobs:
               last_import = max(i for i, l in enumerate(lines) if l.startswith('import '))
               lines = lines[:last_import + 1] + imports.rstrip().split('\n') + lines[last_import + 1:]
               src = '\n'.join(lines)
-              body = '''
-      override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
-          super.configureFlutterEngine(flutterEngine)
-          MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "picwall/install").setMethodCallHandler { call, result ->
-              if (call.method != "installApk") {
-                  result.notImplemented()
-                  return@setMethodCallHandler
-              }
-              val path = call.argument<String>("path")
-              if (path == null) {
-                  result.error("bad_argument", "missing apk path", null)
-                  return@setMethodCallHandler
-              }
-              try {
-                  val file = File(path)
-                  val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-                  val intent = Intent(Intent.ACTION_VIEW).apply {
-                      setDataAndType(uri, "application/vnd.android.package-archive")
-                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                  }
-                  startActivity(intent)
-                  result.success(true)
-              } catch (e: android.content.ActivityNotFoundException) {
-                  result.error("no_installer", "未找到可用的安装程序", null)
-              } catch (e: Exception) {
-                  result.error("install_failed", e.message ?: "安装失败", null)
-              }
-          }
-      }
-  '''
+              body = "\n".join([
+                  "    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {",
+                  "        super.configureFlutterEngine(flutterEngine)",
+                  "        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, \"picwall/install\")",
+                  "            .setMethodCallHandler { call, result ->",
+                  "                if (call.method != \"installApk\") {",
+                  "                    result.notImplemented()",
+                  "                    return@setMethodCallHandler",
+                  "                }",
+                  "                val path = call.argument<String>(\"path\")",
+                  "                if (path == null) {",
+                  "                    result.error(\"bad_argument\", \"missing apk path\", null)",
+                  "                    return@setMethodCallHandler",
+                  "                }",
+                  "                try {",
+                  "                    val file = File(path)",
+                  "                    val uri: Uri = FileProvider.getUriForFile(this, \"$packageName.fileprovider\", file)",
+                  "                    val intent = Intent(Intent.ACTION_VIEW).apply {",
+                  "                        setDataAndType(uri, \"application/vnd.android.package-archive\")",
+                  "                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)",
+                  "                    }",
+                  "                    startActivity(intent)",
+                  "                    result.success(true)",
+                  "                } catch (e: android.content.ActivityNotFoundException) {",
+                  "                    result.error(\"no_installer\", \"未找到可用的安装程序\", null)",
+                  "                } catch (e: Exception) {",
+                  "                    result.error(\"install_failed\", e.message ?: \"安装失败\", null)",
+                  "                }",
+                  "            }",
+                  "    }",
+              ])
               src = src.rstrip()
               if src.endswith('}'):
                   src = src[:-1].rstrip() + '\n' + body + '}\n'
