@@ -152,7 +152,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   void initState() {
     super.initState();
-    ref.read(homeTabIndexProvider.notifier).state = 0;
+    // 与 UI 初始 tab 同步（HomeShell 可能因解锁重建，provider 残留旧值）；
+    // 不能在 initState 同步改 provider（构建期写入会触发 Riverpod 断言），
+    // 放到首帧后执行。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(homeTabIndexProvider.notifier).state = 0;
+      }
+    });
   }
 
   @override
