@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+
+import '../../services/debug_service.dart';
 
 /// 原生内联视频播放器（基于 video_player / ExoPlayer）。
 ///
@@ -49,6 +52,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
   VideoPlayerController? _controller;
   bool _initialized = false;
   bool _failed = false;
+  String _errorDetail = '';
   bool _muted = true;
   bool _autoPlaying = false;
   bool _lastPlaying = false;
@@ -103,6 +107,14 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
   void _onValue() {
     final v = _controller?.value;
     if (v == null) return;
+    if (v.hasError && !_failed) {
+      _failed = true;
+      _errorDetail = v.errorDescription ?? '播放出错';
+      DebugService.instance.recordError(
+          'NativeVideoPlayer.play', v.errorDescription ?? 'VideoPlayer error');
+      if (mounted) setState(() {});
+      return;
+    }
     final playing = v.isPlaying;
     final buffering = v.isBuffering;
     if (playing != _lastPlaying || buffering != _lastBuffering) {
@@ -123,6 +135,7 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
     final token = _initToken;
     _initialized = false;
     _failed = false;
+    _errorDetail = '';
     _lastPlaying = false;
     _lastBuffering = false;
     if (mounted) setState(() {});
@@ -140,11 +153,28 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
         _autoPlaying = true;
         await c.play();
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted || token != _initToken || _controller != c) return;
       _failed = true;
+      _errorDetail = _describe(e);
+      DebugService.instance.recordError('NativeVideoPlayer.init', e);
       if (mounted) setState(() {});
     }
+  }
+
+  /// 把平台层异常收敛为可读文本（VideoError / PlatformException → 消息 + details）。
+  static String _describe(Object e) {
+    if (e is PlatformException) {
+      final base = e.message ?? '';
+      final det = e.details;
+      if (det is Map && det.isNotEmpty) {
+        final cause = det['cause'] ?? det['message'] ?? '';
+        if (cause.toString().isNotEmpty) return '$base: $cause'.trim();
+      }
+      if (det is String && det.isNotEmpty) return '$base: $det'.trim();
+      return base;
+    }
+    return e.toString();
   }
 
   void _togglePlay() {
@@ -222,6 +252,17 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
             '视频加载失败',
             style: TextStyle(color: Colors.white70, fontSize: 14),
           ),
+          if (_errorDetail.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                _errorDetail,
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white38, fontSize: 11),
+              ),
+            ),
           const SizedBox(height: 10),
           OutlinedButton.icon(
             onPressed: _create,
