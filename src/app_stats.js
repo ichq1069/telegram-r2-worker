@@ -110,14 +110,16 @@ export async function handleAppStats(env) {
 
     return json({
       ok: true,
-      total_installs: total?.c || 0,
-      active_now: active?.c || 0,
-      active_24h: activeDay?.c || 0,
-      today_new: todayNew?.c || 0,
-      versions: versions?.results || [],
-      devices: devices?.results || [],
-      os_versions: osList?.results || [],
-      week_trend: weekTrend?.results || []
+      data: {
+        total_installs: total?.c || 0,
+        active_now: active?.c || 0,
+        active_24h: activeDay?.c || 0,
+        today_new: todayNew?.c || 0,
+        versions: versions?.results || [],
+        devices: devices?.results || [],
+        os_versions: osList?.results || [],
+        week_trend: weekTrend?.results || []
+      }
     });
   } catch (e) {
     console.error('app stats error:', e.message);
@@ -144,9 +146,12 @@ export async function handleAppInstalls(request, env) {
     ).bind(fiveMinAgo).run();
     return json({
       ok: true,
-      total: total?.c || 0,
-      page, page_size: pageSize,
-      items: rows?.results || []
+      data: {
+        total: total?.c || 0,
+        page: page,
+        page_size: pageSize,
+        items: rows?.results || []
+      }
     });
   } catch (e) {
     console.error('app installs error:', e.message);
