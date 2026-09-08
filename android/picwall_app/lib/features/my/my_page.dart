@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -6,6 +7,7 @@ import '../../core/constants.dart';
 import '../../data/models/user.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
+import '../../services/stats_service.dart';
 import '../admin/admin_page.dart';
 import '../auth/login_page.dart';
 import '../auth/session_controller.dart';
@@ -26,6 +28,7 @@ class MyPage extends ConsumerStatefulWidget {
 class _MyPageState extends ConsumerState<MyPage> {
   QuotaInfo? _quota;
   String? _version;
+  String? _deviceId;
   int _versionTaps = 0;
 
   @override
@@ -33,6 +36,7 @@ class _MyPageState extends ConsumerState<MyPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadQuota());
     _loadVersion();
+    _loadDeviceId();
   }
 
   Future<void> _loadVersion() async {
@@ -52,6 +56,26 @@ class _MyPageState extends ConsumerState<MyPage> {
     if (_versionTaps >= 5) {
       _versionTaps = 0;
       _push(const AdminPage());
+    }
+  }
+
+  Future<void> _loadDeviceId() async {
+    try {
+      final id = await StatsService.instance.deviceIdOrCreate();
+      if (mounted) setState(() => _deviceId = id);
+    } catch (e, st) {
+      DebugService.instance.recordError('MyPage.loadDeviceId', e, st);
+    }
+  }
+
+  Future<void> _copyDeviceId() async {
+    final id = _deviceId;
+    if (id == null || id.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: id));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('设备 ID 已复制')),
+      );
     }
   }
 
@@ -143,13 +167,38 @@ class _MyPageState extends ConsumerState<MyPage> {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    'API：${ref.watch(settingsControllerProvider).settings.apiBase}',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontSize: 11,
-                    ),
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          '设备ID：${_deviceId ?? '…'}',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontSize: 11,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (_deviceId != null) ...[
+                        const SizedBox(width: 4),
+                        InkWell(
+                          onTap: _copyDeviceId,
+                          borderRadius: BorderRadius.circular(4),
+                          child: Padding(
+                            padding: const EdgeInsets.all(2),
+                            child: Icon(
+                              Icons.copy,
+                              size: 13,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant
+                                  .withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ),

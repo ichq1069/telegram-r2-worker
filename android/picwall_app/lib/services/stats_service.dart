@@ -22,6 +22,19 @@ class StatsService {
   Timer? _heartbeatTimer;
   String? _deviceId;
   String _apiBase = '';
+  String _username = '';
+
+  /// 当前登录用户名（由应用层在登录态变化时同步；用于服务端记录设备历史登录账号）。
+  void updateUser(String? username) {
+    _username = (username ?? '').trim();
+  }
+
+  /// 读取/生成本机 device_id（供 UI 展示，与上报后端使用同一标识）。
+  Future<String> deviceIdOrCreate() async {
+    if (_deviceId != null) return _deviceId!;
+    _deviceId = await _getOrCreateDeviceId();
+    return _deviceId!;
+  }
 
   /// 初始化统计服务：生成/读取 device_id，上报安装，启动心跳。
   Future<void> init({required String apiBase}) async {
@@ -75,6 +88,7 @@ class StatsService {
         'device_id': _deviceId,
         'app_version': info.version,
         'build_number': int.tryParse(info.buildNumber) ?? 0,
+        'username': _username,
       });
     } catch (e) {
       DebugService.instance.recordError('StatsService.heartbeat', e);
@@ -100,6 +114,7 @@ class StatsService {
         'os_version': deviceInfo['os_version'] ?? '',
         'screen_width': deviceInfo['screen_width'] ?? 0,
         'screen_height': deviceInfo['screen_height'] ?? 0,
+        'username': _username,
       });
     } catch (e) {
       DebugService.instance.recordError('StatsService.install', e);
