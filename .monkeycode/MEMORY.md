@@ -79,3 +79,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - 部署成功标志:push 后查 `api.github.com/repos/ichq1069/telegram-r2-worker/actions/runs`,最新 commit 的 `Deploy Worker` run conclusion=success,线上 `telegram-r2-bot.wo58.cn` 返回 401 即 worker 已生效
   - Debian 12 pip 是 PEP 668 externally-managed,装依赖必须加 `--break-system-packages`(telethon/httpx 已装,telethon 1.44.0)
   - systemd ExecStart 引用 EnvironmentFile 变量写成 `${VAR}`,写成 `\$VAR` 会按字面 `$VAR` 传入导致 "Request URL is missing an http:// or https:// protocol"
+
+[Project Knowledge Summary]
+- Date: 2026-09-09
+- Context: Discovered by Agent while performing 抖音视图与列表懒加载开发(纯逻辑验证只能走 CI)
+- Category: Environment Configuration
+- Instructions:
+  - 沙箱内没有 flutter/dart 工具链,Android 端 Dart 改动的 analyze/test/构建验证唯一路径是 push main 触发 `build-android.yml`(Build Android APK run);该 workflow 包含 `flutter analyze` + `flutter test` + Debug APK,analyze 的 info 级问题(如 unnecessary_import)也会使 job 失败
+  - 排障时按 GitHub Actions API 取失败日志:`GET /actions/runs/{id}/jobs` → job `id` → `GET /actions/jobs/{id}/logs`(需 `Accept: application/vnd.github+json` 与 Authorization Bearer),日志落 `/tmp/opencode/ci*.log` 再 grep
+  - 纯测试/纯文档提交也会各触发一次完整构建 run(约 10 分钟),改纯逻辑(行布局/去重)建议同时写 `flutter test` 可跑的纯 Dart 单测随提交验证

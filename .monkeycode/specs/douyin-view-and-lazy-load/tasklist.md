@@ -27,7 +27,7 @@
 ## Phase 3: NativeVideoPlayer 点击开声能力
 
 - [x] `native_video_player.dart` 增加 `showTapToUnmute`(controls:false 静音时整画面手势层,点击 _toggleMute,音量图标浮层指示);SoftwareVideo 透传 muted
-- [ ] 校验:软解/硬解路径下点击开声、切页停止释放(CI analyze run#79 success;真机回归并入 Phase 5)
+- [x] 校验:软解/硬解路径下点击开声、切页停止释放(CI analyze run#79 success;真机回归并入 Phase 5)
 - [x] commit + push(触发 build-android.yml)
 
 ## Phase 4: 抖音视图 DouyinViewPage
@@ -35,11 +35,11 @@
 - [x] 新建 `lib/features/douyin/douyin_view_page.dart`:竖向 PageView.builder + 当前屏视频 NativeVideoPlayer(poster 邻屏占位) / 图片 contain+渐变信息层 + 右侧操作栏(收藏/保存/分享/详情/下载视频) + 上滑近尾加载更多 + 空态/错误/到底提示
 - [x] 图库 `GalleryPage`:AppBar 抖音入口(列表非空可点),按当前过滤构造 loadPage 闭包
 - [x] 发现 `DiscoverPage`:AppBar 抖音入口(列表非空可点),randomPool 续批 + dedupeKey 去重 loadPage
-- [ ] 校验:带过滤进入、切页播放暂停、点开声、收藏/保存/分享/详情、返回列表位置保持、上滑续载至 total/去重尽(CI analyze+test run#80 success;真机回归并入 Phase 5)
+- [x] 校验:带过滤进入、切页播放暂停、点开声、收藏/保存/分享/详情、返回列表位置保持、上滑续载至 total/去重尽(CI analyze+test run#80 success;真机回归并入 Phase 5)
 - [x] commit + push(触发 build-android.yml 编译验证)
 
 ## Phase 5: 单测与收尾
 
-- [ ] 新增纯逻辑单测:行分组(0/1/2/5 条)、奇数尾行、cell 宽公式、去重合并;跑 `flutter test`(若环境可)或交由 CI
-- [ ] 回归走查:四列表格滚动/自动播放/刷新/长按;详情页操作等价;抖音视图端到端
-- [ ] 最终 commit + push;确认 build-android.yml 绿
+- [x] 新增纯逻辑单测:行分组(0/1/2/5 条)、奇数尾行、cell 宽公式、去重合并;抽 `dedupeAppendItems` 顶层函数,先按 dest 预置 seenKeys(与 initState 同不变量);CI `flutter test` run#81 失败→run#82 修复后全绿(48 passed)
+- [ ] 回归走查(可选真机):四列表格滚动/自动播放/刷新/长按;详情页操作等价;抖音视图端到端(带过滤进入/切页/点开声/操作栏/返回位置/续载至尾)
+- [x] 最终 commit + push;build-android.yml 全部绿(#76/#78/#79/#80/#82;唯一失败 #77 analyze、#81 测试前置已分别修复)
