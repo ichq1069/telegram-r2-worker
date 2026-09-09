@@ -6,6 +6,16 @@ import '../../data/models/media_item.dart';
 import '../video/feed_video_autoplay.dart';
 import '../video/native_video_player.dart';
 
+/// 媒体宽高比（宽/高，clamp 0.5~2.2，未知按 0.75）。
+///
+/// MasonryVirtualGrid 的行高预排与卡片 AspectRatio 撑高共用同一口径，
+/// 保证虚拟化行高与卡片实际高度一致、无裁剪无抖动。
+double mediaItemAspectRatio(MediaItem item) {
+  return (item.width != null && item.height != null && item.height! > 0)
+      ? (item.width! / item.height!).clamp(0.5, 2.2)
+      : 0.75;
+}
+
 /// 缩略图卡片：以宽高比撑开，避免 masonry 抖动。
 ///
 /// 当 [autoplay] 非空且条目为视频时，该格会以 [autoplayIndex] 注册到所在
@@ -122,11 +132,7 @@ class _MediaThumbState extends State<MediaThumb> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final ratio = (widget.item.width != null &&
-            widget.item.height != null &&
-            widget.item.height! > 0)
-        ? (widget.item.width! / widget.item.height!).clamp(0.5, 2.2)
-        : 0.75;
+    final ratio = mediaItemAspectRatio(widget.item);
     final playing = _wanted && _active;
 
     final Widget content;

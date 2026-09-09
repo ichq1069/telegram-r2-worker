@@ -6,6 +6,7 @@ import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
 import '../../services/providers.dart';
 import '../detail/detail_page.dart';
+import '../gallery/masonry_virtual_grid.dart';
 import '../gallery/media_thumb.dart';
 import '../video/feed_video_autoplay.dart';
 
@@ -29,6 +30,9 @@ class _MyFilesPageState extends ConsumerState<MyFilesPage> {
   bool _loadingMore = false;
   bool _hasError = false;
   String _errorText = '';
+
+  String get _base =>
+      ref.read(settingsControllerProvider).settings.apiBase;
 
   @override
   void initState() {
@@ -360,53 +364,35 @@ class _MyFilesPageState extends ConsumerState<MyFilesPage> {
     }
     return FeedGate(
       feed: _feed,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final cellW = (constraints.maxWidth - 30) / 2;
-          final base = ref.read(settingsControllerProvider).settings.apiBase;
-          return RefreshIndicator(
-            onRefresh: _load,
-            child: SingleChildScrollView(
-              controller: _scroll,
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(10),
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (var i = 0; i < _items.length; i++)
-                    SizedBox(
-                      width: cellW,
-                      child: GestureDetector(
-                        onLongPress: () => _onItemLongPress(_items[i]),
-                        child: MediaThumb(
-                          item: _items[i],
-                          onTap: () => _openDetail(i),
-                          autoplay: _feed,
-                          autoplayIndex: i,
-                          baseUrl: base,
-                        ),
-                      ),
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: MasonryVirtualGrid(
+          controller: _scroll,
+          itemCount: _items.length,
+          itemAspect: (i) => mediaItemAspectRatio(_items[i]),
+          footer: _loadingMore
+              ? const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(
+                    child: SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
-                  if (_loadingMore)
-                    const SizedBox(
-                      width: double.infinity,
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(
-                          child: SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+                  ),
+                )
+              : null,
+          buildCell: (context, i, cellW) => GestureDetector(
+            onLongPress: () => _onItemLongPress(_items[i]),
+            child: MediaThumb(
+              item: _items[i],
+              onTap: () => _openDetail(i),
+              autoplay: _feed,
+              autoplayIndex: i,
+              baseUrl: _base,
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }

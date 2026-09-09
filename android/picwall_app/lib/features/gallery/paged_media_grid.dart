@@ -9,9 +9,10 @@ import '../../services/providers.dart';
 import '../../ui/app_widgets.dart';
 import '../detail/detail_page.dart';
 import '../video/feed_video_autoplay.dart';
+import 'masonry_virtual_grid.dart';
 import 'media_thumb.dart';
 
-/// 通用双列瀑布流分页浏览容器（Wrap 自适应高度）。
+/// 通用双列瀑布流分页浏览容器（虚拟化构建，仅渲染视口附近行）。
 class PagedMediaGrid extends ConsumerStatefulWidget {
   const PagedMediaGrid({
     super.key,
@@ -160,41 +161,23 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
     return FeedGate(
       feed: _feed,
       tabIndex: widget.tabIndex,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final cellW = (constraints.maxWidth - 30) / 2;
-          final base = ref.read(settingsControllerProvider).settings.apiBase;
-          return SingleChildScrollView(
-            controller: _scroll,
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(10),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                for (var i = 0; i < _items.length; i++)
-                  SizedBox(
-                    width: cellW,
-                    child: MediaThumb(
-                      item: _items[i],
-                      onTap: () => _openDetail(i),
-                      autoplay: _feed,
-                      autoplayIndex: i,
-                      baseUrl: base,
-                    ),
-                  ),
-                if (_loadingMore)
-                  const SizedBox(
-                    width: double.infinity,
-                    child: Padding(
-                      padding: EdgeInsets.all(16),
-                      child: AppLoadingIndicator(size: 22, strokeWidth: 2),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
+      child: MasonryVirtualGrid(
+        controller: _scroll,
+        itemCount: _items.length,
+        itemAspect: (i) => mediaItemAspectRatio(_items[i]),
+        footer: _loadingMore
+            ? const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: AppLoadingIndicator(size: 22, strokeWidth: 2),
+              )
+            : null,
+        buildCell: (context, i, cellW) => MediaThumb(
+          item: _items[i],
+          onTap: () => _openDetail(i),
+          autoplay: _feed,
+          autoplayIndex: i,
+          baseUrl: ref.read(settingsControllerProvider).settings.apiBase,
+        ),
       ),
     );
   }

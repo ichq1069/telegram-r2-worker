@@ -6,6 +6,7 @@ import '../../services/api_client.dart';
 import '../../services/providers.dart';
 import '../../ui/app_widgets.dart';
 import '../detail/detail_page.dart';
+import '../gallery/masonry_virtual_grid.dart';
 import '../gallery/media_thumb.dart';
 import '../video/feed_video_autoplay.dart';
 
@@ -25,6 +26,9 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
   bool _loading = true;
   bool _hasError = false;
   String _errorText = '';
+
+  String get _base =>
+      ref.read(settingsControllerProvider).settings.apiBase;
 
   @override
   void initState() {
@@ -165,33 +169,17 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
     }
     return RefreshIndicator(
       onRefresh: _loadRandom,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final cellW = (constraints.maxWidth - 30) / 2;
-          final base = ref.read(settingsControllerProvider).settings.apiBase;
-          return SingleChildScrollView(
-            controller: _scroll,
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.all(10),
-            child: Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                for (var i = 0; i < _items.length; i++)
-                  SizedBox(
-                    width: cellW,
-                    child: MediaThumb(
-                      item: _items[i],
-                      onTap: () => _openDetail(i),
-                      autoplay: _feed,
-                      autoplayIndex: i,
-                      baseUrl: base,
-                    ),
-                  ),
-              ],
-            ),
-          );
-        },
+      child: MasonryVirtualGrid(
+        controller: _scroll,
+        itemCount: _items.length,
+        itemAspect: (i) => mediaItemAspectRatio(_items[i]),
+        buildCell: (context, i, cellW) => MediaThumb(
+          item: _items[i],
+          onTap: () => _openDetail(i),
+          autoplay: _feed,
+          autoplayIndex: i,
+          baseUrl: _base,
+        ),
       ),
     );
   }

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../data/local/local_db.dart';
 import '../../services/providers.dart';
 import '../detail/detail_page.dart';
+import '../gallery/masonry_virtual_grid.dart';
 import '../gallery/media_thumb.dart';
 import '../video/feed_video_autoplay.dart';
 
@@ -32,6 +33,9 @@ class _LocalGridPageState extends ConsumerState<LocalGridPage> {
   List<LocalEntry> _entries = const [];
   bool _loading = true;
   String? _error;
+
+  String get _base =>
+      ref.read(settingsControllerProvider).settings.apiBase;
 
   @override
   void initState() {
@@ -195,36 +199,20 @@ class _LocalGridPageState extends ConsumerState<LocalGridPage> {
       feed: _feed,
       child: RefreshIndicator(
         onRefresh: _load,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final cellW = (constraints.maxWidth - 30) / 2;
-            final base = ref.read(settingsControllerProvider).settings.apiBase;
-            return SingleChildScrollView(
-              controller: _scroll,
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.all(10),
-              child: Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (var i = 0; i < _entries.length; i++)
-                    SizedBox(
-                      width: cellW,
-                      child: GestureDetector(
-                        onLongPress: () => _removeWithConfirm(i),
-                        child: MediaThumb(
-                          item: _entries[i].item,
-                          onTap: () => _openDetail(i),
-                          autoplay: _feed,
-                          autoplayIndex: i,
-                          baseUrl: base,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            );
-          },
+        child: MasonryVirtualGrid(
+          controller: _scroll,
+          itemCount: _entries.length,
+          itemAspect: (i) => mediaItemAspectRatio(_entries[i].item),
+          buildCell: (context, i, cellW) => GestureDetector(
+            onLongPress: () => _removeWithConfirm(i),
+            child: MediaThumb(
+              item: _entries[i].item,
+              onTap: () => _openDetail(i),
+              autoplay: _feed,
+              autoplayIndex: i,
+              baseUrl: _base,
+            ),
+          ),
         ),
       ),
     );

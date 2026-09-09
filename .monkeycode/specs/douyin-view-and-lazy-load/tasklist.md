@@ -4,16 +4,16 @@
 
 - [x] 澄清需求范围(懒加载范围=四类列表虚拟化+图片视口懒加载;抖音入口=图库/发现顶栏;交互=静音自动播+点开声+右侧操作栏+contain 适配+上滑加载更多)
 - [x] 产出 requirements.md / design.md
-- [ ] commit + push 规格定稿(触发 git 提交,android/specs 均不触发 CI)
+- [x] commit + push 规格定稿(触发 git 提交,android/specs 均不触发 CI)
 
 ## Phase 1: 懒加载虚拟化容器与四列表接入
 
-- [ ] 新建 `lib/features/gallery/masonry_virtual_grid.dart`:双列分行虚拟化容器(SliverList+Row,奇数尾行占位,预估行高,footer 追加行,cacheExtent 可配)
-- [ ] 抽出纯函数(行分组/奇数补位/预估行高/去重),保证可单测
-- [ ] `paged_media_grid.dart`(图库):Wrap 替换为 MasonryVirtualGrid,分页状态与触底加载保留
-- [ ] `discover_page.dart`:Wrap 替换为 MasonryVirtualGrid
-- [ ] `my_files_page.dart`:Wrap 替换为 MasonryVirtualGrid(长按删除/打标保留)
-- [ ] `local_grid_page.dart`:Wrap 替换为 MasonryVirtualGrid(移除/清空保留)
+- [x] 新建 `lib/features/gallery/masonry_virtual_grid.dart`:双列分行虚拟化容器(SliverList+Row,奇数尾行占位,预估行高,footer 追加行,cacheExtent 可配)
+- [x] 抽出纯函数(行分组/奇数补位/预估行高/去重),保证可单测
+- [x] `paged_media_grid.dart`(图库):Wrap 替换为 MasonryVirtualGrid,分页状态与触底加载保留
+- [x] `discover_page.dart`:Wrap 替换为 MasonryVirtualGrid
+- [x] `my_files_page.dart`:Wrap 替换为 MasonryVirtualGrid(长按删除/打标保留)
+- [x] `local_grid_page.dart`:Wrap 替换为 MasonryVirtualGrid(移除/清空保留)
 - [ ] 校验:滚动触底加载、下拉刷新、空态/错误态、视频槽位自动播放、奇数条尾行视觉
 - [ ] commit + push(触发 build-android.yml 编译验证 Dart)
 
