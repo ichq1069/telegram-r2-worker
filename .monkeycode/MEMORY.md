@@ -59,6 +59,16 @@ Entries discovered by the Agent during task execution should follow this format:
   - 共享库更名只改 UI 文案,表名 `random_pool` 与路由 `/admin/api/pool` 保持不变,避免破坏外部调用
 
 [Project Knowledge Summary]
+- Date: 2026-09-08
+- Context: Discovered by Agent while performing 应用内更新签名不一致取证与修复
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - PicWall APK 更新线签名事实:CI runner 每轮 gradle 生成随机 debug keystore(已取证 cert SHA-256:+57=4821c8、+60=80aecc、+61=b06b43 各不相同),曾把固定 keystore 恢复到 `$HOME/.android/debug.keystore` 无效;2026-09-08 起 build-android.yml 在 Build 后用 secret `ANDROID_DEBUG_KEYSTORE_B64` 的固定 keystore + apksigner 对产物做 v1/v2/v3 确定性重签(首个固定签名为 +62=5bd947),此后所有版本同签
+  - 用户设备上 v0.1.0+57 及其之前安装的旧包为随机签名,与固定签名(+62 起)不兼容,必须卸载一次后安装 v0.1.0+62+;之后应用内更新可无缝覆盖
+  - APK 签名取证方法:产物可能为纯 v2/v3(无 META-INF/*.RSA),keytool 读不了;用 `apksigner.jar verify --print-certs <apk>`(build-tools zip 内含 lib/apksigner.jar)看 cert SHA-256
+  - 私有仓库 Actions 下载 artifact:取 token 后 `GET /actions/artifacts?per_page=5` 找 name 匹配的 `id`,再 `GET /actions/artifacts/{id}/zip`(Accept: application/vnd.github+json)
+
+[Project Knowledge Summary]
 - Date: 2026-09-01
 - Context: Discovered by Agent while performing github 推送与 Actions 部署排查
 - Category: Troubleshooting & Debugging

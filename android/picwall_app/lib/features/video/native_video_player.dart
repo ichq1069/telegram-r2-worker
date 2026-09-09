@@ -175,6 +175,14 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
     }
   }
 
+  /// 记录错误原文；解码不支持时把展示文案换成可读建议，原文记录进调试日志。
+  void _setError(String raw) {
+    _decoderUnsupported = _isDecoderError(raw);
+    _errorDetail = _decoderUnsupported
+        ? '该视频的编码格式当前设备不支持解码。可复制链接到浏览器观看，或用支持该编码的本地播放器打开。'
+        : raw;
+  }
+
   /// 在下一帧切换软解：避免在 video_player 的监听/异常回调内直接
   /// dispose 控制器（通知期间销毁同一通知源会触发断言）。
   void _scheduleSoftFallback() {
@@ -186,6 +194,12 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
   /// 解码不支持且开启回退时：释放 ExoPlayer，改由软件解码（ffmpeg）接管。
   void _maybeSoftFallback() {
     if (!widget.softwareFallback || _useSoft || !_decoderUnsupported) return;
+    _switchToSoft();
+  }
+
+  /// 强制切到软解播放器（手动兜底按钮与自动回退共用）。
+  void _switchToSoft() {
+    if (_useSoft) return;
     _useSoft = true;
     _initToken++;
     final old = _controller;
@@ -194,6 +208,8 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
       old.removeListener(_onValue);
       old.dispose();
     }
+    // 关键：置 _useSoft 后必须重建，否则 build 仍停留在硬解错误界面。
+    if (mounted) setState(() {});
   }
 
   /// 判断是否为解码器/编码不支持的播放失败（ExoPlayer 报 MediaCodec 渲染错误）。
@@ -205,14 +221,6 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
         low.contains('unsupported format') ||
         low.contains('cannot decode') ||
         low.contains('format not supported');
-  }
-
-  /// 记录错误原文；解码不支持时把展示文案换成可读建议，原文记录进调试日志。
-  void _setError(String raw) {
-    _decoderUnsupported = _isDecoderError(raw);
-    _errorDetail = _decoderUnsupported
-        ? '该视频的编码格式当前设备不支持解码。可复制链接到浏览器观看，或用支持该编码的本地播放器打开。'
-        : raw;
   }
 
   /// 把平台层异常收敛为可读文本（VideoError / PlatformException → 消息 + details）。
@@ -343,6 +351,15 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
                 ),
                 icon: const Icon(Icons.refresh, size: 16),
                 label: const Text('重试'),
+              ),
+              OutlinedButton.icon(
+                onPressed: _switchToSoft,
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: const BorderSide(color: Colors.white38),
+                ),
+                icon: const Icon(Icons.play_circle_outline, size: 16),
+                label: const Text('改用软解播放'),
               ),
               if (_decoderUnsupported)
                 OutlinedButton.icon(

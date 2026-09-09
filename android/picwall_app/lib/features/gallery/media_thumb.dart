@@ -203,6 +203,7 @@ class _MediaThumbState extends State<MediaThumb> {
       muted: true,
       controls: false,
       fit: BoxFit.cover,
+      softwareFallback: true,
     );
   }
 
