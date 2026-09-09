@@ -3099,7 +3099,7 @@ async function loadAppInstalls(page) {
       '<td style="padding:6px 8px;text-align:center"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (isActive ? '#10b981' : '#94a3b8') + '"></span> ' + (isActive ? '在线' : '离线') + '</td>' +
       '<td style="padding:6px 8px;text-align:right">' + (it.heartbeat_count || 0) + '</td>' +
       '<td style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-secondary)">' + lastHb + '</td>' +
-      '<td style="padding:6px 8px;text-align:center"><button class="btn btn-ghost" onclick="showAppDeviceUsers(' + JSON.stringify(String(it.device_id || '')) + ')">历史</button></td>' +
+      '<td style="padding:6px 8px;text-align:center"><button class="btn btn-ghost" data-did="' + escStr(String(it.device_id || '')) + '" onclick="showAppDeviceUsers(this.dataset.did)">历史</button></td>' +
       '</tr>';
   }
   h += '</tbody></table>';
