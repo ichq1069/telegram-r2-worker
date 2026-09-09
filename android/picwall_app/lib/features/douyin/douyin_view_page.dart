@@ -127,6 +127,7 @@ class _DouyinViewPageState extends ConsumerState<DouyinViewPage>
         children: [
           PageView.builder(
             controller: _pageController,
+            scrollDirection: Axis.vertical,
             itemCount: totalPages,
             onPageChanged: _onPageChanged,
             itemBuilder: (context, i) {

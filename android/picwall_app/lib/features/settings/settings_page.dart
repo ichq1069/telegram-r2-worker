@@ -1,7 +1,10 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
@@ -24,11 +27,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   String? _version;
   bool _clearingCache = false;
   bool _checkingUpdate = false;
+  int _cacheBytes = 0;
 
   @override
   void initState() {
     super.initState();
     _loadVersion();
+    _refreshCacheInfo();
     // 启动时自动检查更新
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (UpdateService.instance.autoCheck) {
@@ -46,6 +51,33 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } catch (_) {
       // 版本读取失败不影响页面
     }
+  }
+
+  /// 统计当前图片缓存占用：磁盘缓存(flutter_cache_manager) + 解码内存缓存。
+  Future<void> _refreshCacheInfo() async {
+    var disk = 0;
+    try {
+      final base = (await getTemporaryDirectory()).path;
+      // DefaultCacheManager 的文件目录 = <temp>/<cacheKey=libCachedImageData>。
+      final dir =
+          Directory('$base${Platform.pathSeparator}libCachedImageData');
+      if (await dir.exists()) {
+        await for (final e in dir.list(recursive: true, followLinks: false)) {
+          if (e is File) {
+            try {
+              disk += await e.length();
+            } catch (_) {
+              // 单个文件读取失败忽略，其余照常统计
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // 目录读取失败时按 0 统计，不影响页面
+    }
+    final memory = PaintingBinding.instance.imageCache.currentSizeBytes;
+    if (!mounted) return;
+    setState(() => _cacheBytes = disk + memory);
   }
 
   Future<void> _openServerDialog() async {
@@ -124,6 +156,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       await DefaultCacheManager().emptyCache();
       PaintingBinding.instance.imageCache.clear();
       PaintingBinding.instance.imageCache.clearLiveImages();
+      await _refreshCacheInfo();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('图片缓存已清理')),
@@ -201,7 +234,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _row(
             Icons.cleaning_services_outlined,
             '清理图片缓存',
-            _clearingCache ? '清理中…' : null,
+            _clearingCache ? '清理中…' : '当前缓存 ${_fmtBytes(_cacheBytes)}',
             _clearingCache ? null : _clearCache,
           ),
           const Divider(height: 1, indent: 16),
@@ -261,6 +294,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ],
       ),
     );
+  }
+
+  static String _fmtBytes(int bytes) {
+    if (bytes >= 1048576) {
+      return '${(bytes / 1048576).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) {
+      return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    }
+    return '$bytes B';
   }
 
   Widget _buildThemeRow(AppSettings s) {
