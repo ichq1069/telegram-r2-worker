@@ -92,10 +92,7 @@ class _DouyinViewPageState extends ConsumerState<DouyinViewPage>
       final next = _page + 1;
       final res = await widget.loadPage(repo, next);
       if (!mounted) return;
-      final fresh = <MediaItem>[];
-      for (final it in res.items) {
-        if (_seenKeys.add(it.dedupeKey)) fresh.add(it);
-      }
+      final fresh = dedupeAppendItems(_items, _seenKeys, res.items);
       if (fresh.isEmpty) {
         setState(() {
           _endReached = true;
@@ -105,7 +102,6 @@ class _DouyinViewPageState extends ConsumerState<DouyinViewPage>
       }
       setState(() {
         _page = next;
-        _items.addAll(fresh);
         _loadingMore = false;
         if (res.total > 0 && _items.length >= res.total) {
           _endReached = true;
@@ -443,4 +439,21 @@ class _PhotoView extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 追加去重合并：把 [batch] 中 dedupeKey 未在 [seenKeys] 出现过的条目并入
+/// [dest]，返回本次实际新增列表（随机续批可能与已有/批次间重复时使用）。
+List<MediaItem> dedupeAppendItems(
+  List<MediaItem> dest,
+  Set<String> seenKeys,
+  Iterable<MediaItem> batch,
+) {
+  final fresh = <MediaItem>[];
+  for (final it in batch) {
+    if (seenKeys.add(it.dedupeKey)) {
+      dest.add(it);
+      fresh.add(it);
+    }
+  }
+  return fresh;
 }

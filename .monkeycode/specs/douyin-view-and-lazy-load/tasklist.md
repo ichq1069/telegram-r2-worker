@@ -35,8 +35,8 @@
 - [x] 新建 `lib/features/douyin/douyin_view_page.dart`:竖向 PageView.builder + 当前屏视频 NativeVideoPlayer(poster 邻屏占位) / 图片 contain+渐变信息层 + 右侧操作栏(收藏/保存/分享/详情/下载视频) + 上滑近尾加载更多 + 空态/错误/到底提示
 - [x] 图库 `GalleryPage`:AppBar 抖音入口(列表非空可点),按当前过滤构造 loadPage 闭包
 - [x] 发现 `DiscoverPage`:AppBar 抖音入口(列表非空可点),randomPool 续批 + dedupeKey 去重 loadPage
-- [ ] 校验:带过滤进入、切页播放暂停、点开声、收藏/保存/分享/详情、返回列表位置保持、上滑续载至 total/去重尽(真机回归并入 Phase 5)
-- [ ] commit + push(触发 build-android.yml 编译验证)
+- [ ] 校验:带过滤进入、切页播放暂停、点开声、收藏/保存/分享/详情、返回列表位置保持、上滑续载至 total/去重尽(CI analyze+test run#80 success;真机回归并入 Phase 5)
+- [x] commit + push(触发 build-android.yml 编译验证)
 
 ## Phase 5: 单测与收尾
 
