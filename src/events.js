@@ -2,7 +2,7 @@
 // fireWebhook 事件派发、Webhook 配置管理、Random pool 管理、按条件查询/搜索/流/删除/回收站/R2 检查/机器人管理/配置管理。
 import { json, invalidateStatsCache } from "./util.js";
 import { sanitizeLevel, clampInt, splitTags, cnDayIso, cnNowISO } from "./core.js";
-import { bumpR2Usage } from "./telegram.js";
+import { bumpR2Usage, mimeForStorageKey } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
 import { dualInsertRandomPool, dualUpdateRandomPool, dualUpdateFiles, dualInsertUserUploads, dualUpdateUserUploads } from "./mysql.js";
 // ==================== 事件 Webhook 通知 ====================
@@ -607,6 +607,61 @@ export async function handleR2Cleanup(env) {
       cursor = list.cursor;
     }
     return json({ ok: true, data: { deleted: deleted } });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 历史数据修正：早期用 Telegram 下载响应头（application/octet-stream）写入 R2，
+// 导致 mp4 直链在浏览器触发下载而非内嵌播放。R2 无法原地改 metadata，
+// 只能重新写入对象（body 原样、httpMetadata 用按 key 推断的正确 MIME）。
+// 用法：POST /admin/api/r2/fix-mime?limit=50&before_id=xxx
+//   limit      本次处理对象数上限（默认 50，防止单请求超预算）
+//   before_id  断点续传（只处理 files.id < before_id 的行）
+// 返回 remaining：剩余待修数量，>0 时用返回的 last_id 再调一轮。
+export async function handleR2FixMime(request, env) {
+  try {
+    if (!env.R2_BUCKET) return json({ ok: false, error: 'no r2' }, 500);
+    const u = new URL(request.url);
+    const limit = clampInt(u.searchParams.get('limit') || '50', 50, 1, 200);
+    const beforeId = clampInt(u.searchParams.get('before_id') || '0', 0, 0);
+    // 只处理存在真实 R2 直链的视频/音频/图片记录（storage_key 非空）
+    const cond = "storage_key IS NOT NULL AND storage_key != '' AND r2_url != '' AND r2_url NOT LIKE '/file/tg/%' AND deleted_at IS NULL" + (beforeId ? ' AND id < ?' : '');
+    const params = beforeId ? [beforeId, limit] : [limit];
+    const rows = await env.D1_DB.prepare(
+      'SELECT id, storage_key, r2_url, mime_type FROM files WHERE ' + cond + ' ORDER BY id DESC LIMIT ?'
+    ).bind(...params).all();
+    const list = rows.results || [];
+    let fixed = 0, skipped = 0, failed = 0;
+    const seen = new Set();
+    // 批次按 id 倒序取 limit 条；续传游标取本批最小 id，确保每轮只处理未扫过的行
+    const lastId = list.length ? list[list.length - 1].id : 0;
+    for (const r of list) {
+      if (!r.storage_key || seen.has(r.storage_key)) { continue; }
+      seen.add(r.storage_key);
+      const want = mimeForStorageKey(r.storage_key, 'application/octet-stream');
+      if (!want || want === 'application/octet-stream') { skipped++; continue; }
+      try {
+        const head = await env.R2_BUCKET.head(r.storage_key);
+        if (!head) { skipped++; continue; }
+        const cur = String(head.httpMetadata && head.httpMetadata.contentType || '').split(';')[0].trim().toLowerCase();
+        if (cur === want.split(';')[0].trim().toLowerCase()) { skipped++; continue; }
+        const obj = await env.R2_BUCKET.get(r.storage_key);
+        if (!obj) { skipped++; continue; }
+        await env.R2_BUCKET.put(r.storage_key, obj.body, { httpMetadata: { contentType: want, cacheControl: 'public, max-age=31536000' } });
+        bumpR2Usage(env, 'r2_class_a');
+        // 同步 D1 mime_type，保证 /file/tg/ 代理头与列表展示一致
+        await env.D1_DB.prepare("UPDATE files SET mime_type=? WHERE storage_key=?").bind(want, r.storage_key).run().catch(function(){});
+        fixed++;
+      } catch (e) { failed++; console.log('r2 fix-mime fail:', r.storage_key, e.message); }
+    }
+    // 统计剩余待修对象数（与本次扫描同源，用于指示是否已全部处理完）
+    let remaining = 0;
+    try {
+      const c = await env.D1_DB.prepare(
+        'SELECT COUNT(DISTINCT storage_key) as c FROM files WHERE ' + cond
+      ).bind(...(beforeId ? [beforeId] : [])).first();
+      remaining = (c && c.c) || 0;
+    } catch (e) {}
+    return json({ ok: true, data: { scanned: list.length, fixed: fixed, skipped: skipped, failed: failed, last_id: lastId, remaining: remaining, done: remaining === 0 } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

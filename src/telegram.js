@@ -5,6 +5,27 @@ import { cnTodayStr, cnNowISO } from './core.js';
 
 export var OFFICIAL_API = 'https://api.telegram.org'; // official cloud Bot API
 
+// 扩展名 → 建议 MIME（Telegram 下载响应头常为 application/octet-stream，
+// 用它直接写 R2 会导致浏览器把 mp4 当下载、播放器探测歧义；按存储 key 后缀纠正。）
+const MIME_BY_EXT = {
+  mp4: 'video/mp4', m4v: 'video/x-m4v', mov: 'video/quicktime', mkv: 'video/x-matroska',
+  webm: 'video/webm', avi: 'video/x-msvideo', mpg: 'video/mpeg', mpeg: 'video/mpeg',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac', opus: 'audio/ogg',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', heic: 'image/heic', avif: 'image/avif',
+  pdf: 'application/pdf', zip: 'application/zip', txt: 'text/plain', json: 'application/json', html: 'text/html', css: 'text/css', js: 'text/javascript'
+};
+
+// 仅当上游未给出可用 MIME（octet-stream / 空）时，按 key 扩展名推断。
+// 已明确的类型（image/jpeg、video/mp4 等）原样保留。
+export function mimeForStorageKey(key, ct) {
+  const cur = String(ct || '').split(';')[0].trim().toLowerCase();
+  if (cur && cur !== 'application/octet-stream' && cur !== 'binary/octet-stream') return ct;
+  const m = /\.([a-zA-Z0-9]{1,10})$/.exec(String(key || ''));
+  if (!m) return ct;
+  const want = MIME_BY_EXT[m[1].toLowerCase()];
+  return want || ct;
+}
+
 // /file/tg/<id> 访问签名：token = HMAC-SHA256(secret, 'tgfile:<id>') 前 16 hex。
 // 防止通过递增 id 拼接 URL 遍历枚举所有图片；secret 取 API_KEY/TG_SECRET（未配置时用内置兜底）。
 let _tokKeyCache = null;
@@ -192,7 +213,8 @@ export function bumpWorkerStat(env) {
 
 export async function putR2(key, buf, ct, env, storageClass) {
   try {
-    const opts = { httpMetadata: { contentType: ct, cacheControl: 'public, max-age=31536000' } };
+    const mime = mimeForStorageKey(key, ct);
+    const opts = { httpMetadata: { contentType: mime, cacheControl: 'public, max-age=31536000' } };
     // storageClass 暂不使用：Infrequent Access 需 R2 账号启用，未启用时 put 报 10001。
     // 先全部走 Standard 保证功能，需要省成本时再按账号能力启用。
     // if (storageClass) opts.storageClass = storageClass;
@@ -204,7 +226,8 @@ export async function putR2(key, buf, ct, env, storageClass) {
 
 export async function putR2Stream(key, stream, ct, env, storageClass) {
   try {
-    const opts = { httpMetadata: { contentType: ct, cacheControl: 'public, max-age=31536000' } };
+    const mime = mimeForStorageKey(key, ct);
+    const opts = { httpMetadata: { contentType: mime, cacheControl: 'public, max-age=31536000' } };
     // 同上：storageClass 暂不使用（避免未启用 Infrequent Access 时 10001）
     // if (storageClass) opts.storageClass = storageClass;
     await env.R2_BUCKET.put(key, stream, opts);

@@ -2,7 +2,7 @@
 // /file/tg/<id> 302 重定向/代理、文件列表/详情/统计、代理模式与代理直链开关。
 import { json, fmtSize, genHash, cacheGet, cacheSet } from "./util.js";
 import { clampInt, cnDayIso, cnTodayStr, cnNowISO, guessExt, fileExtOf } from "./core.js";
-import { fileTok, putR2 } from "./telegram.js";
+import { fileTok, putR2, mimeForStorageKey } from "./telegram.js";
 import { appendTagFilter } from "./public.js";
 import { dualUpdateFiles } from "./mysql.js";
 
@@ -72,8 +72,9 @@ export async function handleTgFileRedirect(request, env, ctx) {
         }
         env.D1_DB.prepare('UPDATE files SET view_count = view_count + 1 WHERE id=?').bind(id).run().catch(function(){});
         // 中继上游状态（206 保留）与关键头，确保分片/长度/范围信息完整交给播放器
+        const outCt = mimeForStorageKey(f.file_name || '', f.mime_type || origin.headers.get('content-type') || 'application/octet-stream');
         const outHeaders = {
-          'Content-Type': f.mime_type || origin.headers.get('content-type') || 'application/octet-stream',
+          'Content-Type': outCt,
           'Cache-Control': 'public, max-age=300',
           'Access-Control-Allow-Origin': '*',
           'Accept-Ranges': 'bytes'
@@ -103,11 +104,12 @@ export async function lazyTransferToR2(env, id, f, dlUrl) {
     const now = new Date();
     const dp = now.getFullYear() + '/' + String(now.getMonth() + 1).padStart(2, '0');
     const key = dp + '/' + genHash() + '.' + guessExt(ct, f.file_name || '');
-    const url = await putR2(key, buf, ct, env);
+    const mime = mimeForStorageKey(key, ct);
+    const url = await putR2(key, buf, mime, env);
     if (!url) return;
-    await env.D1_DB.prepare("UPDATE files SET storage_key=?, r2_url=?, processing_state='completed' WHERE id=?").bind(key, url, id).run();
+    await env.D1_DB.prepare("UPDATE files SET storage_key=?, r2_url=?, mime_type=?, processing_state='completed' WHERE id=?").bind(key, url, mime, id).run();
     // 双写 MySQL
-    dualUpdateFiles(env, id, { storage_key: key, r2_url: url, processing_state: 'completed' }).catch(e => console.error('dualUpdateFiles error:', e.message));
+    dualUpdateFiles(env, id, { storage_key: key, r2_url: url, mime_type: mime, processing_state: 'completed' }).catch(e => console.error('dualUpdateFiles error:', e.message));
   } catch (e) { console.error('lazyTransferToR2:', e.message); }
 }
 

@@ -619,6 +619,7 @@ textarea.inp { min-height: 70px; resize: vertical; font-family: inherit; }
           <div style="display:flex;gap:8px">
             <button class="btn btn-primary btn-sm" data-action="r2-inspect">扫描孤儿</button>
             <button class="btn btn-danger btn-sm" data-action="r2-cleanup">清理孤儿</button>
+            <button class="btn btn-ghost btn-sm" data-action="r2-fix-mime" title="历史入库沿用 Telegram 响应头，mp4 存成了 octet-stream 导致浏览器直接下载；用此按钮把视频/音频/图片对象修正为正确 MIME">修正视频 MIME</button>
           </div>
         </div>
         <div id="r2Orphan" style="font-size:13px;color:var(--text-secondary)">扫描后会列出未被任何文件引用的 R2 对象。清理不可恢复，请先扫描确认。</div>
@@ -2269,6 +2270,11 @@ function init() {
     if (t.closest("[data-action='unsaved-refresh']")) { loadUnsaved(unsavedPage); return; }
     // R2 孤儿对象
     if (t.closest("[data-action='r2-inspect']")) { inspectR2(); return; }
+    var r2FixMime = t.closest("[data-action='r2-fix-mime']");
+    if (r2FixMime) {
+      if (confirm("将遍历历史文件，把 R2 中因 Telegram 响应头存错的 octet-stream 对象改写为正确 MIME（视频/音频/图片）。可能需要多轮，确认开始？")) fixR2Mime();
+      return;
+    }
     var r2Clean = t.closest("[data-action='r2-cleanup']");
     if (r2Clean) {
       if (confirm("确定清理所有 R2 孤儿对象？不可恢复，请先扫描确认。")) cleanupR2();
@@ -2894,6 +2900,29 @@ async function cleanupR2() {
   if (!r.ok) { el.innerHTML = '<div class="empty">' + escStr(r.error || "清理失败") + '</div>'; return; }
   el.innerHTML = '已清理 <b>' + r.data.deleted + '</b> 个孤儿对象。';
   toast("孤儿清理完成", 1);
+}
+
+// ===== R2 历史对象 MIME 修正（octet-stream → video/mp4 等） =====
+async function fixR2Mime() {
+  var el = document.getElementById("r2Orphan");
+  var beforeId = 0, totalFixed = 0, rounds = 0;
+  el.innerHTML = "正在修正历史对象 MIME，请稍候...（每轮最多 50 个，自动续跑）";
+  try {
+    for (;;) {
+      var q = "/admin/api/r2/fix-mime?limit=50" + (beforeId ? "&before_id=" + beforeId : "");
+      var r = await api("POST", q);
+      if (!r.ok) { el.innerHTML = '<div class="empty">' + escStr(r.error || "修正失败") + '</div>'; return; }
+      var d = r.data || {};
+      totalFixed += d.fixed || 0;
+      beforeId = d.last_id || 0;
+      rounds++;
+      el.innerHTML = "第 <b>" + rounds + '</b> 轮：本次修正 <b>' + (d.fixed || 0) + '</b> 个，累计 <b>' + totalFixed + '</b> 个' + (d.done ? "，全部完成。" : "，剩余待扫描 <b>" + (d.remaining || 0) + "</b>，继续...");
+      if (d.done || !d.remaining) break;
+    }
+    toast("MIME 修正完成，共 " + totalFixed + " 个", 1);
+  } catch (e) {
+    el.innerHTML = '<div class="empty">修正出错：' + escStr(e.message || String(e)) + '</div>';
+  }
 }
 
 function startProgressAutoRefresh() {

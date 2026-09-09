@@ -4,7 +4,7 @@ import { json, fmtSize, genHash, log, invalidateStatsCache } from "./util.js";
 import { ensureTablesOnce } from "./db.js";
 import { notifyAdmin, genThumb } from "./notify.js";
 import { cnTodayStr, cnNowISO, guessExt, fileExtOf, extractTags } from "./core.js";
-import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, getMainMenuCfg, replyTextWithKeyboard, sendQuickReplyKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS } from "./telegram.js";
+import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, getMainMenuCfg, replyTextWithKeyboard, sendQuickReplyKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS, mimeForStorageKey } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
 import { recordKnownChat, recordUserInteraction } from "./public.js";
 import { getBotUsername, getProxyMode } from "./api.js";
@@ -974,7 +974,7 @@ export async function processFileAsync(dbId, fi, chatId, msgId, chat, from, date
         try {
           await env.D1_DB.prepare(
             'UPDATE files SET storage_key=?, r2_url=?, md5_hash=?, mime_type=?, processing_state=?, file_name=?, tg_file_url=?, thumb_url=?, progress_bytes=?, total_bytes=?, quick_hash=? WHERE id=?'
-          ).bind(key, url, md5, ct, 'completed', fi.fileName, tgUrl, thumbUrl, fi.fileSize || 0, fi.fileSize || 0, quickHash, dbId).run();
+          ).bind(key, url, md5, mimeForStorageKey(key, ct), 'completed', fi.fileName, tgUrl, thumbUrl, fi.fileSize || 0, fi.fileSize || 0, quickHash, dbId).run();
           break;
         } catch (e) {
           log.error('D1 update attempt ' + (attempt + 1) + ':', e.message);
