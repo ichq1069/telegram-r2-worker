@@ -75,7 +75,8 @@ void main() {
 
     test('同批与跨批按 dedupeKey 去重，只追加新条目', () {
       final dest = [media('photo', 'a'), media('video', 'b')];
-      final seen = <String>{};
+      // 与 DouyinViewPage.initState 一致：seenKeys 预置既有 dest 的 key。
+      final seen = {for (final e in dest) e.dedupeKey};
       final first = dedupeAppendItems(dest, seen, [media('photo', 'c')]);
       expect(first.map((e) => e.dedupeKey), ['photo:c']);
       expect(dest.length, 3);
@@ -88,7 +89,7 @@ void main() {
 
     test('全重复批次返回空列表（视为到底）', () {
       final dest = [media('photo', 'a')];
-      final seen = <String>{'photo:a'};
+      final seen = {for (final e in dest) e.dedupeKey};
       final fresh = dedupeAppendItems(dest, seen, [media('photo', 'a')]);
       expect(fresh, isEmpty);
       expect(dest.length, 1);
