@@ -1401,7 +1401,7 @@ https://example.com/b.jpg"></textarea></div>
       <div class="card" style="margin-top:16px">
         <div class="fbs">
           <div class="card-title"><span class="dot" style="background:#ec4899"></span>设备列表</div>
-          <button class="btn btn-ghost" onclick="loadAppInstalls(1)">刷新</button>
+          <button class="btn btn-ghost" data-action="app-installs-refresh">刷新</button>
         </div>
         <div id="appInstallsTable"></div>
         <div id="appInstallsPager" class="pager" style="margin-top:12px"></div>
@@ -2280,6 +2280,22 @@ function init() {
       if (confirm("确定清理所有 R2 孤儿对象？不可恢复，请先扫描确认。")) cleanupR2();
       return;
     }
+    // App 管理：设备列表刷新/分页/设备历史登录用户弹窗
+    var appInstRef = t.closest("[data-action='app-installs-refresh']");
+    if (appInstRef) { loadAppInstalls(1); return; }
+    var appInstPage = t.closest("[data-action='app-installs-page']");
+    if (appInstPage) {
+      loadAppInstalls(parseInt(appInstPage.getAttribute("data-p")) || 1);
+      return;
+    }
+    var devUsers = t.closest("[data-action='app-device-users']");
+    if (devUsers) {
+      var didRaw = devUsers.getAttribute("data-did");
+      if (didRaw) showAppDeviceUsers(didRaw);
+      return;
+    }
+    var quotaReset = t.closest("[data-action='user-quota-reset']");
+    if (quotaReset) { resetUserQuota(parseInt(quotaReset.getAttribute("data-id")) || 0); return; }
     if (t.id === "modalBackdrop") { document.getElementById("modalArea").innerHTML = ""; return; }
   });
 
@@ -3099,7 +3115,7 @@ async function loadAppInstalls(page) {
       '<td style="padding:6px 8px;text-align:center"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + (isActive ? '#10b981' : '#94a3b8') + '"></span> ' + (isActive ? '在线' : '离线') + '</td>' +
       '<td style="padding:6px 8px;text-align:right">' + (it.heartbeat_count || 0) + '</td>' +
       '<td style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-secondary)">' + lastHb + '</td>' +
-      '<td style="padding:6px 8px;text-align:center"><button class="btn btn-ghost" data-did="' + escStr(String(it.device_id || '')) + '" onclick="showAppDeviceUsers(this.dataset.did)">历史</button></td>' +
+      '<td style="padding:6px 8px;text-align:center"><button class="btn btn-ghost" data-action="app-device-users" data-did="' + escStr(String(it.device_id || '')) + '">历史</button></td>' +
       '</tr>';
   }
   h += '</tbody></table>';
@@ -3109,9 +3125,9 @@ async function loadAppInstalls(page) {
   var totalPages = Math.max(1, Math.ceil((d.total || 0) / 20));
   var pg = '';
   if (totalPages > 1) {
-    pg += '<button ' + (page <= 1 ? 'disabled' : '') + ' onclick="loadAppInstalls(' + (page - 1) + ')">上一页</button> ';
+    pg += '<button ' + (page <= 1 ? 'disabled' : '') + ' data-action="app-installs-page" data-p="' + (page - 1) + '">上一页</button> ';
     pg += '<span style="font-size:12px;color:var(--text-secondary)">第 ' + page + ' / ' + totalPages + ' 页 (共 ' + d.total + ' 条)</span>';
-    pg += ' <button ' + (page >= totalPages ? 'disabled' : '') + ' onclick="loadAppInstalls(' + (page + 1) + ')">下一页</button>';
+    pg += ' <button ' + (page >= totalPages ? 'disabled' : '') + ' data-action="app-installs-page" data-p="' + (page + 1) + '">下一页</button>';
   }
   document.getElementById("appInstallsPager").innerHTML = pg;
 }
@@ -3842,15 +3858,15 @@ function loadUserQuotas() {
     users.forEach(function(u) {
       h += '<tr style="border-bottom:1px solid var(--border)">';
       h += '<td style="padding:8px">' + escStr(u.username || u.name || u.key) + '</td>';
-      h += '<td style="padding:8px"><select class="inp" style="width:80px" onchange="updateUserQuota(' + u.id + ',\'level\',this.value)">';
+      h += '<td style="padding:8px"><select class="inp" style="width:80px" data-quota-field="level" data-quota-id="' + u.id + '">';
       ['pt','vip','svip','vvip'].forEach(function(lv) {
         h += '<option value="' + lv + '"' + (u.level === lv ? ' selected' : '') + '>' + lv + '</option>';
       });
       h += '</select></td>';
-      h += '<td style="padding:8px"><input class="inp" type="number" value="' + (u.upload_quota || 100) + '" style="width:80px" onchange="updateUserQuota(' + u.id + ',\'upload_quota\',this.value)"></td>';
+      h += '<td style="padding:8px"><input class="inp" type="number" value="' + (u.upload_quota || 100) + '" style="width:80px" data-quota-field="upload_quota" data-quota-id="' + u.id + '"></td>';
       h += '<td style="padding:8px">' + (u.upload_used || 0) + '</td>';
       h += '<td style="padding:8px">' + fmtSize(u.storage_used || 0) + '</td>';
-      h += '<td style="padding:8px"><button class="btn btn-ghost btn-sm" onclick="resetUserQuota(' + u.id + ')">重置</button></td>';
+      h += '<td style="padding:8px"><button class="btn btn-ghost btn-sm" data-action="user-quota-reset" data-id="' + u.id + '">重置</button></td>';
       h += '</tr>';
     });
     
@@ -6071,9 +6087,17 @@ function proxyExt(f) {
       else toast(r.error || "失败", 0);
     });
   });
-  document.addEventListener("change", function(e) {
-    var t = e.target;
-    // 共享库 checkbox（change 事件保证勾选/取消状态可靠，避免 click 委托的时序问题）
+   document.addEventListener("change", function(e) {
+     var t = e.target;
+     // 用户配额级别/上传配额
+     var quotaField = t.closest && t.closest("[data-quota-field]");
+     if (quotaField) {
+       var qf = quotaField.getAttribute("data-quota-field");
+       var qid = parseInt(quotaField.getAttribute("data-quota-id")) || 0;
+       if (qf && qid) updateUserQuota(qid, qf, quotaField.value);
+       return;
+     }
+     // 共享库 checkbox（change 事件保证勾选/取消状态可靠，避免 click 委托的时序问题）
     var poolCheck = t.closest && t.closest("[data-pool-check]");
     if (poolCheck) {
       var ppid = poolCheck.getAttribute("data-pool-check");
