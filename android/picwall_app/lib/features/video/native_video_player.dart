@@ -9,6 +9,8 @@ import 'software_video.dart';
 ///
 /// - [posterUrl]：加载/错误时显示的封面，避免黑屏闪烁；
 /// - [controls] 为 true 时显示轻量控制层（点按暂停/播放、声音开关）；
+/// - [showTapToUnmute] 为 true 且 [controls] 为 false 时，整画面轻触切换
+///   静音/开声（抖音视图点击画面开声），静音态浮层提示音量图标；
 /// - 应用退后台自动暂停，回前台自动恢复；
 /// - 出错提供重试；dispose 时释放解码器。
 /// - [softwareFallback] 为 true 时，遇到设备解码器不支持的编码/容器
@@ -22,6 +24,7 @@ class NativeVideoPlayer extends StatefulWidget {
     this.loop = false,
     this.muted = true,
     this.controls = false,
+    this.showTapToUnmute = false,
     this.fit = BoxFit.contain,
     this.softwareFallback = false,
   });
@@ -43,6 +46,9 @@ class NativeVideoPlayer extends StatefulWidget {
 
   /// 显示轻量控制层（播放/暂停 + 声音开关）。
   final bool controls;
+
+  /// [controls] 为 false 时整画面轻触切换静音/开声，静音态显示提示浮层。
+  final bool showTapToUnmute;
 
   /// 视频在画布内的适配方式。
   final BoxFit fit;
@@ -265,8 +271,9 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
         url: widget.url,
         autoplay: widget.autoplay,
         loop: widget.loop,
-        muted: widget.muted,
+        muted: _muted,
         controls: widget.controls,
+        showTapToUnmute: widget.showTapToUnmute,
       );
     }
     final Widget body;
@@ -414,15 +421,46 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
             ),
           ),
         ),
+      if (widget.showTapToUnmute && !widget.controls && _muted)
+        _buildSoundHint(),
       if (widget.controls) _buildControls(),
     ];
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: widget.controls ? _togglePlay : null,
+      onTap: widget.controls
+          ? _togglePlay
+          : (widget.showTapToUnmute ? _toggleMute : null),
       child: Stack(
         fit: StackFit.expand,
         children: overlayChildren,
+      ),
+    );
+  }
+
+  /// 静音态整画面轻触开声提示浮层（抖音视图点画面开声）。
+  Widget _buildSoundHint() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 40,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.volume_off, size: 16, color: Colors.white),
+              SizedBox(width: 6),
+              Text('轻点画面开启声音',
+                  style: TextStyle(color: Colors.white, fontSize: 12)),
+            ],
+          ),
+        ),
       ),
     );
   }

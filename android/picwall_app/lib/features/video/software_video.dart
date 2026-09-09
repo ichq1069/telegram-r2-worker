@@ -21,6 +21,7 @@ class SoftwareVideo extends StatefulWidget {
     this.loop = false,
     this.muted = true,
     this.controls = false,
+    this.showTapToUnmute = false,
   });
 
   /// 绝对直链（http/https）。
@@ -37,6 +38,9 @@ class SoftwareVideo extends StatefulWidget {
 
   /// 显示轻量控制层（播放/暂停 + 声音开关）。
   final bool controls;
+
+  /// [controls] 为 false 时整画面轻触切换静音/开声，静音态显示提示浮层。
+  final bool showTapToUnmute;
 
   @override
   State<SoftwareVideo> createState() => _SoftwareVideoState();
@@ -189,7 +193,11 @@ class _SoftwareVideoState extends State<SoftwareVideo>
     final body = _buildBody();
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: widget.controls && !_failed ? _togglePlay : null,
+      onTap: _failed
+          ? null
+          : (widget.controls
+              ? _togglePlay
+              : (widget.showTapToUnmute ? _toggleMute : null)),
       child: body,
     );
   }
@@ -209,9 +217,42 @@ class _SoftwareVideoState extends State<SoftwareVideo>
           const Center(
             child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.white54),
           ),
+        if (widget.showTapToUnmute &&
+            !widget.controls &&
+            _muted &&
+            !_failed &&
+            !_buffering)
+          _buildSoundHint(),
         if (_failed) _buildError(),
         if (widget.controls && !_failed && !_buffering) _buildControls(),
       ],
+    );
+  }
+
+  /// 静音态整画面轻触开声提示浮层（抖音视图点画面开声）。
+  Widget _buildSoundHint() {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 40,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.5),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.volume_off, size: 16, color: Colors.white),
+              SizedBox(width: 6),
+              Text('轻点画面开启声音',
+                  style: TextStyle(color: Colors.white, fontSize: 12)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
