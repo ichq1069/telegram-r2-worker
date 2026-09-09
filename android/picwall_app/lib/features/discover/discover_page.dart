@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/models/media_item.dart';
+import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
 import '../../services/providers.dart';
 import '../../ui/app_widgets.dart';
 import '../detail/detail_page.dart';
+import '../douyin/douyin_view_page.dart';
 import '../gallery/masonry_virtual_grid.dart';
 import '../gallery/media_thumb.dart';
 import '../video/feed_video_autoplay.dart';
@@ -76,12 +78,37 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
     );
   }
 
+  Future<PagedMedia> _douyinLoadPage(GalleryRepository repo, int page) async {
+    final items = await repo.randomPool(count: 10, type: _type);
+    return PagedMedia(
+        items: items, total: -1, offset: page, hasMore: items.isNotEmpty);
+  }
+
+  void _openDouyin() {
+    if (_items.isEmpty || !mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DouyinViewPage(
+          initialItems: List.of(_items),
+          startPage: 1,
+          title: '发现',
+          loadPage: _douyinLoadPage,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('发现'),
         actions: [
+          IconButton(
+            tooltip: '抖音视图',
+            icon: const Icon(Icons.swipe_vertical),
+            onPressed: _loading || _items.isEmpty ? null : _openDouyin,
+          ),
           IconButton(
             tooltip: '换一批',
             icon: const Icon(Icons.refresh),

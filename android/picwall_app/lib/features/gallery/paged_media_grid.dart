@@ -20,6 +20,8 @@ class PagedMediaGrid extends ConsumerStatefulWidget {
     required this.loader,
     this.embedded = false,
     this.tabIndex,
+    this.controller,
+    this.onItemsChanged,
   });
 
   final String title;
@@ -33,8 +35,24 @@ class PagedMediaGrid extends ConsumerStatefulWidget {
   /// 所在 HomeShell Tab 下标；独立页传 null（按路由可见性门控即可）。
   final int? tabIndex;
 
+  /// 宿主用于读取当前已加载条目/页码快照（如抖音视图入口）。
+  final PagedMediaGridController? controller;
+
+  /// 已加载内容变化（首屏/续载成功）后回调，供宿主刷新入口可用态。
+  final VoidCallback? onItemsChanged;
+
   @override
   ConsumerState<PagedMediaGrid> createState() => _PagedMediaGridState();
+}
+
+/// 供宿主读取网格运行时快照的控制器（绑定到网格 State 生命周期）。
+class PagedMediaGridController {
+  _PagedMediaGridState? _state;
+
+  List<MediaItem> get items =>
+      List.unmodifiable(_state?._items ?? const <MediaItem>[]);
+
+  int get currentPage => _state?._page ?? 1;
 }
 
 class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
@@ -53,11 +71,15 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
     super.initState();
     _scroll.addListener(_onScroll);
     _scroll.addListener(_feed.onScroll);
+    widget.controller?._state = this;
     _loadFirst();
   }
 
   @override
   void dispose() {
+    if (widget.controller?._state == this) {
+      widget.controller?._state = null;
+    }
     _scroll.removeListener(_feed.onScroll);
     _scroll.dispose();
     _feed.dispose();
@@ -87,6 +109,7 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
         _page = 1;
         _loading = false;
       });
+      widget.onItemsChanged?.call();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -112,6 +135,7 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
         _page = next;
         _loadingMore = false;
       });
+      widget.onItemsChanged?.call();
     } catch (e, st) {
       DebugService.instance.recordError('PagedMediaGrid.load', e, st);
       if (!mounted) return;

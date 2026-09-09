@@ -21,21 +21,21 @@
 
 - [x] 新建 `lib/features/detail/detail_actions.dart`:从 DetailPage 抽取 历史记录/收藏态/保存图片/下载视频/分享/详情面板/直链补全 为 ConsumerState 混入
 - [x] DetailPage 改为混入,删除私有重复方法,行为等价(标签跳转保留为宿主可配置回调,抖音默认不跳转)
-- [ ] 校验:详情页收藏/保存/分享/详情/复制仍工作;flutter analyze 无告警(本地无工具链,靠 CI 编译 + 代码等价核对)
-- [ ] commit + push(触发 build-android.yml)
+- [x] 校验:详情页收藏/保存/分享/详情/复制仍工作;flutter analyze 无告警(本地无工具链,CI analyze run#78 success + 代码等价核对)
+- [x] commit + push(触发 build-android.yml)
 
 ## Phase 3: NativeVideoPlayer 点击开声能力
 
-- [ ] `native_video_player.dart` 增加 `showTapToUnmute`(controls:false 静音时整画面手势层,点击 _toggleMute,音量图标浮层指示);SoftwareVideo 透传 muted
-- [ ] 校验:软解/硬解路径下点击开声、切页停止释放
-- [ ] commit + push(触发 build-android.yml)
+- [x] `native_video_player.dart` 增加 `showTapToUnmute`(controls:false 静音时整画面手势层,点击 _toggleMute,音量图标浮层指示);SoftwareVideo 透传 muted
+- [ ] 校验:软解/硬解路径下点击开声、切页停止释放(CI analyze run#79 success;真机回归并入 Phase 5)
+- [x] commit + push(触发 build-android.yml)
 
 ## Phase 4: 抖音视图 DouyinViewPage
 
-- [ ] 新建 `lib/features/douyin/douyin_view_page.dart`:竖向 PageView.builder + 当前屏视频 NativeVideoPlayer(poster 邻屏占位) / 图片 contain+渐变信息层 + 右侧操作栏(收藏/保存/分享/详情/下载视频) + 上滑近尾加载更多 + 空态/错误/到底提示
-- [ ] 图库 `GalleryPage`:AppBar 抖音入口(列表非空可点),按当前过滤构造 loadPage 闭包
-- [ ] 发现 `DiscoverPage`:AppBar 抖音入口(列表非空可点),randomPool 续批 + dedupeKey 去重 loadPage
-- [ ] 校验:带过滤进入、切页播放暂停、点开声、收藏/保存/分享/详情、返回列表位置保持、上滑续载至 total/去重尽
+- [x] 新建 `lib/features/douyin/douyin_view_page.dart`:竖向 PageView.builder + 当前屏视频 NativeVideoPlayer(poster 邻屏占位) / 图片 contain+渐变信息层 + 右侧操作栏(收藏/保存/分享/详情/下载视频) + 上滑近尾加载更多 + 空态/错误/到底提示
+- [x] 图库 `GalleryPage`:AppBar 抖音入口(列表非空可点),按当前过滤构造 loadPage 闭包
+- [x] 发现 `DiscoverPage`:AppBar 抖音入口(列表非空可点),randomPool 续批 + dedupeKey 去重 loadPage
+- [ ] 校验:带过滤进入、切页播放暂停、点开声、收藏/保存/分享/详情、返回列表位置保持、上滑续载至 total/去重尽(真机回归并入 Phase 5)
 - [ ] commit + push(触发 build-android.yml 编译验证)
 
 ## Phase 5: 单测与收尾

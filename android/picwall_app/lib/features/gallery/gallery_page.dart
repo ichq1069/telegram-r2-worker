@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/repositories/gallery_repository.dart';
+import '../douyin/douyin_view_page.dart';
 import 'paged_media_grid.dart';
 
 /// 图库：共享库瀑布流，支持类型（photo/video）+ 标签搜索 + 内容等级 +
@@ -19,6 +20,7 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   bool _oldestFirst = false;
   final TextEditingController _tagCtrl = TextEditingController();
   String _appliedTag = '';
+  final PagedMediaGridController _gridCtrl = PagedMediaGridController();
 
   bool get _hasFilter =>
       _type.isNotEmpty || _level.isNotEmpty || _appliedTag.isNotEmpty || _oldestFirst;
@@ -65,11 +67,35 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
   String get _gridKey =>
       '$_type|$_level|$_appliedTag|${_oldestFirst ? 'asc' : 'desc'}';
 
+  void _openDouyin() {
+    final items = _gridCtrl.items;
+    if (items.isEmpty || !mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DouyinViewPage(
+          initialItems: items,
+          startPage: _gridCtrl.currentPage,
+          title: '图库',
+          loadPage: _loader,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('图库')),
+      appBar: AppBar(
+        title: const Text('图库'),
+        actions: [
+          IconButton(
+            tooltip: '抖音视图',
+            icon: const Icon(Icons.swipe_vertical),
+            onPressed: _gridCtrl.items.isEmpty ? null : _openDouyin,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           _FilterCard(
@@ -93,6 +119,10 @@ class _GalleryPageState extends ConsumerState<GalleryPage> {
               embedded: true,
               tabIndex: 1,
               loader: _loader,
+              controller: _gridCtrl,
+              onItemsChanged: () {
+                if (mounted) setState(() {});
+              },
             ),
           ),
         ],
