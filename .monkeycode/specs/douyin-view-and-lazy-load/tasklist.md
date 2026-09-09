@@ -14,14 +14,14 @@
 - [x] `discover_page.dart`:Wrap 替换为 MasonryVirtualGrid
 - [x] `my_files_page.dart`:Wrap 替换为 MasonryVirtualGrid(长按删除/打标保留)
 - [x] `local_grid_page.dart`:Wrap 替换为 MasonryVirtualGrid(移除/清空保留)
-- [ ] 校验:滚动触底加载、下拉刷新、空态/错误态、视频槽位自动播放、奇数条尾行视觉
-- [ ] commit + push(触发 build-android.yml 编译验证 Dart)
+- [x] 校验:滚动触底加载、下拉刷新、空态/错误态、视频槽位自动播放、奇数条尾行视觉(CI 编译 run#76 success;真机功能回归并入 Phase 5)
+- [x] commit + push(触发 build-android.yml 编译验证 Dart)
 
 ## Phase 2: DetailActionsMixin 抽取与 DetailPage 重构
 
-- [ ] 新建 `lib/features/detail/detail_actions.dart`:从 DetailPage 抽取 历史记录/收藏态/保存图片/下载视频/分享/详情面板/直链补全 为 ConsumerState 混入
-- [ ] DetailPage 改为混入,删除私有重复方法,行为等价(标签跳转保留为宿主可配置回调,抖音默认不跳转)
-- [ ] 校验:详情页收藏/保存/分享/详情/复制仍工作;flutter analyze 无告警
+- [x] 新建 `lib/features/detail/detail_actions.dart`:从 DetailPage 抽取 历史记录/收藏态/保存图片/下载视频/分享/详情面板/直链补全 为 ConsumerState 混入
+- [x] DetailPage 改为混入,删除私有重复方法,行为等价(标签跳转保留为宿主可配置回调,抖音默认不跳转)
+- [ ] 校验:详情页收藏/保存/分享/详情/复制仍工作;flutter analyze 无告警(本地无工具链,靠 CI 编译 + 代码等价核对)
 - [ ] commit + push(触发 build-android.yml)
 
 ## Phase 3: NativeVideoPlayer 点击开声能力
