@@ -6,9 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
 import '../../core/link_extract.dart';
+import '../../data/local/local_db.dart';
 import '../../data/models/admin_file.dart';
+import '../../data/models/scrape_job.dart';
+import '../../services/debug_service.dart';
 import '../../services/providers.dart';
+import '../../services/scrape_lock.dart';
 import 'rules_page.dart';
+import 'scrape_background.dart';
 
 /// 网页采集：输入链接(可选规则) → 候选缩略图网格(默认全选) → 逐张入库进度。
 /// 依赖服务端 /admin/api/scrape/analyze 与 grab_one（忽略规则服务端强校验）。
@@ -27,6 +32,7 @@ class _ScrapeCandidate {
   bool sel = true;
   String status = '';
   String reason = '';
+  int seq = 0;
 }
 
 class _ScrapeTabState extends ConsumerState<ScrapeTab> {
@@ -62,20 +68,26 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
   int _filtered = 0;
 
   bool _running = false;
-  bool _stop = false;
   int _done = 0;
   int _added = 0;
   String _progressText = '';
+
+  // 后台入库：任务条目 + 轮询 DB 回显（前台服务在独立 isolate 中执行）
+  LocalDb? _db;
+  List<_ScrapeCandidate> _runItems = [];
+  Timer? _poll;
 
   @override
   void initState() {
     super.initState();
     _urlCtrl.addListener(_onUrlChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _boot());
   }
 
   @override
   void dispose() {
     _ruleDebounce?.cancel();
+    _poll?.cancel();
     _urlCtrl.removeListener(_onUrlChanged);
     _urlCtrl.dispose();
     _cookieCtrl.dispose();
@@ -268,85 +280,135 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
 
   int get _selCount => _cands.where((c) => c.sel).length;
 
-  Future<void> _run({bool onlyFailed = false}) async {
-    if (_running) return;
-    final selected = <int>[];
-    for (var i = 0; i < _cands.length; i++) {
-      final c = _cands[i];
-      if (!c.sel) continue;
-      if (onlyFailed && c.status != 'failed') continue;
-      selected.add(i);
+  /// 打开本地库并恢复未完成的入库任务（后台服务在跑，或进程被杀留下待处理项）。
+  Future<void> _boot() async {
+    try {
+      final db = await ref.read(localDbProvider.future);
+      if (!mounted) return;
+      _db = db;
+      final snap = await db.loadScrapeJob();
+      if (snap == null) return;
+      var active = await ScrapeLock.activeOrHeal(db);
+      if (!active && snap.hasPending) {
+        await ScrapeService.resumeIfNeeded();
+        active = await ScrapeLock.activeOrHeal(db);
+      }
+      if (!active && !snap.hasPending) return;
+      if (!mounted) return;
+      setState(() {
+        _runItems = [
+          for (final it in snap.items)
+            _ScrapeCandidate(it.url)
+              ..seq = it.seq
+              ..status = it.status == 'pending' ? '' : it.status
+              ..reason = it.reason,
+        ];
+        _done = snap.done;
+        _added = snap.added;
+        _running = active;
+        _progressText =
+            active ? '入库中 ${snap.done}/${snap.total} · 成功 ${snap.added}' : '';
+        _stage = 2;
+      });
+      if (active) _startPoll();
+    } catch (e, st) {
+      DebugService.instance.recordError('ScrapeTab.boot', e, st);
     }
+  }
+
+  Future<void> _run() async {
+    if (_running) return;
+    final selected = [for (final c in _cands) if (c.sel) c];
     if (selected.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(onlyFailed ? '没有失败项' : '请先勾选要入库的图片')),
+        const SnackBar(content: Text('请先勾选要入库的图片')),
       );
       return;
     }
-    if (!onlyFailed) {
-      // 重置本轮全部选中项状态
-      for (final i in selected) {
-        _cands[i].status = '';
-        _cands[i].reason = '';
-      }
+    final title =
+        _titleCtrl.text.trim().isEmpty ? _pageTitle : _titleCtrl.text.trim();
+    final err = await ScrapeService.startJob(
+      title: title,
+      urls: [for (final c in selected) c.url],
+      tags: _tagsCtrl.text.trim(),
+      level: _level,
+      ref: _urlCtrl.text.trim(),
+      ignoreKw: _kwCtrl.text.trim(),
+      ignoreExt: _extCtrl.text.trim(),
+      must: _mustCtrl.text.trim(),
+      maxMb: _maxMb,
+      cookie: _cookie,
+    );
+    if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
     }
-    final repo = ref.read(galleryRepositoryProvider);
-    final tags = _tagsCtrl.text.trim();
-    final title = _titleCtrl.text.trim().isEmpty ? _pageTitle : _titleCtrl.text.trim();
-    final ref_ = _urlCtrl.text.trim();
-    final maxMb = _maxMb;
     setState(() {
-      _running = true;
-      _stop = false;
+      _runItems = [
+        for (var i = 0; i < selected.length; i++)
+          _ScrapeCandidate(selected[i].url)..seq = i + 1,
+      ];
       _done = 0;
       _added = 0;
+      _running = true;
+      _progressText = '入库中 0/${selected.length} · 成功 0';
       _stage = 2;
     });
-    for (final i in selected) {
-      if (_stop || !mounted) break;
-      final c = _cands[i];
-      setState(() => _progressText = '正在入库 ${_done + 1}/${selected.length}…');
-      try {
-        final r = await repo.adminScrapeGrabOne(
-          widget.adminKey,
-          url: c.url,
-          title: title,
-          tags: tags,
-          level: _level,
-          ref: ref_,
-          ignoreKw: _kwCtrl.text.trim(),
-          ignoreExt: _extCtrl.text.trim(),
-          must: _mustCtrl.text.trim(),
-          maxMb: maxMb,
-          cookie: _cookie,
-          seq: i + 1,
-        );
-        if (!mounted) return;
-        setState(() {
-          c.status = r.status;
-          c.reason = r.reason;
-          if (r.status == 'added') _added++;
-        });
-      } catch (e) {
-        if (!mounted) return;
-        setState(() {
-          c.status = 'failed';
-          c.reason = e.toString();
-        });
-      } finally {
-        if (mounted) setState(() => _done++);
-      }
-    }
-    if (!mounted) return;
-    setState(() {
-      _running = false;
-      _progressText = '';
-    });
+    _startPoll();
   }
 
-  void _cancelRun() {
-    setState(() => _stop = true);
+  Future<void> _resumeJob() async {
+    if (_running) return;
+    final err = await ScrapeService.resumeJob();
+    if (!mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    setState(() {
+      _running = true;
+      _progressText = '正在继续入库…';
+    });
+    _startPoll();
   }
+
+  void _startPoll() {
+    _poll?.cancel();
+    _poll = Timer.periodic(const Duration(seconds: 1), (_) => _pollTick());
+  }
+
+  Future<void> _pollTick() async {
+    final db = _db;
+    if (db == null) return;
+    final snap = await db.loadScrapeJob();
+    final running = await ScrapeLock.activeOrHeal(db);
+    if (!mounted) return;
+    if (snap == null) {
+      _poll?.cancel();
+      setState(() {
+        _running = false;
+        _progressText = '';
+      });
+      return;
+    }
+    final bySeq = <int, ScrapeItem>{for (final it in snap.items) it.seq: it};
+    setState(() {
+      _running = running;
+      _done = snap.done;
+      _added = snap.added;
+      for (final c in _runItems) {
+        final it = bySeq[c.seq];
+        if (it == null) continue;
+        c.status = it.status == 'pending' ? '' : it.status;
+        c.reason = it.reason;
+      }
+      _progressText = running ? '入库中 ${snap.done}/${snap.total} · 成功 ${snap.added}' : '';
+    });
+    if (!running) _poll?.cancel();
+  }
+
+  Future<void> _cancelRun() => ScrapeService.stopJob();
 
   @override
   Widget build(BuildContext context) {
@@ -537,11 +599,12 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
   Widget _buildRun() {
     final theme = Theme.of(context);
     final stats = <String, int>{};
-    for (final c in _cands) {
-      if (!c.sel || c.status.isEmpty) continue;
+    for (final c in _runItems) {
+      if (c.status.isEmpty) continue;
       stats[c.status] = (stats[c.status] ?? 0) + 1;
     }
     final failed = stats['failed'] ?? 0;
+    final pending = _runItems.where((c) => c.status.isEmpty).length;
     return Column(
       children: [
         Padding(
@@ -560,10 +623,9 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
               if (_running)
                 TextButton(onPressed: _cancelRun, child: const Text('停止'))
               else if (failed > 0)
-                TextButton(
-                  onPressed: () => _run(onlyFailed: true),
-                  child: const Text('重试失败项'),
-                ),
+                TextButton(onPressed: _resumeJob, child: const Text('重试失败项'))
+              else if (pending > 0)
+                TextButton(onPressed: _resumeJob, child: const Text('继续入库')),
             ],
           ),
         ),
@@ -571,11 +633,10 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
         Expanded(
           child: ListView.separated(
             padding: const EdgeInsets.all(8),
-            itemCount: _cands.length,
+            itemCount: _runItems.length,
             separatorBuilder: (_, __) => const Divider(height: 1),
             itemBuilder: (context, i) {
-              final c = _cands[i];
-              if (!c.sel) return const SizedBox.shrink();
+              final c = _runItems[i];
               final (label, color) = switch (c.status) {
                 'added' => ('已入库', Colors.lightGreen),
                 'exists' => ('已存在', Colors.lightBlue),
@@ -587,7 +648,7 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
                 dense: true,
                 leading: SizedBox(
                   width: 30,
-                  child: Text('${i + 1}',
+                  child: Text('${c.seq}',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
                 ),

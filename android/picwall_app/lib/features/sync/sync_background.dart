@@ -8,8 +8,10 @@ import '../../data/local/local_db.dart';
 import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
+import '../../services/scrape_lock.dart';
 import '../../services/secure_store.dart';
 import '../../services/sync_lock.dart';
+import '../admin/scrape_background.dart';
 import '../upload/upload_engine.dart';
 import 'album_sync_scanner.dart';
 
@@ -20,7 +22,7 @@ import 'album_sync_scanner.dart';
 ///   主进程的 UploadEngine 在锁有效时挂起。
 
 const String kSyncChannelId = 'picwall_sync';
-const String kSyncChannelName = 'PicWall 相册同步';
+const String kSyncChannelName = 'PicWall 后台任务';
 const String kSyncPeriodicTask = 'picwall_sync_periodic';
 const String kMetaAutoSync = 'auto_sync';
 
@@ -54,7 +56,7 @@ class SyncService {
       androidNotificationOptions: AndroidNotificationOptions(
         channelId: kSyncChannelId,
         channelName: kSyncChannelName,
-        channelDescription: '相册自动同步的运行状态与进度',
+        channelDescription: '相册同步与采集入库的运行状态与进度',
         channelImportance: NotificationChannelImportance.HIGH,
         priority: NotificationPriority.HIGH,
         onlyAlertOnce: false,
@@ -74,6 +76,7 @@ class SyncService {
   /// 陈旧锁会自动清除，避免上次进程被杀后无法再次同步）。
   static Future<bool> startPass() async {
     final db = await LocalDb.open();
+    if (await ScrapeLock.activeOrHeal(db)) return false;
     if (await SyncLock.activeOrHeal(db)) return false;
     final enabled = await db.getEnabledAlbum();
     if (enabled == null) return false;
@@ -269,6 +272,12 @@ class SyncService {
 @pragma('vm:entry-point')
 void syncWorkDispatcher() {
   Workmanager().executeTask((task, inputData) async {
+    if (task == kScrapeResumeTask) {
+      try {
+        await ScrapeService.resumeIfNeeded();
+      } catch (_) {}
+      return true;
+    }
     try {
       await SyncService.runAutoFromBackground();
     } catch (_) {}

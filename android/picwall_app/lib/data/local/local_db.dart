@@ -4,6 +4,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../models/album_sync_state.dart';
 import '../models/media_item.dart';
+import '../models/scrape_job.dart';
 import '../models/sync_filter.dart';
 import '../models/upload_task.dart';
 
@@ -37,7 +38,7 @@ class LocalDb {
     final path = '${await getDatabasesPath()}/$_dbName';
     final db = await openDatabase(
       path,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE favorites(
@@ -56,6 +57,7 @@ class LocalDb {
         await _createUploadQueue(db);
         await _createSyncTables(db);
         await _createSyncV4Tables(db);
+        await _createScrapeTables(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -66,6 +68,9 @@ class LocalDb {
         }
         if (oldVersion < 4) {
           await _createSyncV4Tables(db);
+        }
+        if (oldVersion < 5) {
+          await _createScrapeTables(db);
         }
       },
     );
@@ -393,6 +398,174 @@ class LocalDb {
     return QueueSnapshot(
         queued: queued, uploading: uploading, done: done, failed: failed);
   }
+
+  // ---------------- 采集入库后台任务（v5） ----------------
+
+  static Future<void> _createScrapeTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS scrape_job(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at INTEGER NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        tags TEXT NOT NULL DEFAULT '',
+        level TEXT NOT NULL DEFAULT 'pt',
+        ref TEXT NOT NULL DEFAULT '',
+        ignore_kw TEXT NOT NULL DEFAULT '',
+        ignore_ext TEXT NOT NULL DEFAULT '',
+        must TEXT NOT NULL DEFAULT '',
+        max_mb INTEGER,
+        cookie TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL DEFAULT 'running'
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS scrape_item(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL,
+        seq INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        reason TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_scrape_item_job ON scrape_item(job_id)');
+  }
+
+  /// 建立一次新的采集入库任务：清空旧任务与条目，写入任务参数与全部待入库 URL。
+  /// 返回新任务 id。
+  Future<int> createScrapeJob(ScrapeJob job, List<String> urls) async {
+    return _db.transaction((txn) async {
+      await txn.delete('scrape_item');
+      await txn.delete('scrape_job');
+      final jobId = await txn.insert('scrape_job', job.toDb());
+      for (var i = 0; i < urls.length; i++) {
+        await txn.insert('scrape_item', {
+          'job_id': jobId,
+          'seq': i + 1,
+          'url': urls[i],
+          'status': 'pending',
+          'reason': '',
+        });
+      }
+      return jobId;
+    });
+  }
+
+  /// 读取当前（最新）任务及全部条目；无任务返回 null。
+  Future<ScrapeJobSnapshot?> loadScrapeJob() async {
+    final jobs = await _db.query('scrape_job', orderBy: 'id DESC', limit: 1);
+    if (jobs.isEmpty) return null;
+    final job = ScrapeJob.fromDb(jobs.first);
+    final rows = await _db.query(
+      'scrape_item',
+      where: 'job_id = ?',
+      whereArgs: [job.id],
+      orderBy: 'seq ASC',
+    );
+    return ScrapeJobSnapshot(
+      job: job,
+      items: [for (final r in rows) ScrapeItem.fromDb(r)],
+    );
+  }
+
+  Future<void> updateScrapeItemStatus(int id, String status, String reason) async {
+    await _db.update(
+      'scrape_item',
+      {
+        'status': status,
+        'reason': reason,
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// 将当前任务的失败项重置为待入库（对应界面“重试失败项”）。
+  Future<void> resetFailedScrapeItems() async {
+    final jobs = await _db.query('scrape_job', orderBy: 'id DESC', limit: 1);
+    if (jobs.isEmpty) return;
+    final jobId = jobs.first['id'];
+    await _db.update(
+      'scrape_item',
+      {'status': 'pending', 'reason': '', 'updated_at': null},
+      where: "job_id = ? AND status = 'failed'",
+      whereArgs: [jobId],
+    );
+    await _db.update(
+      'scrape_job',
+      {'state': 'running'},
+      where: 'id = ?',
+      whereArgs: [jobId],
+    );
+  }
+
+  Future<void> setScrapeJobState(int id, String state) async {
+    await _db.update(
+      'scrape_job',
+      {'state': state},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// 是否存在可续跑的未完成任务（任务运行中、仍有待入库项且未请求停止）。
+  Future<bool> hasPendingScrapeJob() async {
+    if (await scrapeStopRequested()) return false;
+    final rows = await _db.rawQuery(
+      "SELECT COUNT(*) AS c FROM scrape_item i JOIN scrape_job j ON j.id = i.job_id "
+      "WHERE j.state = 'running' AND i.status = 'pending'",
+    );
+    return (((rows.first['c'] as num?) ?? 0).toInt()) > 0;
+  }
+
+  /// 是否存在运行中的采集任务（用于与相册同步互斥）。
+  Future<bool> hasActiveScrapeJob() async {
+    final rows = await _db
+        .rawQuery("SELECT COUNT(*) AS c FROM scrape_job WHERE state = 'running'");
+    return (((rows.first['c'] as num?) ?? 0).toInt()) > 0;
+  }
+
+  Future<void> clearScrapeJob() async {
+    await _db.transaction((txn) async {
+      await txn.delete('scrape_item');
+      await txn.delete('scrape_job');
+    });
+  }
+
+  /// 采集前台服务运行锁（与相册同步同理，跨 isolate 互斥）。
+  Future<void> setScrapeRunning(bool running) async {
+    if (running) {
+      await setSyncMeta('scrape_running', '1');
+      await setSyncMeta(
+          'scrape_started_at', DateTime.now().millisecondsSinceEpoch.toString());
+    } else {
+      await delSyncMeta('scrape_running');
+      await delSyncMeta('scrape_started_at');
+    }
+  }
+
+  /// 服务正在运行（超过 10 分钟的陈旧锁视为已死并自动清除）。
+  Future<bool> isScrapeRunning() async {
+    final v = await syncMeta('scrape_running');
+    if (v != '1') return false;
+    final started = int.tryParse(await syncMeta('scrape_started_at') ?? '0') ?? 0;
+    final ageMs = DateTime.now().millisecondsSinceEpoch - started;
+    if (ageMs > 10 * 60 * 1000) {
+      await setScrapeRunning(false);
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> requestScrapeStop() => setSyncMeta('scrape_stop', '1');
+
+  Future<bool> scrapeStopRequested() async =>
+      (await syncMeta('scrape_stop')) == '1';
+
+  Future<void> clearScrapeStop() => delSyncMeta('scrape_stop');
 
   List<LocalEntry> _rowsToEntries(List<Map<String, Object?>> rows, String timeCol) {
     return rows.map((r) {
