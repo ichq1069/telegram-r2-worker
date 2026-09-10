@@ -59,17 +59,16 @@ export async function handleTgFileRedirect(request, env, ctx) {
     if (dlUrl) {
       try {
         // 透传客户端的 Range，让 Telegram CDN 回 206/Content-Range：
-        // 视频播放（ExoPlayer/browser）对 moov 在文件尾的 mp4 会先请求末尾字节定位，
-        // 若上游忽略 Range 每次都回 200 全量，播放器按错误偏移解析会直接判定源错误。
-        const headers = new Headers();
+        // 视频播放（ExoPlayer/browser）对 moov 在文件尾的 mp4 会先请求末尾字节定位。
+        const upHeaders = new Headers();
         const rng = request.headers.get('range');
-        if (rng) headers.set('Range', rng);
-        const origin = await fetch(dlUrl, { headers });
+        if (rng) upHeaders.set('Range', rng);
+        const origin = await fetch(dlUrl, { headers: upHeaders });
         if (!origin.ok) return json({ ok: false, error: 'origin http ' + origin.status }, 502);
-        // 懒转存：返回给用户的同时，异步把文件落到 R2 并更新 D1 直链（之后访问直接走 R2，不再实时拉 TG）
-        if (ctx && ctx.waitUntil && f.telegram_file_id && !rng) {
-          ctx.waitUntil(lazyTransferToR2(env, id, f, dlUrl).catch(function(e) { console.error('lazy transfer:', e.message); }));
-        }
+        // 懒转存：异步把文件落到 R2 并更新 D1 直链（之后访问直接 302 到 R2，不再实时拉 TG）。
+        // 视频播放器总会携带 Range，之前用 !rng 守卫会让视频永远走 Telegram 实时中转，
+        // 叠加 Worker 冷启动后表现为「加载半天」；这里对 ranged 请求同样触发（去重防并发）。
+        scheduleLazyTransfer(env, ctx, id, f, dlUrl);
         env.D1_DB.prepare('UPDATE files SET view_count = view_count + 1 WHERE id=?').bind(id).run().catch(function(){});
         // 中继上游状态（206 保留）与关键头，确保分片/长度/范围信息完整交给播放器
         const outCt = mimeForStorageKey(f.file_name || '', f.mime_type || origin.headers.get('content-type') || 'application/octet-stream');
@@ -79,15 +78,115 @@ export async function handleTgFileRedirect(request, env, ctx) {
           'Access-Control-Allow-Origin': '*',
           'Accept-Ranges': 'bytes'
         };
-        const cl = origin.headers.get('content-length');
-        if (cl) outHeaders['Content-Length'] = cl;
-        const cr = origin.headers.get('content-range');
-        if (cr) outHeaders['Content-Range'] = cr;
+        const clRaw = origin.headers.get('content-length');
+        const total = clRaw ? parseInt(clRaw, 10) : NaN;
+        // 上游已按 Range 回 206：转发范围信息即可。
+        if (origin.status === 206) {
+          if (clRaw) outHeaders['Content-Length'] = clRaw;
+          const cr = origin.headers.get('content-range');
+          if (cr) outHeaders['Content-Range'] = cr;
+          return new Response(origin.body, { status: 206, headers: outHeaders });
+        }
+        // 上游忽略 Range 回了 200 全量：自行按请求区间切流并回 206，
+        // 否则播放器会把从 0 开始的数据当作从 start 偏移开始，moov 解析失败后卡住/报错。
+        if (origin.status === 200 && rng) {
+          const rr = parseRangeHeader(rng, Number.isFinite(total) ? total : null);
+          if (rr) {
+            if (Number.isFinite(total) && rr.start >= total) {
+              return new Response(null, {
+                status: 416,
+                headers: { 'Content-Range': 'bytes */' + total, 'Accept-Ranges': 'bytes' }
+              });
+            }
+            const end = rr.end != null ? rr.end : (Number.isFinite(total) ? total - 1 : null);
+            const fullFromZero = rr.start === 0 &&
+              (end == null || (Number.isFinite(total) && end >= total - 1));
+            if (!fullFromZero) {
+              const len = end != null ? end - rr.start + 1 : null;
+              outHeaders['Content-Range'] = 'bytes ' + rr.start + '-' +
+                (end != null ? end : '') + '/' + (Number.isFinite(total) ? total : '*');
+              if (len != null) outHeaders['Content-Length'] = String(len);
+              return new Response(sliceByteStream(origin.body, rr.start, len), {
+                status: 206,
+                headers: outHeaders
+              });
+            }
+          }
+        }
+        if (clRaw) outHeaders['Content-Length'] = clRaw;
         return new Response(origin.body, { status: origin.status, headers: outHeaders });
       } catch (e) { return json({ ok: false, error: 'proxy fail: ' + e.message }, 502); }
     }
     return json({ ok: false, error: 'no url' }, 404);
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 懒转存并发去重：同一 id 在完成前不重复触发整文件下载（Worker isolate 内有效即可）。
+const _lazyInflight = new Set();
+
+// 调度一次懒转存（不阻塞当前响应）。视频等带 Range 的请求也走这里，确保首次观看后
+// 文件被搬到 R2，后续直接 302 到 R2，绕开 Worker 冷启动的实时中转。
+function scheduleLazyTransfer(env, ctx, id, f, dlUrl) {
+  if (!ctx || !ctx.waitUntil || !dlUrl) return;
+  if (_lazyInflight.has(id)) return;
+  _lazyInflight.add(id);
+  ctx.waitUntil(
+    lazyTransferToR2(env, id, f, dlUrl)
+      .catch(function (e) { console.error('lazy transfer:', e && e.message); })
+      .then(
+        function () { _lazyInflight.delete(id); },
+        function () { _lazyInflight.delete(id); }
+      )
+  );
+}
+
+// 解析单段 Range 头（bytes=start-end / bytes=start- / bytes=-suffix）。
+// 无 total 时后缀形式无法确定起点，返回 null（调用方按全量处理）。
+function parseRangeHeader(value, total) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(String(value || '').trim());
+  if (!m) return null;
+  const s = m[1];
+  const e = m[2];
+  if (s === '' && e === '') return null;
+  if (s === '') {
+    if (!Number.isFinite(total)) return null;
+    const n = parseInt(e, 10);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return { start: Math.max(0, total - n), end: total - 1 };
+  }
+  const start = parseInt(s, 10);
+  if (!Number.isFinite(start)) return null;
+  const end = e === '' ? null : parseInt(e, 10);
+  return { start: start, end: Number.isFinite(end) ? end : null };
+}
+
+// 按字节区间切上游流：丢弃前 start 字节，最多输出 length 字节（length 为 null 表示到结尾）。
+// 上游忽略 Range 回全量时用它自行实现 206，避免播放器把整段当偏移数据解析。
+function sliceByteStream(body, start, length) {
+  let skipped = 0;
+  let emitted = 0;
+  const ts = new TransformStream({
+    transform(chunk, controller) {
+      let c = chunk;
+      if (skipped < start) {
+        const need = start - skipped;
+        if (c.byteLength <= need) {
+          skipped += c.byteLength;
+          return;
+        }
+        c = c.subarray(need);
+        skipped = start;
+      }
+      if (length != null) {
+        const remain = length - emitted;
+        if (remain <= 0) return;
+        if (c.byteLength > remain) c = c.subarray(0, remain);
+      }
+      emitted += c.byteLength;
+      controller.enqueue(c);
+    }
+  });
+  return body.pipeThrough(ts);
 }
 
 // 懒转存：代理模式的文件被访问过一次后，异步把文件落到 R2 并更新 D1 直链，
