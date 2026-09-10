@@ -976,12 +976,87 @@ function proxyExtOf(value, fileType) {
   }
 }
 
-// 单条：把 url/thumb_url 中未签名的 /file/tg/<id> 改为签名绝对直链。返回新对象。
-export async function decoratePoolRow(row, origin, env) {
+// ── 真实 R2 直链下发 ─────────────────────────────────────
+// random_pool 里已转存的行常存的是本站代理直链（签名后的 /file/tg/<token>/<id>.ext）
+// 或待转存占位；每次都经 Worker 中转（叠加冷启动=首播慢）。列表输出前回查 files 表，
+// 若关联的 tg_file_id 已有真实 R2 直链，直接把 url 换成 R2 直链：播放器直连 CDN/R2，
+// 支持 Range，绕开 Worker。尊重 proxy_only 开关（=1 时保持代理，不暴露 R2 地址）。
+
+// 是否本站 /file/tg/ 代理直链（相对或绝对形态，含 placeholder 占位）。
+function isProxyPoolUrl(value, origin) {
+  if (!value) return false;
+  const s = String(value).trim();
+  if (s.indexOf('/file/tg/') === 0) return true;
+  if (s.indexOf('/file/tg/placeholder') >= 0) return true;
+  try {
+    const u = new URL(s);
+    if (u.pathname.indexOf('/file/tg/') === 0) return true;
+  } catch (e) { /* 非绝对 URL */ }
+  return false;
+}
+
+// 是否可直连的真实直链（http(s) 且非本站 /file/tg/ 代理形态）。
+function isRealDirectUrl(value) {
+  if (!value) return false;
+  const s = String(value).trim();
+  return /^https?:\/\//i.test(s) && s.indexOf('/file/tg/') < 0;
+}
+
+// 前端仅代理链接开关（settings.proxy_only）缓存 30s，避免列表逐行查库。
+let _poolProxyOnly = null, _poolProxyOnlyAt = 0;
+async function getPoolProxyOnly(env) {
+  const now = Date.now();
+  if (_poolProxyOnly !== null && now - _poolProxyOnlyAt < 30000) return _poolProxyOnly;
+  _poolProxyOnly = 0;
+  try {
+    const r = await env.D1_DB.prepare("SELECT value FROM settings WHERE key='proxy_only'").first();
+    if (r && r.value) _poolProxyOnly = (String(r.value).trim() === '1') ? 1 : 0;
+  } catch (e) {}
+  _poolProxyOnlyAt = now;
+  return _poolProxyOnly;
+}
+
+// 批量取 files.id -> 真实 R2 直链 映射（分片避免 SQL 变量过多）。
+async function fetchPoolR2Map(env, idSet) {
+  const map = new Map();
+  const ids = Array.from(idSet);
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    try {
+      const ph = chunk.map(function () { return '?'; }).join(',');
+      const d = await env.D1_DB.prepare('SELECT id, r2_url FROM files WHERE id IN (' + ph + ') AND deleted_at IS NULL')
+        .bind(...chunk).all();
+      for (const r of (d.results || [])) {
+        if (isRealDirectUrl(r.r2_url)) map.set(r.id, r.r2_url);
+      }
+    } catch (e) { /* 回退逐行签名 */ }
+  }
+  return map;
+}
+
+// 单条：优先下发真实 R2 直链；否则把 url/thumb_url 中未签名的 /file/tg/<id> 改为签名绝对直链。
+export async function decoratePoolRow(row, origin, env, opts) {
   const out = Object.assign({}, row);
+  const proxyOnly = !!(opts && opts.proxyOnly);
+  const r2Map = opts ? opts.r2Map : undefined;
   const pu = unsignedProxyId(row.url);
-  const id = (pu && pu.id) || (row.tg_file_id ? (parseInt(row.tg_file_id, 10) || 0) : 0);
+  const id = (pu && pu.id > 0) ? pu.id : (row.tg_file_id ? (parseInt(row.tg_file_id, 10) || 0) : 0);
   if (id <= 0) return out;
+  // 已转存：原 url 仍是代理/占位且未强制 proxy_only 时，直接给 R2 直链（秒开、支持 Range）。
+  if (!proxyOnly && isProxyPoolUrl(row.url, origin)) {
+    let real = r2Map ? r2Map.get(id) : undefined;
+    if (real === undefined && r2Map === undefined) {
+      try {
+        const fr = await env.D1_DB.prepare('SELECT r2_url FROM files WHERE id=? AND deleted_at IS NULL').bind(id).first();
+        if (fr && isRealDirectUrl(fr.r2_url)) real = fr.r2_url;
+      } catch (e) {}
+    }
+    if (real) {
+      out.url = real;
+      if (isProxyPoolUrl(row.thumb_url, origin) || !row.thumb_url) out.thumb_url = real;
+      return out;
+    }
+  }
   try {
     const tok = await fileTok(id, env);
     const pt = unsignedProxyId(row.thumb_url);
@@ -992,11 +1067,23 @@ export async function decoratePoolRow(row, origin, env) {
   return out;
 }
 
-// 批量装饰列表行（保持行序）。
+// 批量装饰列表行（保持行序）；先批量取 R2 映射，避免逐行查库。
 export async function decoratePoolList(rows, origin, env) {
+  const list = rows || [];
+  const proxyOnly = !!(await getPoolProxyOnly(env));
+  const idSet = new Set();
+  if (!proxyOnly) {
+    for (const row of list) {
+      if (!isProxyPoolUrl(row.url, origin)) continue;
+      const pu = unsignedProxyId(row.url);
+      const id = (pu && pu.id > 0) ? pu.id : (row.tg_file_id ? (parseInt(row.tg_file_id, 10) || 0) : 0);
+      if (id > 0) idSet.add(id);
+    }
+  }
+  const r2Map = idSet.size ? await fetchPoolR2Map(env, idSet) : new Map();
   const decorated = [];
-  for (const row of rows || []) {
-    decorated.push(await decoratePoolRow(row, origin, env));
+  for (const row of list) {
+    decorated.push(await decoratePoolRow(row, origin, env, { proxyOnly: proxyOnly, r2Map: r2Map }));
   }
   return decorated;
 }
