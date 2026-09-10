@@ -135,4 +135,32 @@ void main() {
       expect(p.posterUrl, 'https://cdn/abc');
     });
   });
+
+  group('douyin 邻屏预加载 url 计算', () {
+    MediaItem v(String id) =>
+        MediaItem(id: id, url: 'https://cdn/v/$id.mp4', fileType: 'video');
+    MediaItem p(String id) =>
+        MediaItem(id: id, url: 'https://cdn/p/$id.jpg', fileType: 'photo');
+
+    test('取前后各 1 个视频，跳过图片与越界', () {
+      final items = [p('0'), v('1'), v('2'), p('3')];
+      expect(neighborVideoUrls(items, 2, (e) => e.url), ['https://cdn/v/1.mp4']);
+      expect(neighborVideoUrls(items, 1, (e) => e.url), ['https://cdn/v/2.mp4']);
+    });
+
+    test('首屏/尾屏不越界，空列表返回空', () {
+      final items = [v('0'), v('1')];
+      expect(neighborVideoUrls(items, 0, (e) => e.url), ['https://cdn/v/1.mp4']);
+      expect(neighborVideoUrls(items, 1, (e) => e.url), ['https://cdn/v/0.mp4']);
+      expect(neighborVideoUrls(const [], 0, (e) => e.url), isEmpty);
+    });
+
+    test('url 为空则跳过', () {
+      final items = [
+        const MediaItem(id: '0', url: '', fileType: 'video'),
+        v('1'),
+      ];
+      expect(neighborVideoUrls(items, 1, (e) => e.url), isEmpty);
+    });
+  });
 }

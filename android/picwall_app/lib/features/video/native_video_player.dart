@@ -4,6 +4,7 @@ import 'package:video_player/video_player.dart';
 
 import '../../services/debug_service.dart';
 import 'software_video.dart';
+import 'video_preloader.dart';
 
 /// 原生内联视频播放器（基于 video_player / ExoPlayer）。
 ///
@@ -80,7 +81,13 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
     WidgetsBinding.instance.addObserver(this);
     _muted = widget.muted;
     _autoPlaying = widget.autoplay;
-    _create();
+    // 优先接管预加载好的控制器（邻屏预加载），避免切页时重新 initialize。
+    final pre = VideoPreloader.instance.take(widget.url);
+    if (pre != null) {
+      _adoptPreloaded(pre);
+    } else {
+      _create();
+    }
   }
 
   @override
@@ -177,6 +184,36 @@ class _NativeVideoPlayerState extends State<NativeVideoPlayer>
       _setError(_describe(e));
       DebugService.instance.recordError('NativeVideoPlayer.init', e);
       _scheduleSoftFallback();
+      if (mounted) setState(() {});
+    }
+  }
+
+  /// 接管预加载好的控制器：直接进入可播放态，再异步补设循环/音量并起播。
+  /// 仅在 initState 调用，初始 build 会直接读取 _initialized 状态。
+  void _adoptPreloaded(VideoPlayerController c) {
+    _controller = c;
+    _initialized = true;
+    _failed = false;
+    _lastPlaying = c.value.isPlaying;
+    _lastBuffering = c.value.isBuffering;
+    c.addListener(_onValue);
+    _configurePreloaded(c);
+  }
+
+  Future<void> _configurePreloaded(VideoPlayerController c) async {
+    try {
+      if (widget.loop) await c.setLooping(true);
+      await c.setVolume(_muted ? 0 : 1);
+      if (!mounted || _controller != c) return;
+      if (widget.autoplay) {
+        _autoPlaying = true;
+        await c.play();
+      }
+    } catch (e) {
+      if (!mounted || _controller != c) return;
+      _failed = true;
+      _setError(_describe(e));
+      DebugService.instance.recordError('NativeVideoPlayer.adopt', e);
       if (mounted) setState(() {});
     }
   }

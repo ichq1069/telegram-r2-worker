@@ -7,6 +7,7 @@ import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../detail/detail_actions.dart';
 import '../video/native_video_player.dart';
+import '../video/video_preloader.dart';
 
 /// 抖音视图：竖向全屏一屏一媒体浏览。
 ///
@@ -62,11 +63,13 @@ class _DouyinViewPageState extends ConsumerState<DouyinViewPage>
     _page = widget.startPage;
     _pageController = PageController();
     _syncBrowse();
+    _syncPreload();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    VideoPreloader.instance.clear();
     super.dispose();
   }
 
@@ -76,10 +79,20 @@ class _DouyinViewPageState extends ConsumerState<DouyinViewPage>
     if (_current < _items.length) syncBrowse(_items[_current]);
   }
 
+  /// 维护当前屏前后各 1 个视频的预加载：静止时提前初始化，滑动切页即取用。
+  void _syncPreload() {
+    final urls = neighborVideoUrls(_items, _current, (it) => absUrl(apiBase, it.url));
+    VideoPreloader.instance.retain(urls.toSet());
+    for (final u in urls) {
+      VideoPreloader.instance.preload(u);
+    }
+  }
+
   void _onPageChanged(int i) {
     if (i == _current) return;
     setState(() => _current = i);
     _syncBrowse();
+    _syncPreload();
     _maybeLoadMore();
   }
 
@@ -107,6 +120,7 @@ class _DouyinViewPageState extends ConsumerState<DouyinViewPage>
           _endReached = true;
         }
       });
+      _syncPreload();
     } catch (e, st) {
       DebugService.instance.recordError('DouyinViewPage.loadMore', e, st);
       if (!mounted) return;
@@ -461,4 +475,27 @@ List<MediaItem> dedupeAppendItems(
     }
   }
   return fresh;
+}
+
+/// 计算需要预加载的相邻视频直链（默认当前屏前后各 1 个，不含当前屏）。
+///
+/// 跳过图片条目与空 url；[urlOf] 负责把条目转成播放直链（通常为 absUrl 结果）。
+List<String> neighborVideoUrls(
+  List<MediaItem> items,
+  int current,
+  String Function(MediaItem) urlOf, {
+  int radius = 1,
+}) {
+  final out = <String>[];
+  if (current < 0 || current >= items.length) return out;
+  for (var d = -radius; d <= radius; d++) {
+    if (d == 0) continue;
+    final i = current + d;
+    if (i < 0 || i >= items.length) continue;
+    final it = items[i];
+    if (!it.isVideo) continue;
+    final u = urlOf(it);
+    if (u.isNotEmpty && !out.contains(u)) out.add(u);
+  }
+  return out;
 }
