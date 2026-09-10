@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
+import '../../core/link_extract.dart';
 import '../../data/models/admin_file.dart';
 import '../../services/providers.dart';
 import 'rules_page.dart';
@@ -88,9 +90,43 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
     ));
   }
 
+  /// 一键粘贴：读取剪贴板并自动提取 http(s) 链接，省去手动删除分享文案。
+  Future<void> _pasteFromClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text ?? '';
+    if (!mounted) return;
+    if (text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('剪贴板没有内容')),
+      );
+      return;
+    }
+    final url = extractFirstUrl(text);
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('剪贴板里没有找到链接')),
+      );
+      return;
+    }
+    setState(() {
+      _urlCtrl.text = url;
+      _inputError = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已从剪贴板提取链接')),
+    );
+  }
+
   /// 按当前链接域名套用云端规则组（优先精确域名，回退 `*` 默认组）。
   Future<void> _applyDomainRules() async {
-    var url = _urlCtrl.text.trim();
+    var url = extractFirstUrl(_urlCtrl.text);
+    if (url.isEmpty) url = _urlCtrl.text.trim();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先输入网页链接')),
+      );
+      return;
+    }
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://$url';
     }
@@ -139,10 +175,16 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
   }
 
   Future<void> _analyze() async {
-    final url = _urlCtrl.text.trim();
+    final raw = _urlCtrl.text.trim();
+    final extracted = extractFirstUrl(raw);
+    final url = extracted.isNotEmpty ? extracted : raw;
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       setState(() => _inputError = '请输入 http(s) 链接');
       return;
+    }
+    // 直接粘贴了分享文案：回填提取出的链接，便于核对。
+    if (extracted.isNotEmpty && extracted != raw) {
+      _urlCtrl.text = extracted;
     }
     setState(() {
       _analyzing = true;
@@ -309,7 +351,13 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
           showSelectedIcon: false,
         ),
         const SizedBox(height: 10),
-        _field(_urlCtrl, '网页链接', 'https://…（文章/相册/帖子页）', keyboard: TextInputType.url),
+        _field(_urlCtrl, '网页链接', 'https://…（文章/相册/帖子页，可直接粘贴分享文案）',
+            keyboard: TextInputType.url,
+            suffix: IconButton(
+              tooltip: '粘贴并提取链接',
+              icon: const Icon(Icons.content_paste),
+              onPressed: _pasteFromClipboard,
+            )),
         _field(_tagsCtrl, '入库标签', '用 , 分隔（如 美女,壁纸）'),
         _field(_maxMbCtrl, '单张上限 MB（留空=服务端默认）', '1–30',
             keyboard: TextInputType.number),
@@ -540,7 +588,10 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
   }
 
   Widget _field(TextEditingController ctrl, String label, String hint,
-      {TextInputType? keyboard, bool multiLine = false, bool mono = false}) {
+      {TextInputType? keyboard,
+      bool multiLine = false,
+      bool mono = false,
+      Widget? suffix}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: TextField(
@@ -555,6 +606,7 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
           hintText: hint,
           isDense: true,
           border: const OutlineInputBorder(),
+          suffixIcon: suffix,
         ),
       ),
     );
