@@ -44,6 +44,8 @@ class ScrapeService {
 
   static const String _title = 'PicWall 采集入库';
 
+  static const int _maxAttempts = 3;
+
   /// 发起一次新的后台入库任务。返回错误信息；成功返回 null。
   static Future<String?> startJob({
     required String title,
@@ -176,26 +178,47 @@ class ScrapeService {
 
       for (final it in pending) {
         if (await db.scrapeStopRequested()) break;
-        try {
-          final r = await repo.adminScrapeGrabOne(
-            adminKey,
-            url: it.url,
-            title: snap.job.title,
-            tags: snap.job.tags,
-            level: snap.job.level,
-            ref: snap.job.ref,
-            ignoreKw: snap.job.ignoreKw,
-            ignoreExt: snap.job.ignoreExt,
-            must: snap.job.must,
-            maxMb: snap.job.maxMb,
-            cookie: snap.job.cookie,
-            seq: it.seq,
-          );
-          await db.updateScrapeItemStatus(it.id!, r.status, r.reason);
-          if (r.status == 'added') added++;
-        } catch (e, st) {
-          DebugService.instance.recordError('ScrapeService.grabOne', e, st);
-          await db.updateScrapeItemStatus(it.id!, 'failed', e.toString());
+        var ok = false;
+        Object? lastErr;
+        StackTrace? lastSt;
+        for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
+          try {
+            final r = await repo.adminScrapeGrabOne(
+              adminKey,
+              url: it.url,
+              title: snap.job.title,
+              tags: snap.job.tags,
+              level: snap.job.level,
+              ref: snap.job.ref,
+              ignoreKw: snap.job.ignoreKw,
+              ignoreExt: snap.job.ignoreExt,
+              must: snap.job.must,
+              maxMb: snap.job.maxMb,
+              cookie: snap.job.cookie,
+              seq: it.seq,
+            );
+            await db.updateScrapeItemStatus(it.id!, r.status, r.reason);
+            if (r.status == 'added') added++;
+            ok = true;
+            break;
+          } catch (e, st) {
+            lastErr = e;
+            lastSt = st;
+            final transient = e is! ApiException;
+            if (!transient) break;
+            if (attempt < _maxAttempts && !await db.scrapeStopRequested()) {
+              await _notify(_title,
+                  '第 ${it.seq} 张网络异常，重试 $attempt/${_maxAttempts - 1}…');
+              await Future<void>.delayed(Duration(seconds: attempt * 2));
+            }
+          }
+        }
+        if (!ok) {
+          if (await db.scrapeStopRequested()) break;
+          DebugService.instance.recordError(
+              'ScrapeService.grabOne', lastErr ?? Exception('抓取失败'), lastSt);
+          await db.updateScrapeItemStatus(
+              it.id!, 'failed', lastErr?.toString() ?? '抓取失败');
         }
         done++;
         await _notify(_title, '入库中 $done/$total · 成功 $added');
