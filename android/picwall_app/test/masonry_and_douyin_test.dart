@@ -104,4 +104,35 @@ void main() {
       expect(dest, hasLength(2));
     });
   });
+
+  group('posterUrl 避免拿视频地址当封面', () {
+    MediaItem item({required String fileType, String? thumb, String url = ''}) =>
+        MediaItem(
+          id: 'x',
+          url: url.isEmpty ? 'https://cdn/$fileType/x' : url,
+          thumbUrl: thumb,
+          fileType: fileType,
+        );
+
+    test('视频 thumb 兜底成视频地址时不作为封面', () {
+      final v = item(
+          fileType: 'video',
+          thumb: 'https://cdn/file/tg/tok/9.mp4?x=1');
+      expect(v.hasImageThumb, isFalse);
+      expect(v.posterUrl, isEmpty);
+    });
+
+    test('视频有真实图片封面时正常使用', () {
+      final v = item(
+          fileType: 'video', thumb: 'https://cdn/file/tg/tok/9.jpg');
+      expect(v.hasImageThumb, isTrue);
+      expect(v.posterUrl, 'https://cdn/file/tg/tok/9.jpg');
+    });
+
+    test('图片条目保持 displayThumb 行为（含无扩展名）', () {
+      final p = item(fileType: 'photo', thumb: 'https://cdn/abc');
+      expect(p.hasImageThumb, isFalse);
+      expect(p.posterUrl, 'https://cdn/abc');
+    });
+  });
 }

@@ -182,6 +182,7 @@ class _MediaViewer extends StatelessWidget {
   Widget build(BuildContext context) {
     // 服务端可能返回相对路径（如 /file/tg/…），补齐 scheme/host 后展示/播放。
     final thumb = absUrl(apiBase, item.displayThumb);
+    final poster = absUrl(apiBase, item.posterUrl);
     final videoUrl = absUrl(apiBase, item.url);
     return Container(
       color: Colors.black,
@@ -190,14 +191,14 @@ class _MediaViewer extends StatelessWidget {
           ? (active
               ? NativeVideoPlayer(
                   url: videoUrl,
-                  posterUrl: thumb,
+                  posterUrl: poster,
                   autoplay: true,
                   loop: true,
                   muted: true,
                   controls: true,
                   softwareFallback: true,
                 )
-              : _VideoPoster(url: thumb))
+              : _VideoPoster(url: poster))
           : InteractiveViewer(
               maxScale: 5,
               child: Image.network(
@@ -229,22 +230,25 @@ class _VideoPoster extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image.network(
-          url,
-          fit: BoxFit.contain,
-          loadingBuilder: (_, child, progress) {
-            if (progress == null) return child;
-            return const Center(
-              child: CircularProgressIndicator(color: Colors.white54),
-            );
-          },
-          errorBuilder: (_, __, ___) => Container(
-            color: Colors.black,
-            alignment: Alignment.center,
-            child: const Icon(Icons.play_circle_outline,
-                size: 64, color: Colors.white38),
+        if (url.isEmpty)
+          Container(color: Colors.black)
+        else
+          Image.network(
+            url,
+            fit: BoxFit.contain,
+            loadingBuilder: (_, child, progress) {
+              if (progress == null) return child;
+              return const Center(
+                child: CircularProgressIndicator(color: Colors.white54),
+              );
+            },
+            errorBuilder: (_, __, ___) => Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: const Icon(Icons.play_circle_outline,
+                  size: 64, color: Colors.white38),
+            ),
           ),
-        ),
         const Center(
           child: Icon(Icons.play_circle_outline,
               size: 64, color: Colors.white70),

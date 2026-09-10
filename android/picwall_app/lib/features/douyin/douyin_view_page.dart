@@ -349,7 +349,8 @@ class _MediaPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final videoUrl = absUrl(apiBase, item.url);
-    final thumb = absUrl(apiBase, item.displayThumb);
+    final photo = absUrl(apiBase, item.displayThumb);
+    final poster = absUrl(apiBase, item.posterUrl);
     return Container(
       color: Colors.black,
       alignment: Alignment.center,
@@ -357,7 +358,7 @@ class _MediaPage extends StatelessWidget {
           ? (active
               ? NativeVideoPlayer(
                   url: videoUrl,
-                  posterUrl: thumb,
+                  posterUrl: poster,
                   autoplay: true,
                   loop: true,
                   muted: true,
@@ -365,8 +366,8 @@ class _MediaPage extends StatelessWidget {
                   showTapToUnmute: true,
                   softwareFallback: true,
                 )
-              : _VideoPoster(url: thumb, hint: '${index + 1} / $total'))
-          : _PhotoView(url: thumb),
+              : _VideoPoster(url: poster, hint: '${index + 1} / $total'))
+          : _PhotoView(url: photo),
     );
   }
 }
@@ -383,19 +384,22 @@ class _VideoPoster extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image.network(
-          url,
-          fit: BoxFit.contain,
-          loadingBuilder: (_, child, progress) {
-            if (progress == null) return child;
-            return const Center(
-              child: CircularProgressIndicator(color: Colors.white38),
-            );
-          },
-          errorBuilder: (_, __, ___) => const Center(
-            child: Icon(Icons.play_circle_outline, size: 64, color: Colors.white38),
+        if (url.isEmpty)
+          const SizedBox.expand()
+        else
+          Image.network(
+            url,
+            fit: BoxFit.contain,
+            loadingBuilder: (_, child, progress) {
+              if (progress == null) return child;
+              return const Center(
+                child: CircularProgressIndicator(color: Colors.white38),
+              );
+            },
+            errorBuilder: (_, __, ___) => const Center(
+              child: Icon(Icons.play_circle_outline, size: 64, color: Colors.white38),
+            ),
           ),
-        ),
         const Center(
           child: Icon(Icons.play_circle_outline, size: 56, color: Colors.white70),
         ),

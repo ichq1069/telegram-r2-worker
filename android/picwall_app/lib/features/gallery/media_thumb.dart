@@ -139,20 +139,26 @@ class _MediaThumbState extends State<MediaThumb> {
     if (playing) {
       content = _buildPlayer();
     } else {
+      final poster = widget.item.posterUrl;
       content = Stack(
         fit: StackFit.expand,
         children: [
-          CachedNetworkImage(
-            imageUrl: widget.item.displayThumb,
-            fit: BoxFit.cover,
-            placeholder: (_, __) => Container(
+          if (poster.isEmpty)
+            Container(
               color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            )
+          else
+            CachedNetworkImage(
+              imageUrl: poster,
+              fit: BoxFit.cover,
+              placeholder: (_, __) => Container(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+              ),
+              errorWidget: (_, __, ___) => Container(
+                color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+                child: const Icon(Icons.broken_image_outlined, color: Colors.white38),
+              ),
             ),
-            errorWidget: (_, __, ___) => Container(
-              color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
-              child: const Icon(Icons.broken_image_outlined, color: Colors.white38),
-            ),
-          ),
           if (widget.item.isVideo)
             const Center(
               child: Icon(Icons.play_circle_outline,
@@ -203,7 +209,7 @@ class _MediaThumbState extends State<MediaThumb> {
   Widget _buildPlayer() {
     return NativeVideoPlayer(
       url: _abs(widget.item.url),
-      posterUrl: _abs(widget.item.displayThumb),
+      posterUrl: _abs(widget.item.posterUrl),
       autoplay: true,
       loop: true,
       muted: true,

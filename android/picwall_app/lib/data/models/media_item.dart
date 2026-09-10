@@ -37,6 +37,27 @@ class MediaItem {
   /// 缩略图直链（优先 thumbUrl；部分来源只有 url）。
   String get displayThumb => thumbUrl != null && thumbUrl!.isNotEmpty ? thumbUrl! : url;
 
+  static const _imageExts = {
+    'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif'
+  };
+
+  /// thumbUrl 是否是可直接当图片渲染的直链。
+  ///
+  /// 视频条目很多来源没有独立封面，服务端会把 thumb_url 兜底成视频地址；直接
+  /// 拿它当图片加载会白下载整段视频，故按扩展名过滤。
+  bool get hasImageThumb {
+    final t = thumbUrl;
+    if (t == null || t.isEmpty) return false;
+    final path = Uri.tryParse(t)?.path ?? t;
+    final dot = path.lastIndexOf('.');
+    if (dot < 0 || dot == path.length - 1) return false;
+    return _imageExts.contains(path.substring(dot + 1).toLowerCase());
+  }
+
+  /// 安全的封面直链：视频缺真实图片封面时返回空串，由 UI 显示占位，
+  /// 避免把视频地址当图片拉取；图片条目保持原 displayThumb 行为。
+  String get posterUrl => (isVideo && !hasImageThumb) ? '' : displayThumb;
+
   /// 唯一去重键：以条目 id（或 url）为锚，避免本地收藏/历史重复。
   String get dedupeKey => id.isNotEmpty ? '$fileType:$id' : url;
 
