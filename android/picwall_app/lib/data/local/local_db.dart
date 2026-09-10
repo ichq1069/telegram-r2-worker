@@ -515,7 +515,7 @@ class LocalDb {
   Future<bool> hasPendingScrapeJob() async {
     if (await scrapeStopRequested()) return false;
     final rows = await _db.rawQuery(
-      "SELECT COUNT(*) AS c FROM scrape_item i JOIN scrape_job j ON j.id = i.job_id "
+      'SELECT COUNT(*) AS c FROM scrape_item i JOIN scrape_job j ON j.id = i.job_id '
       "WHERE j.state = 'running' AND i.status = 'pending'",
     );
     return (((rows.first['c'] as num?) ?? 0).toInt()) > 0;
