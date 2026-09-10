@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -46,6 +48,10 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
   final _titleCtrl = TextEditingController();
   String _level = 'pt';
 
+  // 链接输入后自动套用域名规则：防抖 + 记录已套用域名，避免重复请求/覆盖。
+  Timer? _ruleDebounce;
+  String _lastAutoRuleHost = '';
+
   // 状态
   int _stage = 0; // 0 输入 / 1 候选 / 2 入库
   bool _analyzing = false;
@@ -62,7 +68,15 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
   String _progressText = '';
 
   @override
+  void initState() {
+    super.initState();
+    _urlCtrl.addListener(_onUrlChanged);
+  }
+
+  @override
   void dispose() {
+    _ruleDebounce?.cancel();
+    _urlCtrl.removeListener(_onUrlChanged);
     _urlCtrl.dispose();
     _cookieCtrl.dispose();
     _tagsCtrl.dispose();
@@ -117,26 +131,43 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
     );
   }
 
-  /// 按当前链接域名套用云端规则组（优先精确域名，回退 `*` 默认组）。
-  Future<void> _applyDomainRules() async {
-    var url = extractFirstUrl(_urlCtrl.text);
-    if (url.isEmpty) url = _urlCtrl.text.trim();
-    if (url.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先输入网页链接')),
-      );
-      return;
-    }
+  /// 监听链接输入：域名变化后防抖自动套用规则（粘贴/输入分享文案同样生效）。
+  void _onUrlChanged() {
+    final host = _hostOf(_urlCtrl.text);
+    if (host.isEmpty || host == _lastAutoRuleHost) return;
+    _ruleDebounce?.cancel();
+    _ruleDebounce = Timer(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      _applyDomainRules(auto: true);
+    });
+  }
+
+  /// 从输入（可能是分享文案）解析出域名；无法解析返回空串。
+  String _hostOf(String text) {
+    var url = extractFirstUrl(text);
+    if (url.isEmpty) url = text.trim();
+    if (url.isEmpty) return '';
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://$url';
     }
-    final uri = Uri.tryParse(url);
-    final host = uri?.host ?? '';
+    return Uri.tryParse(url)?.host ?? '';
+  }
+
+  /// 按当前链接域名套用云端规则组（优先精确域名，回退 `*` 默认组）。
+  /// [auto] 为 true 时由输入自动触发：静默、按域名去重，不打扰用户。
+  Future<void> _applyDomainRules({bool auto = false}) async {
+    final host = _hostOf(_urlCtrl.text);
     if (host.isEmpty) {
+      if (auto) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请先输入网页链接')),
       );
       return;
+    }
+    if (auto) {
+      if (host == _lastAutoRuleHost) return;
+      // 请求前登记，避免网络抖动/连续输入导致同域名重复请求。
+      _lastAutoRuleHost = host;
     }
     try {
       final groups =
@@ -152,24 +183,25 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
         );
       }
       if (g.key.isEmpty) {
-        if (!mounted) return;
+        if (auto || !mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('云端暂无「$host」规则，可在规则组管理里新建')),
         );
         return;
       }
+      if (!mounted) return;
       setState(() {
         _kwCtrl.text = g.kw;
         _extCtrl.text = g.ext;
         _mustCtrl.text = g.must;
         _maxMbCtrl.text = g.mb > 0 ? g.mb.toString() : '';
       });
-      if (!mounted) return;
+      if (auto || !mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('已套用「${g.key == '*' ? '默认' : g.key}」规则组'),
       ));
     } catch (e) {
-      if (!mounted) return;
+      if (auto || !mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
     }
   }
@@ -376,7 +408,7 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
           children: [
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: _applyDomainRules,
+                onPressed: () => _applyDomainRules(),
                 icon: const Icon(Icons.rule, size: 18),
                 label: const Text('套用域名规则'),
               ),
