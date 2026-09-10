@@ -88,6 +88,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - 沙箱内没有 flutter/dart 工具链,Android 端 Dart 改动的 analyze/test/构建验证唯一路径是 push main 触发 `build-android.yml`(Build Android APK run);该 workflow 包含 `flutter analyze` + `flutter test` + Debug APK,analyze 的 info 级问题(如 unnecessary_import)也会使 job 失败
   - 排障时按 GitHub Actions API 取失败日志:`GET /actions/runs/{id}/jobs` → job `id` → `GET /actions/jobs/{id}/logs`(需 `Accept: application/vnd.github+json` 与 Authorization Bearer),日志落 `/tmp/opencode/ci*.log` 再 grep
   - 纯测试/纯文档提交也会各触发一次完整构建 run(约 10 分钟),改纯逻辑(行布局/去重)建议同时写 `flutter test` 可跑的纯 Dart 单测随提交验证
+  - release 打包偶发基础设施取消:日志尾部 `The runner has received a shutdown signal` + `Gradle task assembleRelease failed with exit code 143` + `The operation was canceled`,只要前序 analyze(`No issues found!`)/test 通过即非代码问题,重跑 run 或重推即可
 
 [Project Knowledge Summary]
 - Date: 2026-09-10
