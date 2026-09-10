@@ -88,3 +88,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - 沙箱内没有 flutter/dart 工具链,Android 端 Dart 改动的 analyze/test/构建验证唯一路径是 push main 触发 `build-android.yml`(Build Android APK run);该 workflow 包含 `flutter analyze` + `flutter test` + Debug APK,analyze 的 info 级问题(如 unnecessary_import)也会使 job 失败
   - 排障时按 GitHub Actions API 取失败日志:`GET /actions/runs/{id}/jobs` → job `id` → `GET /actions/jobs/{id}/logs`(需 `Accept: application/vnd.github+json` 与 Authorization Bearer),日志落 `/tmp/opencode/ci*.log` 再 grep
   - 纯测试/纯文档提交也会各触发一次完整构建 run(约 10 分钟),改纯逻辑(行布局/去重)建议同时写 `flutter test` 可跑的纯 Dart 单测随提交验证
+
+[Project Knowledge Summary]
+- Date: 2026-09-10
+- Context: Discovered by Agent while investigating App 视频加载很久且不播放
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 症状「视频(哪怕 1MB)加载半天不播放」根因在 `/file/tg` 代理:播放器(ExoPlayer)总有 Range 头,旧逻辑 `!rng` 才触发懒转存,导致视频永远走 Telegram 实时中转、从不落 R2,叠加 Worker 冷启动即表现为一直加载
+  - 修复思路:ranged 请求也触发懒转存(按 id 去重防并发重复下载);上游忽略 Range 回 200 全量时,自行按请求区间切流回 206(否则播放器把整段当偏移读,moov 解析失败而卡住);上游回 206 则原样透传
+  - 另一处放大器:视频条目常无独立封面,服务端 `thumb_url` 兜底成视频地址,App 端网格/播放器封面会把整段 mp4 当图片再下一次;已用 `MediaItem.posterUrl`(视频且缩略图非图片扩展名时返回空)改占位
+  - 排查入口:`src/api.js handleTgFileRedirect`(代理/懒转存/Range)、`src/public.js decoratePoolRow`(签名直链)、`verify 206/Content-Range` 可用带 Range 的 curl 观察
