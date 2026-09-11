@@ -1,8 +1,6 @@
 /// 素材库 Tab：Telegram 文件库 / 共享库 / 私密库三个子视图。
 library;
 
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -41,6 +39,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   // 多选
   final Set<String> _sel = {};
   bool _acting = false;
+  String _poolFilter = '';
 
   final _scrollCtrl = ScrollController();
   final _searchCtrl = TextEditingController();
@@ -91,6 +90,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             pageSize: _pageSize,
             keyword: _keyword,
             state: 'completed',
+            poolState: _poolFilter,
           );
           if (!mounted || gen != _loadGen) return;
           setState(() {
@@ -195,14 +195,34 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
     }
   }
 
+  String _ingestMsg({
+    required bool private,
+    required int added,
+    required int duplicated,
+    required bool isAsync,
+    required int queued,
+  }) {
+    if (isAsync) {
+      return '已提交 ${queued > 0 ? queued : _sel.length} 张到后端入库${private ? '私密库' : ''}，完成后刷新即可看到';
+    }
+    return '已入库${private ? '私密库' : ''} $added 张${duplicated > 0 ? '，跳过 $duplicated 张已存在' : ''}';
+  }
+
   Future<void> _teleToShared() async {
     if (_sel.isEmpty) return;
     setState(() => _acting = true);
     try {
       final r = await _repo.adminPoolFromTg(widget.adminKey, ids: _selIds);
       if (!mounted) return;
-      final msg = '已入库 ${r.added} 张${r.duplicated > 0 ? '，跳过 ${r.duplicated} 张已存在' : ''}';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_ingestMsg(
+          private: false,
+          added: r.added,
+          duplicated: r.duplicated,
+          isAsync: r.isAsync,
+          queued: r.queued,
+        )),
+      ));
       _sel.clear();
       await _load(reset: true);
     } catch (e) {
@@ -219,8 +239,15 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
     try {
       final r = await _repo.adminPrivatePoolFromTg(widget.adminKey, ids: _selIds);
       if (!mounted) return;
-      final msg = '已入库私密库 ${r.added} 张${r.duplicated > 0 ? '，跳过 ${r.duplicated} 张已存在' : ''}';
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_ingestMsg(
+          private: true,
+          added: r.added,
+          duplicated: r.duplicated,
+          isAsync: r.isAsync,
+          queued: r.queued,
+        )),
+      ));
       _sel.clear();
       await _load(reset: true);
     } catch (e) {
@@ -309,7 +336,15 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             gridMode: _gridMode,
             loading: _loading || _loadingMore,
             scrollController: _scrollCtrl,
-            onTap: (e) {},
+            onTap: (e) {
+              setState(() {
+                if (_sel.contains(e.key)) {
+                  _sel.remove(e.key);
+                } else {
+                  _sel.add(e.key);
+                }
+              });
+            },
             onLongPress: (e) {
               setState(() {
                 if (_sel.contains(e.key)) {
@@ -352,6 +387,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
                 _kind = s.first;
                 _sel.clear();
                 _keyword = '';
+                _poolFilter = '';
                 _searchCtrl.clear();
               });
               _load(reset: true);
@@ -362,6 +398,32 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
           ),
+          if (_kind == _LibKind.tele) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(value: '', label: Text('全部')),
+                  ButtonSegment(value: 'pending', label: Text('未入库')),
+                  ButtonSegment(value: 'imported', label: Text('已入库')),
+                ],
+                selected: {_poolFilter},
+                onSelectionChanged: (s) {
+                  setState(() {
+                    _poolFilter = s.first;
+                    _sel.clear();
+                  });
+                  _load(reset: true);
+                },
+                showSelectedIcon: false,
+                style: const ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
           // 搜索 + 排序 + 视图切换
           Row(

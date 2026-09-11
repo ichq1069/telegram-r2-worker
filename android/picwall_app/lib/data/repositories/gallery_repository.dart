@@ -550,7 +550,7 @@ class GalleryRepository {
     return groups;
   }
 
-  /// files 全量库检索（GET /admin/api/files，支持 type/keyword/state 过滤）。
+  /// files 全量库检索（GET /admin/api/files，支持 type/keyword/state/pool_state 过滤）。
   Future<(int total, List<AdminFileRecord> items)> adminFilesSearch(
     String adminKey, {
     int page = 1,
@@ -558,6 +558,7 @@ class GalleryRepository {
     String keyword = '',
     String type = '',
     String state = '',
+    String poolState = '',
   }) async {
     final resp = await _api.getRaw(
       '/admin/api/files',
@@ -568,6 +569,7 @@ class GalleryRepository {
         if (keyword.trim().isNotEmpty) 'keyword': keyword.trim(),
         if (type.isNotEmpty) 'type': type,
         if (state.isNotEmpty) 'state': state,
+        if (poolState.isNotEmpty) 'pool_state': poolState,
       },
       noKey: true,
     );
@@ -727,14 +729,32 @@ class GalleryRepository {
     }
   }
 
+  static ({int added, int skipped, int duplicated, bool isAsync, int queued})
+      _parsePoolFromTg(Map<String, dynamic> resp, String fallback) {
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? fallback).toString());
+    }
+    final d = resp['data'];
+    return (
+      added: d is Map && d['added'] is num ? (d['added'] as num).toInt() : 0,
+      skipped: d is Map && d['skipped'] is num ? (d['skipped'] as num).toInt() : 0,
+      duplicated: d is Map && d['duplicated'] is num ? (d['duplicated'] as num).toInt() : 0,
+      isAsync: d is Map && d['async'] == 1,
+      queued: d is Map && d['queued'] is num ? (d['queued'] as num).toInt() : 0,
+    );
+  }
+
   /// TG → 共享库（POST /admin/api/pool/from-tg）。
-  Future<({int added, int skipped, int duplicated})> adminPoolFromTg(
+  Future<({int added, int skipped, int duplicated, bool isAsync, int queued})> adminPoolFromTg(
     String adminKey, {
     required List<int> ids,
     List<String>? tags,
     String? level,
   }) async {
-    final body = <String, dynamic>{'ids': ids};
+    final body = <String, dynamic>{
+      'ids': ids,
+      if (ids.length > 8) 'async': 1,
+    };
     if (tags != null) body['tags'] = tags;
     if (level != null) body['level'] = level;
     final resp = await _api.postRaw(
@@ -743,24 +763,19 @@ class GalleryRepository {
       query: _adminQuery(adminKey),
       noKey: true,
     );
-    if (resp['ok'] != true) {
-      throw ApiException((resp['error'] ?? '入库失败').toString());
-    }
-    final d = resp['data'];
-    return (
-      added: d is Map && d['added'] is num ? (d['added'] as num).toInt() : 0,
-      skipped: d is Map && d['skipped'] is num ? (d['skipped'] as num).toInt() : 0,
-      duplicated: d is Map && d['duplicated'] is num ? (d['duplicated'] as num).toInt() : 0,
-    );
+    return _parsePoolFromTg(resp, '入库失败');
   }
 
   /// TG → 私密库（POST /admin/api/private-pool/from-tg）。
-  Future<({int added, int skipped, int duplicated})> adminPrivatePoolFromTg(
+  Future<({int added, int skipped, int duplicated, bool isAsync, int queued})> adminPrivatePoolFromTg(
     String adminKey, {
     required List<int> ids,
     List<String>? tags,
   }) async {
-    final body = <String, dynamic>{'ids': ids};
+    final body = <String, dynamic>{
+      'ids': ids,
+      if (ids.length > 8) 'async': 1,
+    };
     if (tags != null) body['tags'] = tags;
     final resp = await _api.postRaw(
       '/admin/api/private-pool/from-tg',
@@ -768,15 +783,7 @@ class GalleryRepository {
       query: _adminQuery(adminKey),
       noKey: true,
     );
-    if (resp['ok'] != true) {
-      throw ApiException((resp['error'] ?? '入库私密库失败').toString());
-    }
-    final d = resp['data'];
-    return (
-      added: d is Map && d['added'] is num ? (d['added'] as num).toInt() : 0,
-      skipped: d is Map && d['skipped'] is num ? (d['skipped'] as num).toInt() : 0,
-      duplicated: d is Map && d['duplicated'] is num ? (d['duplicated'] as num).toInt() : 0,
-    );
+    return _parsePoolFromTg(resp, '入库私密库失败');
   }
 
   /// 预设标签库（GET /admin/api/tags）。

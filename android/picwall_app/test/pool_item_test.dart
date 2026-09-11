@@ -118,6 +118,18 @@ void main() {
       expect(entry.source, 'tg');
       expect(entry.fileRecord, file);
       expect(entry.poolItem, isNull);
+      expect(entry.imported, isFalse);
+    });
+
+    test('fromFile 识别已入库 pool_state', () {
+      final file = AdminFileRecord.fromJson({
+        'id': 21,
+        'display_url': 'https://b.com/3.jpg',
+        'pool_state': 'imported',
+      });
+      final entry = LibraryEntry.fromFile(file);
+      expect(entry.poolState, 'imported');
+      expect(entry.imported, isTrue);
     });
   });
 }

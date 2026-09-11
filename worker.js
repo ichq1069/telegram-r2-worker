@@ -242,7 +242,7 @@ export default {
     if (m === 'POST' && p === '/admin/api/pool/batch') return isAdmin ? handleAdminPoolBatch(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/pool/batch-delete') return isAdmin ? handleAdminPoolBatchDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/pool/tags') return isAdmin ? handleAdminPoolTags(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/pool/from-tg') return isAdmin ? handleAdminPoolFromTg(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/pool/from-tg') return isAdmin ? handleAdminPoolFromTg(request, env, ctx) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'DELETE' && p === '/admin/api/pool') return isAdmin ? handleAdminPoolDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/pool/move') return isAdmin ? handleAdminPoolMoveToFolder(request, env) : json({ok:false,error:'Unauthorized'},401);
     // 文件夹管理
@@ -252,7 +252,7 @@ export default {
     if (m === 'DELETE' && p.startsWith('/admin/api/folders/')) return isAdmin ? handleAdminFoldersDelete(request, env) : json({ok:false,error:'Unauthorized'},401);
     // 私密库（is_private=1）：私密内容等同 vvip，仅 vvip 密钥可访问，不进入共享库
     if (m === 'GET' && p === '/admin/api/private-pool') return isAdmin ? handleAdminPrivatePoolList(request, env) : json({ok:false,error:'Unauthorized'},401);
-    if (m === 'POST' && p === '/admin/api/private-pool/from-tg') return isAdmin ? handleAdminPrivatePoolFromTg(request, env) : json({ok:false,error:'Unauthorized'},401);
+    if (m === 'POST' && p === '/admin/api/private-pool/from-tg') return isAdmin ? handleAdminPrivatePoolFromTg(request, env, ctx) : json({ok:false,error:'Unauthorized'},401);
     // Postimages API key stored in D1 settings (shared across browsers/devices)
     if (m === 'GET' && p === '/admin/api/settings/pi-key') return isAdmin ? handleAdminGetPiKey(env) : json({ok:false,error:'Unauthorized'},401);
     if (m === 'POST' && p === '/admin/api/settings/pi-key') return isAdmin ? handleAdminSavePiKey(request, env) : json({ok:false,error:'Unauthorized'},401);
