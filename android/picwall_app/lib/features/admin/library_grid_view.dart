@@ -88,7 +88,10 @@ class LibraryGridView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (entries.isEmpty && !loading) {
+    if (entries.isEmpty) {
+      if (loading) {
+        return const Center(child: CircularProgressIndicator());
+      }
       return const Center(child: Text('暂无内容'));
     }
     if (gridMode) {

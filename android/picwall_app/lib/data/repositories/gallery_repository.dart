@@ -601,7 +601,7 @@ class GalleryRepository {
     String keyword = '',
     String tags = '',
     String level = '',
-    String orderBy = 'id',
+    String orderBy = 'created_at',
     String order = 'desc',
     int limit = 50,
     int offset = 0,
@@ -639,6 +639,8 @@ class GalleryRepository {
     String adminKey, {
     String keyword = '',
     String tags = '',
+    String orderBy = 'created_at',
+    String order = 'desc',
     int limit = 50,
     int offset = 0,
   }) async {
@@ -648,6 +650,8 @@ class GalleryRepository {
         ..._adminQuery(adminKey),
         if (keyword.trim().isNotEmpty) 'keyword': keyword.trim(),
         if (tags.isNotEmpty) 'tags': tags,
+        'order_by': orderBy,
+        'order': order,
         'limit': limit,
         'offset': offset,
       },

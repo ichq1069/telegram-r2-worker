@@ -1887,6 +1887,13 @@ export async function handleAdminUsersInteractions(env) {
 }
 
 // ==================== Random pool ====================
+export function poolOrderSql(u) {
+  const colRaw = String(u.searchParams.get('order_by') || 'id').toLowerCase();
+  const col = colRaw === 'created_at' ? 'created_at' : 'id';
+  const dir = String(u.searchParams.get('order') || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  return ' ORDER BY ' + col + ' ' + dir + ', id ' + dir;
+}
+
 export async function handleAdminPoolList(request, env) {
   try {
     const u = new URL(request.url);
@@ -1899,6 +1906,7 @@ export async function handleAdminPoolList(request, env) {
     const folderIdParam = u.searchParams.get('folder_id');
     const limit = clampInt(u.searchParams.get('limit') || '500', 500, 1, 500);
     const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
+    const orderSql = poolOrderSql(u);
     let w = 'WHERE is_private=0'; const p = [];
     if (source) { w += ' AND source=?'; p.push(source); }
     if (enabled === '1' || enabled === '0') { w += ' AND enabled=?'; p.push(parseInt(enabled)); }
@@ -1915,8 +1923,9 @@ export async function handleAdminPoolList(request, env) {
       else if (folderIdParam === '0' || folderIdParam === 'null') { w += ' AND folder_id IS NULL'; }
     }
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
-    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
-    return json({ ok: true, data: d.results || [], total: t?.total || 0 });
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + orderSql + ' LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    const origin = new URL(request.url).origin;
+    return json({ ok: true, data: await decoratePoolList(d.results || [], origin, env), total: t?.total || 0 });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

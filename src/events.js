@@ -3,7 +3,7 @@
 import { json, invalidateStatsCache } from "./util.js";
 import { sanitizeLevel, clampInt, splitTags, cnDayIso, cnNowISO } from "./core.js";
 import { bumpR2Usage, mimeForStorageKey } from "./telegram.js";
-import { appendTagFilter } from "./public.js";
+import { appendTagFilter, decoratePoolList, poolOrderSql } from "./public.js";
 import { dualInsertRandomPool, dualUpdateRandomPool, dualUpdateFiles, dualInsertUserUploads, dualUpdateUserUploads } from "./mysql.js";
 // ==================== 事件 Webhook 通知 ====================
 // 入库/删除/失败时 POST JSON 到外部 URL（settings.webhook_cfg = { url, enabled, events: [] }）
@@ -283,12 +283,14 @@ export async function handleAdminPrivatePoolList(request, env) {
     const tagsParam = u.searchParams.get('tags') || '';
     const limit = clampInt(u.searchParams.get('limit') || '500', 500, 1, 500);
     const offset = clampInt(u.searchParams.get('offset') || '0', 0, 0);
+    const orderSql = poolOrderSql(u);
     let w = 'WHERE is_private=1'; const p = [];
     if (tagsParam) { w = appendTagFilter(tagsParam, w, p); }
     if (kw) { w += ' AND (title LIKE ? OR url LIKE ?)'; p.push('%' + kw + '%', '%' + kw + '%'); }
     const t = await env.D1_DB.prepare('SELECT COUNT(*) as total FROM random_pool ' + w).bind(...p).first();
-    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + ' ORDER BY id DESC LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
-    return json({ ok: true, data: d.results || [], total: t?.total || 0 });
+    const d = await env.D1_DB.prepare('SELECT * FROM random_pool ' + w + orderSql + ' LIMIT ? OFFSET ?').bind(...p, limit, offset).all();
+    const origin = new URL(request.url).origin;
+    return json({ ok: true, data: await decoratePoolList(d.results || [], origin, env), total: t?.total || 0 });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 

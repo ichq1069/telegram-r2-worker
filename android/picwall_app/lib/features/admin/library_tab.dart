@@ -35,6 +35,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   static const _pageSize = 50;
   bool _loading = false;
   bool _loadingMore = false;
+  int _loadGen = 0;
   String _keyword = '';
 
   // 多选
@@ -71,15 +72,16 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   // ─── 数据加载 ──────────────────────────────────────────────────────
 
   Future<void> _load({bool reset = false}) async {
-    if (_loading) return;
+    final gen = reset ? ++_loadGen : _loadGen;
     if (reset) {
       _page = 1;
       _items = [];
       _total = 0;
+      _loadingMore = false;
     }
     setState(() => _loading = true);
     try {
-      final orderBy = _asc ? 'id' : 'id';
+      const orderBy = 'created_at';
       final order = _asc ? 'asc' : 'desc';
       switch (_kind) {
         case _LibKind.tele:
@@ -90,7 +92,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             keyword: _keyword,
             state: 'completed',
           );
-          if (!mounted) return;
+          if (!mounted || gen != _loadGen) return;
           setState(() {
             _total = total;
             _items = [
@@ -108,7 +110,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             limit: _pageSize,
             offset: (_page - 1) * _pageSize,
           );
-          if (!mounted) return;
+          if (!mounted || gen != _loadGen) return;
           setState(() {
             _total = total;
             _items = [..._items, for (final p in poolItems) LibraryEntry.fromPool(p)];
@@ -117,25 +119,27 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
           final (total, poolItems) = await _repo.adminPrivatePoolList(
             widget.adminKey,
             keyword: _keyword,
+            orderBy: orderBy,
+            order: order,
             limit: _pageSize,
             offset: (_page - 1) * _pageSize,
           );
-          if (!mounted) return;
+          if (!mounted || gen != _loadGen) return;
           setState(() {
             _total = total;
             _items = [..._items, for (final p in poolItems) LibraryEntry.fromPool(p)];
           });
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || gen != _loadGen) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && gen == _loadGen) setState(() => _loading = false);
     }
   }
 
   Future<void> _loadMore() async {
-    if (_loadingMore) return;
+    if (_loading || _loadingMore) return;
     setState(() => _loadingMore = true);
     _page++;
     await _load();
@@ -303,7 +307,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
             entries: _items,
             selected: _sel,
             gridMode: _gridMode,
-            loading: _loadingMore,
+            loading: _loading || _loadingMore,
             scrollController: _scrollCtrl,
             onTap: (e) {},
             onLongPress: (e) {
