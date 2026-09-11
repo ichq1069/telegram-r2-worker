@@ -3,11 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
 import '../../services/providers.dart';
+import 'library_tab.dart';
 import 'scrape_tab.dart';
 import 'storage_tab.dart';
 import 'trash_tab.dart';
 
-/// 管理模式壳：承载 统计 / 回收站 / 仓储 三个运维 Tab。
+/// 管理模式壳：承载 统计 / 采集 / 素材库 / 回收站 / 仓储 五个运维 Tab。
 class AdminShellPage extends ConsumerStatefulWidget {
   const AdminShellPage({super.key, required this.adminKey});
 
@@ -39,6 +40,7 @@ class _AdminShellPageState extends ConsumerState<AdminShellPage> {
     final pages = <Widget>[
       StatsTab(adminKey: _key),
       ScrapeTab(adminKey: _key),
+      LibraryTab(adminKey: _key),
       TrashTab(adminKey: _key),
       StorageTab(adminKey: _key),
     ];
@@ -67,6 +69,7 @@ class _AdminShellPageState extends ConsumerState<AdminShellPage> {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.insert_chart_outlined), label: '统计'),
           NavigationDestination(icon: Icon(Icons.auto_awesome_mosaic_outlined), label: '采集'),
+          NavigationDestination(icon: Icon(Icons.library_books_outlined), label: '素材库'),
           NavigationDestination(icon: Icon(Icons.delete_outline), label: '回收站'),
           NavigationDestination(icon: Icon(Icons.storage_outlined), label: '仓储'),
         ],

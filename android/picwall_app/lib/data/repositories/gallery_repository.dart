@@ -4,6 +4,7 @@ import 'package:http_parser/http_parser.dart';
 import '../../services/api_client.dart';
 import '../models/admin_file.dart';
 import '../models/media_item.dart';
+import '../models/pool_item.dart';
 import '../models/user.dart';
 /// 分页结果封装（兼容 gallery/data 的 data.items 与 user/files 的顶层 total）。
 class PagedMedia {
@@ -549,13 +550,14 @@ class GalleryRepository {
     return groups;
   }
 
-  /// files 全量库检索（GET /admin/api/files，支持 type/keyword 过滤）。
+  /// files 全量库检索（GET /admin/api/files，支持 type/keyword/state 过滤）。
   Future<(int total, List<AdminFileRecord> items)> adminFilesSearch(
     String adminKey, {
     int page = 1,
     int pageSize = 40,
     String keyword = '',
     String type = '',
+    String state = '',
   }) async {
     final resp = await _api.getRaw(
       '/admin/api/files',
@@ -565,6 +567,7 @@ class GalleryRepository {
         'page_size': pageSize,
         if (keyword.trim().isNotEmpty) 'keyword': keyword.trim(),
         if (type.isNotEmpty) 'type': type,
+        if (state.isNotEmpty) 'state': state,
       },
       noKey: true,
     );
@@ -587,5 +590,231 @@ class GalleryRepository {
       d is Map && d['total'] is num ? (d['total'] as num).toInt() : items.length,
       items,
     );
+  }
+
+  // ─── 共享库 / 私密库管理 ────────────────────────────────────────────
+
+  /// 共享库/私密库列表（GET /admin/api/pool）。
+  Future<(int total, List<PoolItem> items)> adminPoolList(
+    String adminKey, {
+    int isPrivate = 0,
+    String keyword = '',
+    String tags = '',
+    String level = '',
+    String orderBy = 'id',
+    String order = 'desc',
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final resp = await _api.getRaw(
+      '/admin/api/pool',
+      query: {
+        ..._adminQuery(adminKey),
+        'is_private': isPrivate,
+        if (keyword.trim().isNotEmpty) 'keyword': keyword.trim(),
+        if (tags.isNotEmpty) 'tags': tags,
+        if (level.isNotEmpty) 'level': level,
+        'order_by': orderBy,
+        'order': order,
+        'limit': limit,
+        'offset': offset,
+      },
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '获取列表失败').toString());
+    }
+    final d = resp['data'];
+    final items = <PoolItem>[];
+    if (d is List) {
+      for (final e in d) {
+        if (e is Map) items.add(PoolItem.fromJson(Map<String, dynamic>.from(e)));
+      }
+    }
+    return (resp['total'] is num ? (resp['total'] as num).toInt() : items.length, items);
+  }
+
+  /// 私密库列表（GET /admin/api/private-pool）。
+  Future<(int total, List<PoolItem> items)> adminPrivatePoolList(
+    String adminKey, {
+    String keyword = '',
+    String tags = '',
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final resp = await _api.getRaw(
+      '/admin/api/private-pool',
+      query: {
+        ..._adminQuery(adminKey),
+        if (keyword.trim().isNotEmpty) 'keyword': keyword.trim(),
+        if (tags.isNotEmpty) 'tags': tags,
+        'limit': limit,
+        'offset': offset,
+      },
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '获取私密库失败').toString());
+    }
+    final d = resp['data'];
+    final items = <PoolItem>[];
+    if (d is List) {
+      for (final e in d) {
+        if (e is Map) items.add(PoolItem.fromJson(Map<String, dynamic>.from(e)));
+      }
+    }
+    return (resp['total'] is num ? (resp['total'] as num).toInt() : items.length, items);
+  }
+
+  /// 批量更新 pool 条目（POST /admin/api/pool/batch）。
+  Future<void> adminPoolBatch(
+    String adminKey, {
+    required List<int> ids,
+    String? level,
+    int? enabled,
+    int? isPrivate,
+  }) async {
+    final body = <String, dynamic>{'ids': ids};
+    if (level != null) body['level'] = level;
+    if (enabled != null) body['enabled'] = enabled;
+    if (isPrivate != null) body['is_private'] = isPrivate;
+    final resp = await _api.postRaw(
+      '/admin/api/pool/batch',
+      body: body,
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '批量更新失败').toString());
+    }
+  }
+
+  /// 批量设置 pool 标签（POST /admin/api/pool/tags）。
+  Future<void> adminPoolTags(
+    String adminKey, {
+    required List<int> ids,
+    required List<String> tags,
+    String mode = 'set',
+  }) async {
+    final resp = await _api.postRaw(
+      '/admin/api/pool/tags',
+      body: {'ids': ids, 'tags': tags, 'mode': mode},
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '打标失败').toString());
+    }
+  }
+
+  /// 批量删除 pool 条目（POST /admin/api/pool/batch-delete）。
+  Future<void> adminPoolBatchDelete(
+    String adminKey, {
+    required List<int> ids,
+  }) async {
+    final resp = await _api.postRaw(
+      '/admin/api/pool/batch-delete',
+      body: {'ids': ids},
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '删除失败').toString());
+    }
+  }
+
+  /// TG → 共享库（POST /admin/api/pool/from-tg）。
+  Future<({int added, int skipped, int duplicated})> adminPoolFromTg(
+    String adminKey, {
+    required List<int> ids,
+    List<String>? tags,
+    String? level,
+  }) async {
+    final body = <String, dynamic>{'ids': ids};
+    if (tags != null) body['tags'] = tags;
+    if (level != null) body['level'] = level;
+    final resp = await _api.postRaw(
+      '/admin/api/pool/from-tg',
+      body: body,
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '入库失败').toString());
+    }
+    final d = resp['data'];
+    return (
+      added: d is Map && d['added'] is num ? (d['added'] as num).toInt() : 0,
+      skipped: d is Map && d['skipped'] is num ? (d['skipped'] as num).toInt() : 0,
+      duplicated: d is Map && d['duplicated'] is num ? (d['duplicated'] as num).toInt() : 0,
+    );
+  }
+
+  /// TG → 私密库（POST /admin/api/private-pool/from-tg）。
+  Future<({int added, int skipped, int duplicated})> adminPrivatePoolFromTg(
+    String adminKey, {
+    required List<int> ids,
+    List<String>? tags,
+  }) async {
+    final body = <String, dynamic>{'ids': ids};
+    if (tags != null) body['tags'] = tags;
+    final resp = await _api.postRaw(
+      '/admin/api/private-pool/from-tg',
+      body: body,
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '入库私密库失败').toString());
+    }
+    final d = resp['data'];
+    return (
+      added: d is Map && d['added'] is num ? (d['added'] as num).toInt() : 0,
+      skipped: d is Map && d['skipped'] is num ? (d['skipped'] as num).toInt() : 0,
+      duplicated: d is Map && d['duplicated'] is num ? (d['duplicated'] as num).toInt() : 0,
+    );
+  }
+
+  /// 预设标签库（GET /admin/api/tags）。
+  Future<List<({String tag, int count})>> adminTagsList(String adminKey) async {
+    final resp = await _api.getRaw(
+      '/admin/api/tags',
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '获取标签库失败').toString());
+    }
+    final raw = resp['data'];
+    final items = <({String tag, int count})>[];
+    if (raw is List) {
+      for (final e in raw) {
+        if (e is Map) {
+          items.add((
+            tag: (e['tag'] ?? '').toString(),
+            count: e['count'] is num ? (e['count'] as num).toInt() : 0,
+          ));
+        }
+      }
+    }
+    return items;
+  }
+
+  /// 批量设置文件标签（POST /admin/api/files/tags）。
+  Future<void> adminFilesTags(
+    String adminKey, {
+    required List<int> ids,
+    required List<String> tags,
+    String mode = 'set',
+  }) async {
+    final resp = await _api.postRaw(
+      '/admin/api/files/tags',
+      body: {'ids': ids, 'tags': tags, 'mode': mode},
+      query: _adminQuery(adminKey),
+      noKey: true,
+    );
+    if (resp['ok'] != true) {
+      throw ApiException((resp['error'] ?? '打标失败').toString());
+    }
   }
 }
