@@ -1,0 +1,65 @@
+# 手动/定时清理 Actions Artifacts 与 Cache，立刻回收存储配额
+name: Cleanup Actions Storage
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old artifacts and caches
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, datetime
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+
+          def gh_api(method, path):
+              r = subprocess.run(["gh", "api", "-X", method, path], capture_output=True, text=True)
+              if r.returncode != 0:
+                  print("warn:", method, path, r.stderr.strip()[:300])
+                  return None
+              return r.stdout
+
+          raw = gh_api("GET", f"repos/{repo}/actions/artifacts?per_page=100")
+          if raw:
+              arts = json.loads(raw).get("artifacts") or []
+              arts.sort(key=lambda a: a.get("created_at") or "", reverse=True)
+              kept = {}
+              for a in arts:
+                  name = a.get("name") or ""
+                  kept.setdefault(name, 0)
+                  if kept[name] < 2:
+                      kept[name] += 1
+                      continue
+                  aid = a.get("id")
+                  print(f"delete artifact {name} id={aid} created={a.get('created_at')}")
+                  gh_api("DELETE", f"repos/{repo}/actions/artifacts/{aid}")
+
+          raw = gh_api("GET", f"repos/{repo}/actions/caches?per_page=100")
+          if raw:
+              caches = json.loads(raw).get("actions_caches") or []
+              caches.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+              cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
+              for i, c in enumerate(caches):
+                  created = c.get("created_at") or ""
+                  old = False
+                  try:
+                      ts = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
+                      old = ts < cutoff
+                  except Exception:
+                      old = False
+                  if i >= 3 or old:
+                      cid = c.get("id")
+                      print(f"delete cache id={cid} key={c.get('key')} created={created}")
+                      gh_api("DELETE", f"repos/{repo}/actions/caches/{cid}")
+          PY

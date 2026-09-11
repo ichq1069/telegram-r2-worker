@@ -18,6 +18,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   build:
@@ -337,6 +338,8 @@ jobs:
           name: ${{ steps.build.outputs.apk_name }}
           path: android/picwall_app/${{ steps.build.outputs.apk_path }}
           if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
 
       - name: Publish rolling GitHub Release (artifact backup only)
         if: steps.check.outputs.present == 'true'
@@ -386,4 +389,62 @@ jobs:
           npx --yes wrangler@4.128.0 r2 object put bot-telegram/apk/latest.json \
             --file=latest.json --content-type application/json \
             --cache-control "no-cache" --remote
-          echo "R2 update source updated: v${VERSION}"
+           echo "R2 update source updated: v${VERSION}"
+
+      - name: Prune old Actions artifacts and caches
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          python3 - <<'PY'
+          import json, os, subprocess, datetime
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+
+          def gh_api(method, path, extra=None):
+              cmd = ["gh", "api", "-X", method, path]
+              if extra:
+                  cmd.extend(extra)
+              r = subprocess.run(cmd, capture_output=True, text=True)
+              if r.returncode != 0:
+                  print("warn:", method, path, r.stderr.strip()[:300])
+                  return None
+              return r.stdout
+
+          # Keep the newest 2 artifacts of each name; drop the rest immediately.
+          raw = gh_api("GET", f"repos/{repo}/actions/artifacts?per_page=100")
+          if raw:
+              arts = json.loads(raw).get("artifacts") or []
+              arts.sort(key=lambda a: a.get("created_at") or "", reverse=True)
+              kept = {}
+              for a in arts:
+                  name = a.get("name") or ""
+                  kept.setdefault(name, 0)
+                  if kept[name] < 2:
+                      kept[name] += 1
+                      continue
+                  aid = a.get("id")
+                  print(f"delete artifact {name} id={aid} created={a.get('created_at')}")
+                  gh_api("DELETE", f"repos/{repo}/actions/artifacts/{aid}")
+
+          # Drop caches older than 7 days; keep at most 3 newest overall.
+          raw = gh_api("GET", f"repos/{repo}/actions/caches?per_page=100")
+          if raw:
+              caches = json.loads(raw).get("actions_caches") or []
+              caches.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+              cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
+              for i, c in enumerate(caches):
+                  created = c.get("created_at") or ""
+                  old = False
+                  try:
+                      ts = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
+                      old = ts < cutoff
+                  except Exception:
+                      old = False
+                  if i >= 3 or old:
+                      cid = c.get("id")
+                      print(f"delete cache id={cid} key={c.get('key')} created={created}")
+                      gh_api("DELETE", f"repos/{repo}/actions/caches/{cid}")
+          PY
