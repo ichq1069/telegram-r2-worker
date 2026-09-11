@@ -7,8 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/format.dart';
-import '../../data/models/admin_file.dart';
-import '../../data/models/pool_item.dart';
 import '../../data/repositories/gallery_repository.dart';
 import '../../services/providers.dart';
 import 'level_picker.dart';
@@ -355,7 +353,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
               _load(reset: true);
             },
             showSelectedIcon: false,
-            style: ButtonStyle(
+            style: const ButtonStyle(
               visualDensity: VisualDensity.compact,
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
