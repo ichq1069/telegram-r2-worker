@@ -1,7 +1,7 @@
 name: picwall_app
 description: PicWall / 图墙 — Android client for Telegram R2 Worker library.
 publish_to: 'none'
-version: 0.1.0+1
+version: 0.2.0+1
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
