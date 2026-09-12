@@ -7,6 +7,7 @@ import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../../ui/app_widgets.dart';
+import '../../ui/page_transitions.dart';
 import '../detail/detail_page.dart';
 import '../video/feed_video_autoplay.dart';
 import 'masonry_virtual_grid.dart';
@@ -145,7 +146,7 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
 
   void _openDetail(int index) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      SlideFadePageRoute<void>(
         builder: (_) => DetailPage(
           items: _items,
           initialIndex: index,

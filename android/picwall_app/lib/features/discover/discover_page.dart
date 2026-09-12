@@ -6,6 +6,7 @@ import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
 import '../../services/providers.dart';
 import '../../ui/app_widgets.dart';
+import '../../ui/page_transitions.dart';
 import '../detail/detail_page.dart';
 import '../douyin/douyin_view_page.dart';
 import '../gallery/masonry_virtual_grid.dart';
@@ -72,7 +73,7 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
 
   void _openDetail(int index) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      SlideFadePageRoute<void>(
         builder: (_) => DetailPage(
           items: List.of(_items),
           initialIndex: index,

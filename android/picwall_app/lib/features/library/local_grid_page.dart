@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/local/local_db.dart';
 import '../../services/providers.dart';
+import '../../ui/page_transitions.dart';
 import '../detail/detail_page.dart';
 import '../gallery/masonry_virtual_grid.dart';
 import '../gallery/media_thumb.dart';
@@ -113,7 +114,7 @@ class _LocalGridPageState extends ConsumerState<LocalGridPage> {
   void _openDetail(int index) {
     final items = _entries.map((e) => e.item).toList();
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      SlideFadePageRoute<void>(
         builder: (_) => DetailPage(items: items, initialIndex: index),
       ),
     );

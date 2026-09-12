@@ -5,6 +5,7 @@ import '../../data/models/media_item.dart';
 import '../../data/repositories/gallery_repository.dart';
 import '../../services/api_client.dart';
 import '../../services/providers.dart';
+import '../../ui/page_transitions.dart';
 import '../detail/detail_page.dart';
 import '../gallery/masonry_virtual_grid.dart';
 import '../gallery/media_thumb.dart';
@@ -265,7 +266,7 @@ class _MyFilesPageState extends ConsumerState<MyFilesPage> {
 
   void _openDetail(int index) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      SlideFadePageRoute<void>(
         builder: (_) => DetailPage(items: List.of(_items), initialIndex: index),
       ),
     );
