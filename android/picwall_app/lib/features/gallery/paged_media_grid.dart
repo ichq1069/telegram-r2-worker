@@ -146,7 +146,11 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
   void _openDetail(int index) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => DetailPage(items: _items, initialIndex: index),
+        builder: (_) => DetailPage(
+          items: _items,
+          initialIndex: index,
+          heroTagPrefix: 'gallery',
+        ),
       ),
     );
   }
@@ -166,7 +170,7 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
 
   Widget _body(BuildContext context) {
     if (_loading) {
-      return const AppLoadingIndicator();
+      return const AppSkeletonGrid();
     }
     if (_hasError) {
       return AppErrorState(
@@ -201,6 +205,7 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
           autoplay: _feed,
           autoplayIndex: i,
           baseUrl: ref.read(settingsControllerProvider).settings.apiBase,
+          heroTag: 'gallery_${_items[i].key}',
         ),
       ),
     );

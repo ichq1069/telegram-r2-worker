@@ -101,6 +101,109 @@ class AppEmptyState extends StatelessWidget {
   }
 }
 
+/// 瀑布流骨架屏：模拟双列网格的加载态，带渐变闪烁动画。
+class AppSkeletonGrid extends StatefulWidget {
+  const AppSkeletonGrid({super.key, this.itemCount = 8});
+
+  final int itemCount;
+
+  @override
+  State<AppSkeletonGrid> createState() => _AppSkeletonGridState();
+}
+
+class _AppSkeletonGridState extends State<AppSkeletonGrid>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final baseColor = scheme.surfaceContainerHighest.withValues(alpha: 0.5);
+    final highlightColor = scheme.surfaceContainerHighest.withValues(alpha: 0.2);
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, _) {
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final w = constraints.maxWidth;
+            final gap = 10.0;
+            final cellW = (w - 10 * 2 - gap) / 2;
+            // 交错宽高比，模拟真实瀑布流
+            final aspects = [0.75, 1.0, 0.65, 0.85, 0.9, 0.7, 1.1, 0.8];
+            return SingleChildScrollView(
+              padding: const EdgeInsets.all(10),
+              child: Wrap(
+                spacing: gap,
+                runSpacing: gap,
+                children: [
+                  for (var i = 0; i < widget.itemCount; i++)
+                    SizedBox(
+                      width: cellW,
+                      child: _SkeletonItem(
+                        aspectRatio: aspects[i % aspects.length],
+                        baseColor: baseColor,
+                        highlightColor: highlightColor,
+                        progress: _ctrl.value,
+                      ),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _SkeletonItem extends StatelessWidget {
+  const _SkeletonItem({
+    required this.aspectRatio,
+    required this.baseColor,
+    required this.highlightColor,
+    required this.progress,
+  });
+
+  final double aspectRatio;
+  final Color baseColor;
+  final Color highlightColor;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    // 闪烁渐变位置随 progress 移动
+    final shimmerX = -1.0 + progress * 3.0;
+    return AspectRatio(
+      aspectRatio: aspectRatio,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            begin: Alignment(shimmerX, 0),
+            end: Alignment(shimmerX + 1, 0),
+            colors: [baseColor, highlightColor, baseColor],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 统一错误状态
 class AppErrorState extends StatelessWidget {
   const AppErrorState({

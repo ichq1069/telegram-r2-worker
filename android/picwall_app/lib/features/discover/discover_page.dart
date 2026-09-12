@@ -73,7 +73,11 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
   void _openDetail(int index) {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => DetailPage(items: List.of(_items), initialIndex: index),
+        builder: (_) => DetailPage(
+          items: List.of(_items),
+          initialIndex: index,
+          heroTagPrefix: 'discover',
+        ),
       ),
     );
   }
@@ -206,6 +210,7 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
           autoplay: _feed,
           autoplayIndex: i,
           baseUrl: _base,
+          heroTag: 'discover_${_items[i].key}',
         ),
       ),
     );

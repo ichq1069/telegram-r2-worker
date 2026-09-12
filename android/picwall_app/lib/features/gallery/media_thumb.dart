@@ -1,5 +1,6 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/constants.dart';
 import '../../data/models/media_item.dart';
@@ -26,14 +27,18 @@ class MediaThumb extends StatefulWidget {
     super.key,
     required this.item,
     this.onTap,
+    this.onLongPress,
     this.showBadge = true,
     this.autoplay,
     this.autoplayIndex,
     this.baseUrl = '',
+    this.enableAnimation = true,
+    this.heroTag,
   });
 
   final MediaItem item;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final bool showBadge;
 
   /// 列表自动播放仲裁器；为 null 时保持纯缩略图行为。
@@ -45,14 +50,27 @@ class MediaThumb extends StatefulWidget {
   /// 直链补全根地址（服务端可能返回 /file/... 相对路径）。
   final String baseUrl;
 
+  /// 是否启用入场动画（staggered fade-in + slide-up）。
+  final bool enableAnimation;
+
+  /// Hero 共享元素 tag；为 null 时不启用 Hero 过渡。
+  final String? heroTag;
+
   @override
   State<MediaThumb> createState() => _MediaThumbState();
 }
 
-class _MediaThumbState extends State<MediaThumb> {
+class _MediaThumbState extends State<MediaThumb>
+    with SingleTickerProviderStateMixin {
   FeedVideoAutoplay? _feed;
   int? _slot;
   bool _active = false;
+  bool _pressed = false;
+
+  // 入场动画
+  late final AnimationController _animCtrl;
+  late final Animation<double> _fadeAnim;
+  late final Animation<Offset> _slideAnim;
 
   bool get _wanted =>
       widget.autoplay != null &&
@@ -62,6 +80,28 @@ class _MediaThumbState extends State<MediaThumb> {
   @override
   void initState() {
     super.initState();
+    if (widget.enableAnimation) {
+      _animCtrl = AnimationController(
+        vsync: this,
+        duration: const Duration(milliseconds: 400),
+      );
+      _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOut);
+      _slideAnim = Tween<Offset>(
+        begin: const Offset(0, 0.08),
+        end: Offset.zero,
+      ).animate(CurvedAnimation(parent: _animCtrl, curve: Curves.easeOutCubic));
+      // 延迟启动，制造 staggered 效果
+      Future.delayed(
+        Duration(milliseconds: (widget.autoplayIndex ?? 0) % 10 * 40),
+        () {
+          if (mounted) _animCtrl.forward();
+        },
+      );
+    } else {
+      _animCtrl = AnimationController(vsync: this, value: 1);
+      _fadeAnim = const AlwaysStoppedAnimation(1.0);
+      _slideAnim = Tween<Offset>(end: Offset.zero).animate(_animCtrl);
+    }
     if (_wanted) _register();
   }
 
@@ -79,6 +119,7 @@ class _MediaThumbState extends State<MediaThumb> {
   @override
   void dispose() {
     _unregister();
+    _animCtrl.dispose();
     super.dispose();
   }
 
@@ -168,40 +209,66 @@ class _MediaThumbState extends State<MediaThumb> {
       );
     }
 
-    return GestureDetector(
+    Widget card = GestureDetector(
       onTap: widget.onTap,
+      onTapDown: (_) => setState(() => _pressed = true),
+      onTapUp: (_) => setState(() => _pressed = false),
+      onTapCancel: () => setState(() => _pressed = false),
+      onLongPress: widget.onLongPress ?? () {
+        HapticFeedback.mediumImpact();
+        widget.onTap?.call();
+      },
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: AspectRatio(
           aspectRatio: ratio,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              content,
-              if (widget.showBadge)
-                Positioned(
-                  left: 6,
-                  top: 6,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (widget.item.level != UserLevel.pt)
-                        _Badge(
-                          text: widget.item.level.label,
-                          color: widget.item.level == UserLevel.vvip
-                              ? const Color(0xFFE91E63)
-                              : const Color(0xFF7C4DFF),
-                        ),
-                      if (widget.item.isPrivate) ...[
-                        const SizedBox(width: 4),
-                        const _Badge(text: '私密', color: Color(0xFF37474F)),
+          child: AnimatedScale(
+            scale: _pressed ? 0.96 : 1.0,
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.easeOutCubic,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                content,
+                if (widget.showBadge)
+                  Positioned(
+                    left: 6,
+                    top: 6,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (widget.item.level != UserLevel.pt)
+                          _Badge(
+                            text: widget.item.level.label,
+                            color: widget.item.level == UserLevel.vvip
+                                ? const Color(0xFFE91E63)
+                                : const Color(0xFF7C4DFF),
+                          ),
+                        if (widget.item.isPrivate) ...[
+                          const SizedBox(width: 4),
+                          const _Badge(text: '私密', color: Color(0xFF37474F)),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
+      ),
+    );
+
+    // Hero 过渡
+    if (widget.heroTag != null) {
+      card = Hero(tag: widget.heroTag!, child: card);
+    }
+
+    // 入场动画
+    return FadeTransition(
+      opacity: _fadeAnim,
+      child: SlideTransition(
+        position: _slideAnim,
+        child: card,
       ),
     );
   }

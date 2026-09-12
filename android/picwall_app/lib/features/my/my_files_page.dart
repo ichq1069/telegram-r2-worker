@@ -382,16 +382,14 @@ class _MyFilesPageState extends ConsumerState<MyFilesPage> {
                   ),
                 )
               : null,
-          buildCell: (context, i, cellW) => GestureDetector(
-            onLongPress: () => _onItemLongPress(_items[i]),
-            child: MediaThumb(
+          buildCell: (context, i, cellW) => MediaThumb(
               item: _items[i],
               onTap: () => _openDetail(i),
+              onLongPress: () => _onItemLongPress(_items[i]),
               autoplay: _feed,
               autoplayIndex: i,
               baseUrl: _base,
             ),
-          ),
         ),
       ),
     );

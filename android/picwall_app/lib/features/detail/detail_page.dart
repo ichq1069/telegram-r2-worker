@@ -14,10 +14,14 @@ class DetailPage extends ConsumerStatefulWidget {
     super.key,
     required this.items,
     this.initialIndex = 0,
+    this.heroTagPrefix,
   });
 
   final List<MediaItem> items;
   final int initialIndex;
+
+  /// Hero tag 前缀（与列表页 MediaThumb 的 heroTag 对应）。
+  final String? heroTagPrefix;
 
   @override
   ConsumerState<DetailPage> createState() => _DetailPageState();
@@ -70,10 +74,14 @@ class _DetailPageState extends ConsumerState<DetailPage>
             onPageChanged: _onPage,
             itemBuilder: (context, i) {
               final item = widget.items[i];
+              final heroTag = widget.heroTagPrefix != null
+                  ? '${widget.heroTagPrefix}_${item.key}'
+                  : null;
               return _MediaViewer(
                 item: item,
                 apiBase: apiBase,
                 active: i == _index,
+                heroTag: heroTag,
               );
             },
           ),
@@ -170,6 +178,7 @@ class _MediaViewer extends StatelessWidget {
     required this.item,
     required this.apiBase,
     required this.active,
+    this.heroTag,
   });
 
   final MediaItem item;
@@ -178,13 +187,16 @@ class _MediaViewer extends StatelessWidget {
   /// 是否为 PageView 当前页：仅当前页的视频原生自动播放，邻页保持封面。
   final bool active;
 
+  final String? heroTag;
+
   @override
   Widget build(BuildContext context) {
     // 服务端可能返回相对路径（如 /file/tg/…），补齐 scheme/host 后展示/播放。
     final thumb = absUrl(apiBase, item.displayThumb);
     final poster = absUrl(apiBase, item.posterUrl);
     final videoUrl = absUrl(apiBase, item.url);
-    return Container(
+
+    Widget viewer = Container(
       color: Colors.black,
       alignment: Alignment.center,
       child: item.isVideo
@@ -216,6 +228,12 @@ class _MediaViewer extends StatelessWidget {
               ),
             ),
     );
+
+    if (heroTag != null) {
+      viewer = Hero(tag: heroTag!, child: viewer);
+    }
+
+    return viewer;
   }
 }
 

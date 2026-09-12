@@ -203,16 +203,14 @@ class _LocalGridPageState extends ConsumerState<LocalGridPage> {
           controller: _scroll,
           itemCount: _entries.length,
           itemAspect: (i) => mediaItemAspectRatio(_entries[i].item),
-          buildCell: (context, i, cellW) => GestureDetector(
-            onLongPress: () => _removeWithConfirm(i),
-            child: MediaThumb(
+          buildCell: (context, i, cellW) => MediaThumb(
               item: _entries[i].item,
               onTap: () => _openDetail(i),
+              onLongPress: () => _removeWithConfirm(i),
               autoplay: _feed,
               autoplayIndex: i,
               baseUrl: _base,
             ),
-          ),
         ),
       ),
     );
