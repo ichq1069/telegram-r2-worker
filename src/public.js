@@ -2588,6 +2588,10 @@ export async function handleAdminScrapeAnalyze(request, env) {
       } catch (e) { return json({ ok: false, error: '页面抓取失败：' + e.message }, 502); }
       title = directImage ? raw : (String((html.match(/<title[^>]*>([^<]*)<\/title>/i) || [null, ''])[1]).trim().slice(0, 200) || raw);
       rawUrls = directImage ? [raw] : extractPageImages(html, raw);
+      // 小红书 SPA：图片在 __INITIAL_STATE__ JSON 中，extractPageImages 无法提取；尝试从 JSON 解析
+      if (!rawUrls.length && /xiaohongshu\.com|xhslink\.cn/i.test(raw)) {
+        rawUrls = extractXhsImages(html);
+      }
     }
     // 解析阶段过滤：链接携带的内容命中忽略关键词/格式、或未命中必带白名单时，直接不再返回该候选
     const kept = [];
@@ -2613,6 +2617,36 @@ export async function handleAdminScrapeAnalyze(request, env) {
     }
     return json({ ok: true, data: { url: raw, title: title, count: kept.length, total: rawUrls.length, filtered: ignoredN, images: kept } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// 小红书 SPA 页面图片提取：从 __INITIAL_STATE__ JSON 中解析 noteCard cover URL
+function extractXhsImages(html) {
+  const out = [];
+  try {
+    const m = String(html).match(/__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*<\/script>/);
+    if (!m) return out;
+    let raw = m[1].replace(/undefined/g, 'null');
+    const data = JSON.parse(raw);
+    const seen = new Set();
+    const visit = function(obj) {
+      if (!obj || typeof obj !== 'object') return;
+      if (Array.isArray(obj)) { obj.forEach(visit); return; }
+      // noteCard.cover
+      if (obj.noteCard) {
+        const card = obj.noteCard;
+        const cover = card.cover || {};
+        const urls = [cover.urlDefault, cover.urlPre, cover.url].filter(Boolean);
+        (cover.infoList || []).forEach(function(it) { if (it.url) urls.push(it.url); });
+        urls.forEach(function(u) {
+          const decoded = String(u).replace(/\\u002F/g, '/');
+          if (!seen.has(decoded)) { seen.add(decoded); out.push(decoded); }
+        });
+      }
+      Object.values(obj).forEach(visit);
+    };
+    visit(data);
+  } catch (e) {}
+  return out;
 }
 
 // 抓取图片的入库文件名：标题（优先）+ 原文件名主干 + 扩展名，便于在群里/列表按标题辨识
