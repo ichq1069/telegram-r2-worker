@@ -2567,6 +2567,7 @@ export async function handleAdminScrapeAnalyze(request, env) {
       title = tiebaWap.title;
       rawUrls = tiebaWap.urls;
     } else {
+      const isXhsLink = /xhslink\.cn/i.test(raw);
       try {
         const fh = {
           'User-Agent': BROWSER_UA,
@@ -2575,7 +2576,12 @@ export async function handleAdminScrapeAnalyze(request, env) {
         };
         if (cookie) fh['Cookie'] = cookie;
         try { fh['Referer'] = new URL(raw).origin + '/'; } catch (e) {}
-        const res = await fetch(raw, { headers: fh, redirect: 'follow' });
+        let res = await fetch(raw, { headers: fh, redirect: 'follow' });
+        // xhslink.cn 短链需要手机 UA 才能解析重定向；桌面 UA 返回 404 时自动重试
+        if (isXhsLink && !res.ok) {
+          const mh = Object.assign({}, fh, { 'User-Agent': TIEBA_WAP_UA });
+          res = await fetch(raw, { headers: mh, redirect: 'follow' });
+        }
         if (!res.ok) return json({ ok: false, error: '页面抓取失败（HTTP ' + res.status + '）' }, 502);
         const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
         if (ct.indexOf('image/') === 0) {
@@ -2619,7 +2625,8 @@ export async function handleAdminScrapeAnalyze(request, env) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
-// 小红书 SPA 页面图片提取：从 __INITIAL_STATE__ JSON 中解析 noteCard cover URL
+// 小红书 SPA 页面图片提取：从 __INITIAL_STATE__ JSON 中解析图片 URL
+// 支持两种格式：① explore 页 noteCard.cover ② 笔记详情 noteData.data.noteData.imageList
 function extractXhsImages(html) {
   const out = [];
   try {
@@ -2628,20 +2635,35 @@ function extractXhsImages(html) {
     let raw = m[1].replace(/undefined/g, 'null');
     const data = JSON.parse(raw);
     const seen = new Set();
-    const visit = function(obj) {
-      if (!obj || typeof obj !== 'object') return;
-      if (Array.isArray(obj)) { obj.forEach(visit); return; }
-      // noteCard.cover
-      if (obj.noteCard) {
-        const card = obj.noteCard;
-        const cover = card.cover || {};
-        const urls = [cover.urlDefault, cover.urlPre, cover.url].filter(Boolean);
-        (cover.infoList || []).forEach(function(it) { if (it.url) urls.push(it.url); });
-        urls.forEach(function(u) {
-          const decoded = String(u).replace(/\\u002F/g, '/');
-          if (!seen.has(decoded)) { seen.add(decoded); out.push(decoded); }
-        });
-      }
+    const addUrl = function(u) {
+      const decoded = String(u).replace(/\\u002F/g, '/');
+      if (decoded && !seen.has(decoded)) { seen.add(decoded); out.push(decoded); }
+    };
+    // 1) 笔记详情页：noteData.data.noteData.imageList[].url
+    const inner = (data.noteData || {}).data || {};
+    const noteData = inner.noteData || {};
+    const imageList = noteData.imageList || [];
+    imageList.forEach(function(img) {
+      if (img && img.url) addUrl(img.url);
+      if (img && img.urlSizeLarge) addUrl(img.urlSizeLarge);
+    });
+    // 2) explore 页 / 通用递归：noteCard.cover
+    if (!out.length) {
+      const visit = function(obj) {
+        if (!obj || typeof obj !== 'object') return;
+        if (Array.isArray(obj)) { obj.forEach(visit); return; }
+        if (obj.noteCard) {
+          const cover = (obj.noteCard.cover || {});
+          [cover.urlDefault, cover.urlPre, cover.url].filter(Boolean).forEach(addUrl);
+          (cover.infoList || []).forEach(function(it) { if (it.url) addUrl(it.url); });
+        }
+        Object.values(obj).forEach(visit);
+      };
+      visit(data);
+    }
+  } catch (e) {}
+  return out;
+}
       Object.values(obj).forEach(visit);
     };
     visit(data);
