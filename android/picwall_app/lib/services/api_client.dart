@@ -198,7 +198,7 @@ ApiException normalizeError(Object e) {
         if (status == 401) return ApiException('未授权或密钥已失效，请重新登录');
         if (status == 429) return ApiException('请求过于频繁，请稍后再试');
         if (status != null && status >= 500) {
-          return ApiException('服务器错误（$status）');
+          return ApiException(msg ?? '服务器错误（$status）');
         }
         return ApiException(msg ?? '请求失败（$status）');
       case DioExceptionType.cancel:

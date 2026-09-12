@@ -9,6 +9,7 @@ import '../../core/link_extract.dart';
 import '../../data/local/local_db.dart';
 import '../../data/models/admin_file.dart';
 import '../../data/models/scrape_job.dart';
+import '../../services/api_client.dart';
 import '../../services/debug_service.dart';
 import '../../services/providers.dart';
 import '../../services/scrape_lock.dart';
@@ -218,17 +219,34 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
     }
   }
 
+  void _enterDirect(List<String> urls, {String title = ''}) {
+    setState(() {
+      _pageTitle = title;
+      _total = urls.length;
+      _filtered = 0;
+      _cands = [for (final u in urls) _ScrapeCandidate(u)];
+      _inputError = null;
+      _stage = 1;
+    });
+  }
+
   Future<void> _analyze() async {
     final raw = _urlCtrl.text.trim();
-    final extracted = extractFirstUrl(raw);
-    final url = extracted.isNotEmpty ? extracted : raw;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      setState(() => _inputError = '请输入 http(s) 链接');
+    final all = extractAllUrls(raw);
+    if (all.isEmpty) {
+      setState(() => _inputError = '未识别到 http(s) 链接，可粘贴网页地址或分享文案');
       return;
     }
-    // 直接粘贴了分享文案：回填提取出的链接，便于核对。
-    if (extracted.isNotEmpty && extracted != raw) {
-      _urlCtrl.text = extracted;
+    final imgOnes = all.where(isDirectImageUrl).toList();
+    if (imgOnes.isNotEmpty && imgOnes.length == all.length) {
+      _enterDirect(imgOnes, title: '直链 ${imgOnes.length} 张');
+      return;
+    }
+    final url = all.length == 1
+        ? all.first
+        : all.firstWhere((u) => !isDirectImageUrl(u), orElse: () => all.first);
+    if (url != raw) {
+      _urlCtrl.text = url;
     }
     setState(() {
       _analyzing = true;
@@ -252,19 +270,35 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
           if (s.isNotEmpty) list.add(s);
         }
       }
+      final total =
+          d['total'] is num ? (d['total'] as num).toInt() : list.length;
+      final filtered =
+          d['filtered'] is num ? (d['filtered'] as num).toInt() : 0;
       setState(() {
         _pageTitle = (d['title'] ?? '').toString();
-        _total = d['total'] is num ? (d['total'] as num).toInt() : list.length;
-        _filtered = d['filtered'] is num ? (d['filtered'] as num).toInt() : 0;
+        _total = total;
+        _filtered = filtered;
         _cands = [for (final u in list) _ScrapeCandidate(u)];
         if (_titleCtrl.text.trim().isEmpty && _pageTitle.isNotEmpty) {
           _titleCtrl.text = _pageTitle;
         }
-        _stage = list.isEmpty ? 0 : 1;
+        if (list.isEmpty) {
+          _stage = 0;
+          if (filtered > 0) {
+            _inputError =
+                '解析完成：提取 $total 张，全部被规则过滤（$filtered 张）。请放宽忽略关键词/必带内容/格式后重试';
+          } else {
+            _inputError =
+                '页面未提取到图片。站点可能是动态加载或反爬，可改贴图片直链（每行一条）';
+          }
+        } else {
+          _inputError = null;
+          _stage = 1;
+        }
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _inputError = e.toString());
+      setState(() => _inputError = normalizeError(e).toString());
     } finally {
       if (mounted) setState(() => _analyzing = false);
     }
@@ -445,8 +479,9 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
           showSelectedIcon: false,
         ),
         const SizedBox(height: 10),
-        _field(_urlCtrl, '网页链接', 'https://…（文章/相册/帖子页，可直接粘贴分享文案）',
+        _field(_urlCtrl, '网页链接', '粘贴网页地址、分享文案，或多条图片直链（每行一条）',
             keyboard: TextInputType.url,
+            multiLine: true,
             suffix: IconButton(
               tooltip: '粘贴并提取链接',
               icon: const Icon(Icons.content_paste),
@@ -690,7 +725,7 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
       child: TextField(
         controller: ctrl,
         keyboardType: keyboard,
-        maxLines: multiLine ? 3 : 1,
+        maxLines: multiLine ? 6 : 1,
         style: mono
             ? const TextStyle(fontFamily: 'monospace', fontSize: 12)
             : null,

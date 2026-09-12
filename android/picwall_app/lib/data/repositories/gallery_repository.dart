@@ -435,25 +435,29 @@ class GalleryRepository {
     String ignoreExt = '',
     String must = '',
   }) async {
-    final resp = await _api.postRaw(
-      '/admin/api/scrape/analyze',
-      body: {
-        'url': url,
-        'cookie': cookie,
-        'ignore_kw': ignoreKw,
-        'ignore_ext': ignoreExt,
-        'must': must,
-      },
-      query: _adminQuery(adminKey),
-      noKey: true,
-      long: true,
-    );
-    if (resp['ok'] != true) {
-      throw ApiException((resp['error'] ?? '解析失败').toString());
+    try {
+      final resp = await _api.postRaw(
+        '/admin/api/scrape/analyze',
+        body: {
+          'url': url,
+          'cookie': cookie,
+          'ignore_kw': ignoreKw,
+          'ignore_ext': ignoreExt,
+          'must': must,
+        },
+        query: _adminQuery(adminKey),
+        noKey: true,
+        long: true,
+      );
+      if (resp['ok'] != true) {
+        throw ApiException((resp['error'] ?? '解析失败').toString());
+      }
+      final d = resp['data'];
+      if (d is Map) return Map<String, dynamic>.from(d);
+      throw ApiException('服务器返回结构异常');
+    } catch (e) {
+      throw normalizeError(e);
     }
-    final d = resp['data'];
-    if (d is Map) return Map<String, dynamic>.from(d);
-    throw ApiException('服务器返回结构异常');
   }
 
   /// 单张抓取入库（POST /admin/api/scrape/grab_one）。

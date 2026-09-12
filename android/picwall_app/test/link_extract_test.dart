@@ -39,5 +39,33 @@ void main() {
         'https://a.com/1',
       );
     });
+
+    test('换行后的链接也能提取', () {
+      const text = '来看这篇笔记\nhttps://xhslink.com/a/abc\n复制后打开【小红书】';
+      expect(extractFirstUrl(text), 'https://xhslink.com/a/abc');
+    });
+  });
+
+  group('extractAllUrls', () {
+    test('提取全部去重链接', () {
+      expect(
+        extractAllUrls(
+            'https://a.com/1.jpg\nhttps://a.com/2.png 以及 https://a.com/1.jpg'),
+        ['https://a.com/1.jpg', 'https://a.com/2.png'],
+      );
+    });
+
+    test('无链接返回空列表', () {
+      expect(extractAllUrls('没有链接'), isEmpty);
+    });
+  });
+
+  group('isDirectImageUrl', () {
+    test('识别常见图片扩展名', () {
+      expect(isDirectImageUrl('https://cdn.example/a.jpg'), isTrue);
+      expect(isDirectImageUrl('https://cdn.example/a.PNG?x=1'), isTrue);
+      expect(isDirectImageUrl('https://xhslink.cn/o/abc'), isFalse);
+      expect(isDirectImageUrl('https://example.com/p/123'), isFalse);
+    });
   });
 }

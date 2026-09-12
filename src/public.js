@@ -2568,8 +2568,13 @@ export async function handleAdminScrapeAnalyze(request, env) {
       rawUrls = tiebaWap.urls;
     } else {
       try {
-        const fh = { 'User-Agent': cookie ? BROWSER_UA : TG_UA };
+        const fh = {
+          'User-Agent': BROWSER_UA,
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8'
+        };
         if (cookie) fh['Cookie'] = cookie;
+        try { fh['Referer'] = new URL(raw).origin + '/'; } catch (e) {}
         const res = await fetch(raw, { headers: fh, redirect: 'follow' });
         if (!res.ok) return json({ ok: false, error: '页面抓取失败（HTTP ' + res.status + '）' }, 502);
         const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
