@@ -2664,12 +2664,6 @@ function extractXhsImages(html) {
   } catch (e) {}
   return out;
 }
-      Object.values(obj).forEach(visit);
-    };
-    visit(data);
-  } catch (e) {}
-  return out;
-}
 
 // 抓取图片的入库文件名：标题（优先）+ 原文件名主干 + 扩展名，便于在群里/列表按标题辨识
 function scrapeImageName(url, mimeExt, title) {
