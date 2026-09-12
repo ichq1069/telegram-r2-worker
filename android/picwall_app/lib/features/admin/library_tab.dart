@@ -1,6 +1,8 @@
 /// 素材库 Tab：Telegram 文件库 / 共享库 / 私密库三个子视图。
 library;
 
+import 'dart:collection';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -36,8 +38,8 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   int _loadGen = 0;
   String _keyword = '';
 
-  // 多选
-  final Set<String> _sel = {};
+  // 多选（LinkedHashSet 保持选中顺序）
+  final Set<String> _sel = LinkedHashSet<String>();
   bool _acting = false;
   String _poolFilter = '';
 
@@ -333,6 +335,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
           child: LibraryGridView(
             entries: _items,
             selected: _sel,
+            selectedOrder: _sel.toList(),
             gridMode: _gridMode,
             loading: _loading || _loadingMore,
             scrollController: _scrollCtrl,
@@ -477,34 +480,152 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   }
 
   Widget _buildActionBar() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      color: Theme.of(context).colorScheme.primaryContainer,
-      child: Row(
-        children: [
-          Text('已选 ${fmtCount(_sel.length)}',
-              style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer)),
-          const SizedBox(width: 8),
-          TextButton(onPressed: _acting ? null : _batchTag, child: const Text('标签')),
-          if (_kind != _LibKind.tele) ...[
-            TextButton(onPressed: _acting ? null : _batchLevel, child: const Text('分级')),
-            if (_kind == _LibKind.shared)
-              TextButton(onPressed: _acting ? null : _moveToPrivate, child: const Text('转私密')),
-            if (_kind == _LibKind.private)
-              TextButton(onPressed: _acting ? null : _moveToShared, child: const Text('转共享')),
-            TextButton(onPressed: _acting ? null : _batchDelete,
-                child: Text('删除', style: TextStyle(color: Theme.of(context).colorScheme.error))),
-          ],
-          if (_kind == _LibKind.tele) ...[
-            TextButton(onPressed: _acting ? null : _teleToShared, child: const Text('入库共享')),
-            TextButton(onPressed: _acting ? null : _teleToPrivate, child: const Text('入库私密')),
-          ],
-          const Spacer(),
-          TextButton(
-            onPressed: () => setState(() => _sel.clear()),
-            child: const Text('取消'),
+    final cs = Theme.of(context).colorScheme;
+    return Material(
+      elevation: 4,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        color: cs.primaryContainer,
+        child: SafeArea(
+          top: false,
+          child: Row(
+            children: [
+              // 选中计数 badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: cs.primary,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${_sel.length}',
+                  style: TextStyle(
+                    color: cs.onPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              // 操作按钮
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      _ActionChip(
+                        icon: Icons.label_outline,
+                        label: '标签',
+                        onPressed: _acting ? null : _batchTag,
+                      ),
+                      if (_kind != _LibKind.tele) ...[
+                        const SizedBox(width: 6),
+                        _ActionChip(
+                          icon: Icons.stars_outlined,
+                          label: '分级',
+                          onPressed: _acting ? null : _batchLevel,
+                        ),
+                        if (_kind == _LibKind.shared) ...[
+                          const SizedBox(width: 6),
+                          _ActionChip(
+                            icon: Icons.lock_outline,
+                            label: '转私密',
+                            onPressed: _acting ? null : _moveToPrivate,
+                          ),
+                        ],
+                        if (_kind == _LibKind.private) ...[
+                          const SizedBox(width: 6),
+                          _ActionChip(
+                            icon: Icons.lock_open_outlined,
+                            label: '转共享',
+                            onPressed: _acting ? null : _moveToShared,
+                          ),
+                        ],
+                        const SizedBox(width: 6),
+                        _ActionChip(
+                          icon: Icons.delete_outline,
+                          label: '删除',
+                          color: cs.error,
+                          onPressed: _acting ? null : _batchDelete,
+                        ),
+                      ],
+                      if (_kind == _LibKind.tele) ...[
+                        const SizedBox(width: 6),
+                        _ActionChip(
+                          icon: Icons.move_to_inbox,
+                          label: '入库共享',
+                          onPressed: _acting ? null : _teleToShared,
+                        ),
+                        const SizedBox(width: 6),
+                        _ActionChip(
+                          icon: Icons.lock,
+                          label: '入库私密',
+                          onPressed: _acting ? null : _teleToPrivate,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              // 取消按钮
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                onPressed: () => setState(() => _sel.clear()),
+                tooltip: '取消选择',
+              ),
+            ],
           ),
-        ],
+        ),
+      ),
+    );
+  }
+}
+
+/// ActionBar 中的操作按钮
+class _ActionChip extends StatelessWidget {
+  const _ActionChip({
+    required this.icon,
+    required this.label,
+    this.color,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color? color;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final effectiveColor = color ?? cs.onPrimaryContainer;
+    final isDisabled = onPressed == null;
+    return InkWell(
+      onTap: onPressed,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isDisabled
+              ? cs.surfaceContainerHighest.withValues(alpha: 0.3)
+              : cs.onPrimaryContainer.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: isDisabled ? cs.outline : effectiveColor),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: isDisabled ? cs.outline : effectiveColor,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

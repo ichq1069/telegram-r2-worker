@@ -72,6 +72,7 @@ class LibraryGridView extends StatefulWidget {
     super.key,
     required this.entries,
     required this.selected,
+    this.selectedOrder = const [],
     required this.gridMode,
     this.loading = false,
     this.onTap,
@@ -82,6 +83,7 @@ class LibraryGridView extends StatefulWidget {
 
   final List<LibraryEntry> entries;
   final Set<String> selected;
+  final List<String> selectedOrder;
   final bool gridMode;
   final bool loading;
   final void Function(LibraryEntry)? onTap;
@@ -177,6 +179,7 @@ class _LibraryGridViewState extends State<LibraryGridView> {
         }
         final e = widget.entries[i];
         final sel = widget.selected.contains(e.key);
+        final selIdx = sel ? widget.selectedOrder.indexOf(e.key) + 1 : 0;
         return GestureDetector(
           onTap: () => widget.onTap?.call(e),
           onLongPressStart: (d) => _onLongPressStart(d, e, i),
@@ -212,11 +215,29 @@ class _LibraryGridViewState extends State<LibraryGridView> {
                   right: 4,
                   top: 4,
                   child: IgnorePointer(
-                    child: Icon(
-                      sel ? Icons.check_circle : Icons.circle_outlined,
-                      size: 22,
-                      color: sel ? theme.colorScheme.primary : Colors.white70,
-                    ),
+                    child: sel
+                        ? Container(
+                            width: 22,
+                            height: 22,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary,
+                              shape: BoxShape.circle,
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              '$selIdx',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                          )
+                        : Icon(
+                            Icons.circle_outlined,
+                            size: 22,
+                            color: Colors.white70,
+                          ),
                   ),
                 ),
               if (e.level != 'pt')
@@ -270,13 +291,32 @@ class _LibraryGridViewState extends State<LibraryGridView> {
         }
         final e = widget.entries[i];
         final sel = widget.selected.contains(e.key);
+        final selIdx = sel ? widget.selectedOrder.indexOf(e.key) + 1 : 0;
         return ListTile(
           leading: selecting
               ? IgnorePointer(
-                  child: Icon(
-                    sel ? Icons.check_circle : Icons.circle_outlined,
-                    color: sel ? theme.colorScheme.primary : theme.colorScheme.outline,
-                  ),
+                  child: sel
+                      ? Container(
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                          alignment: Alignment.center,
+                          child: Text(
+                            '$selIdx',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                        )
+                      : Icon(
+                          Icons.circle_outlined,
+                          color: theme.colorScheme.outline,
+                        ),
                 )
               : SizedBox(
                   width: 40,
