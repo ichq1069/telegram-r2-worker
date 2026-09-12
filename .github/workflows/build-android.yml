@@ -370,11 +370,6 @@ jobs:
           VERSION=$(sed -n 's/^version: //p' android/picwall_app/pubspec.yaml | tr -d ' \r')
           APK=android/picwall_app/build/app/outputs/flutter-apk/app-release.apk
 
-          # 固定文件名，避免版本号里 '+' 等字符在 URL/缓存上的麻烦
-          npx --yes wrangler@4.128.0 r2 object put bot-telegram/apk/picwall-latest.apk \
-            --file="$APK" --content-type application/vnd.android.package-archive \
-            --cache-control "no-cache" --remote
-
           python3 - "$VERSION" <<'PY'
           import json, sys, os, datetime
           ver = sys.argv[1]
@@ -386,10 +381,27 @@ jobs:
           open("latest.json", "w").write(json.dumps(manifest, ensure_ascii=False))
           PY
 
-          npx --yes wrangler@4.128.0 r2 object put bot-telegram/apk/latest.json \
-            --file=latest.json --content-type application/json \
-            --cache-control "no-cache" --remote
-           echo "R2 update source updated: v${VERSION}"
+          r2_put() {
+            local key="$1" file="$2" ctype="$3"
+            local i=1
+            while [ "$i" -le 5 ]; do
+              echo "R2 put ${key} attempt ${i}/5"
+              if npx --yes wrangler@4.128.0 r2 object put "$key" \
+                --file="$file" --content-type "$ctype" \
+                --cache-control "no-cache" --remote; then
+                return 0
+              fi
+              echo "R2 put ${key} failed, retry in $((i * 8))s"
+              sleep $((i * 8))
+              i=$((i + 1))
+            done
+            echo "R2 put ${key} failed after 5 attempts"
+            return 1
+          }
+
+          r2_put bot-telegram/apk/picwall-latest.apk "$APK" application/vnd.android.package-archive
+          r2_put bot-telegram/apk/latest.json latest.json application/json
+          echo "R2 update source updated: v${VERSION}"
 
       - name: Prune old Actions artifacts and caches
         if: always()
