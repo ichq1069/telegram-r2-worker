@@ -1541,9 +1541,12 @@ function api(method, path, body, timeoutMs) {
   }
   return fetch(url, opts).then(function(r) {
     if (r.status === 401) {
-      toast("API Key 无效，请重新登录", 0);
-      localStorage.removeItem("ak");
-      setTimeout(function() { location.reload(); }, 1500);
+      var onLogin = LS.style.display !== "none";
+      if (!onLogin) {
+        toast("API Key 无效，请重新登录", 0);
+        localStorage.removeItem("ak");
+        setTimeout(function() { location.reload(); }, 1500);
+      }
       return { ok: false, error: "Unauthorized" };
     }
     return r.json();
