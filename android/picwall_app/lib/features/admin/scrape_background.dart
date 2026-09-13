@@ -176,8 +176,9 @@ class ScrapeService {
       var added = snap.items.where((i) => i.status == 'added').length;
       await _notify(_title, '待入库 ${pending.length} 张，共 $total 张');
 
-      // 并发池：同时处理 poolSize 张，加速入库
-      const poolSize = 5;
+      // 并发池：同时处理 poolSize 张，加速入库。
+      // 服务端 Worker 内存上限 256MB，并发过高会导致 isolate OOM（HTTP 500），保持 3。
+      const poolSize = 3;
       var idx = 0;
       while (idx < pending.length) {
         if (await db.scrapeStopRequested()) break;

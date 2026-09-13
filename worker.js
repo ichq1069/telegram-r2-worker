@@ -39,6 +39,7 @@ import { handleAppInstall, handleAppHeartbeat, handleAppStats, handleAppInstalls
 
 export default {
   async fetch(request, env, ctx) {
+    try {
     if (request.method === 'OPTIONS') return cors(null, 204);
     // Ensure tables exist (only once per isolate, avoiding per-request D1 overhead)
     if (env.D1_DB) { try { await ensureTablesOnce(env.D1_DB); } catch (e) {} }
@@ -441,6 +442,11 @@ export default {
     if (m === 'GET' && p === '/api/bot-info') return handleBotGetMeApi(env);
 
     return json({ ok: false, error: 'Not Found' }, 404);
+    } catch (e) {
+      // 兜底：把未捕获异常转成 JSON（否则 Cloudflare 返回非 JSON 的 HTML 500，前端只能显示“服务响应异常”）
+      try { console.error('unhandled fetch error:', e && e.message); } catch (e2) {}
+      return json({ ok: false, error: 'Unhandled: ' + ((e && e.message) || String(e)) }, 500);
+    }
   },
 
   // Queue consumer: handles file processing in background (up to 15 min)

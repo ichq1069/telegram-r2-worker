@@ -149,7 +149,7 @@ a.link { color: #00d4ff; text-decoration: none; }
       <button class="btn ghost" id="scSelNone">全不选</button>
       <button class="btn ghost" id="scSelSmall" title="只勾选前 20 张">只选前 20 张</button>
       <button class="btn ghost" id="scCopyUrls" title="复制已选图片地址到剪贴板（一行一个）">复制图片地址</button>
-      <span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#8a8aa8">并发 <input type="number" id="scConc" value="5" min="1" max="10" style="width:48px;background:#0f1020;color:#e8e8f8;border:1px solid #3a3c5a;border-radius:6px;padding:4px 6px;font-size:12px;text-align:center" title="同时上传张数（1-10），越大越快但可能触发限流"> 张</span>
+      <span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#8a8aa8">并发 <input type="number" id="scConc" value="3" min="1" max="4" style="width:48px;background:#0f1020;color:#e8e8f8;border:1px solid #3a3c5a;border-radius:6px;padding:4px 6px;font-size:12px;text-align:center" title="同时上传张数（1-4）。服务端内存上限 256MB，过高会触发 500，建议保持 3"> 张</span>
       <button class="btn primary" id="scGrabBtn" disabled title="vvip 级别将直传并自动进入私密库">直传选中（vvip 自动入私密库）</button>
       <button class="btn ghost" id="scResumeBtn" style="display:none" title="继续处理上次未完成的图片">续传剩余 <span id="scResumeN">0</span> 张</button>
       <button class="btn ghost" id="scAbandonBtn" style="display:none" title="放弃上次未完成的批量任务，重新开始">放弃旧任务</button>
@@ -1050,8 +1050,8 @@ async function runLoop() {
   run.paused = false;
   setBusyUI(true);
   updateProg();
-  var BATCH = parseInt(document.getElementById('scConc').value, 10) || 5;
-  if (BATCH < 1) BATCH = 1; if (BATCH > 10) BATCH = 10;
+  var BATCH = parseInt(document.getElementById('scConc').value, 10) || 3;
+  if (BATCH < 1) BATCH = 1; if (BATCH > 4) BATCH = 4;
   while (run.running && !run.paused) {
     var batch = [];
     for (var i = 0; i < job.items.length && batch.length < BATCH; i++) { if (job.items[i].st === 'pend') batch.push(job.items[i]); }
