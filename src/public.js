@@ -3888,3 +3888,25 @@ export async function handleAdminScrapeRuleGroupsSave(request, env) {
     return json({ ok: true, data: { groups: groups } });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
+
+// GET /admin/api/scrape/relay-health → { ok, relay: null|{url,status,msg,latencyMs} }
+export async function handleAdminScrapeRelayHealth(env) {
+  const relayUrl = env.RELAY_URL;
+  if (!relayUrl) {
+    return json({ ok: true, relay: null, msg: '未配置中转服务器' });
+  }
+  try {
+    const t0 = Date.now();
+    const hUrl = relayUrl.replace(/\/$/, '') + '/relay/health';
+    const headers = {};
+    if (env.RELAY_KEY) headers['Authorization'] = 'Bearer ' + env.RELAY_KEY;
+    const resp = await fetch(hUrl, { method: 'GET', headers: headers, signal: AbortSignal.timeout(8000) });
+    const ms = Date.now() - t0;
+    const j = await resp.json().catch(() => null);
+    if (!j || !j.ok) return json({ ok: true, relay: { url: relayUrl, status: 'unhealthy', msg: j ? (j.error || '健康检查失败') : '响应非JSON', latencyMs: ms } });
+    return json({ ok: true, relay: { url: relayUrl, status: 'healthy', msg: '正常', latencyMs: ms, detail: j } });
+  } catch (e) {
+    return json({ ok: true, relay: { url: relayUrl, status: 'error', msg: e.message, latencyMs: 0 } });
+  }
+}
+}
