@@ -855,7 +855,7 @@ function updateResumeBtn() {
   ab.style.display = (!run.running && pendN > 0) ? '' : 'none';
 }
 function rowClsOf(it) {
-  if (it.busy) return { ico: '<span class="loading"></span>', cls: '', why: '下载发送中…' };
+  if (it.busy) return { ico: '<span class="loading"></span>', cls: '', why: it.msg || '处理中…' };
   var st = normSt(it.st);
   if (st === 'ok') return { ico: '✓', cls: 'ok', why: it.reason || '#' + (it.id || '') };
   if (st === 'exists') return { ico: '↺', cls: 'skip', why: it.reason || '已存在' };
@@ -879,9 +879,15 @@ function renderResultRows() {
   renderFailOps();
 }
 function batchSummaryHtml() {
-  var c = { ok: 0, exists: 0, ignored: 0, failed: 0 };
-  job.items.forEach(function(i) { var s = normSt(i.st); if (c[s] != null) c[s]++; });
+  var c = { ok: 0, exists: 0, ignored: 0, failed: 0, direct: 0, proxy: 0 };
+  job.items.forEach(function(i) {
+    var s = normSt(i.st); if (c[s] != null) c[s]++;
+    if (s === 'ok' && i.reason && i.reason.indexOf('白名单直传') >= 0) c.direct++;
+    else if (s === 'ok' && i.reason && i.reason.indexOf('Worker代理') >= 0) c.proxy++;
+  });
   var parts = ['<b>' + c.ok + '</b> 成功'];
+  if (c.direct) parts.push('<span class="ok">' + c.direct + '</span> 直传');
+  if (c.proxy) parts.push('<span class="ok">' + c.proxy + '</span> 代理');
   if (c.exists) parts.push('<span class="skip">' + c.exists + '</span> 已存在');
   if (c.ignored) parts.push('<span class="skip">' + c.ignored + '</span> 忽略');
   if (c.failed) parts.push('<span class="fail">' + c.failed + '</span> 失败');
@@ -997,7 +1003,7 @@ function updateProg() {
     sumEl.style.display = 'block';
     sumEl.innerHTML = batchSummaryHtml();
     var sts = document.getElementById('scGrabStatus');
-    if (sts) { sts.className = 'status ' + (c.failed ? 'err' : 'ok'); sts.textContent = '直传结束：成功 ' + c.ok + ' 张' + (c.failed ? '，失败 ' + c.failed + ' 张' : '') + '。图片已作为照片/文档发送到上传群并写入 Tele 库。'; }
+    if (sts) { sts.className = 'status ' + (c.failed ? 'err' : 'ok'); sts.textContent = '直传结束：成功 ' + c.ok + ' 张' + (c.failed ? '，失败 ' + c.failed + ' 张' : '') + '。图片已发送到上传群并写入 Tele 库。'; }
   } else if (!run.running && !run.paused) {
     sumEl.style.display = 'none';
   }
@@ -1016,6 +1022,7 @@ function setBusyUI(on) {
 }
 async function processOne(it) {
   it.busy = true;
+  it.msg = '发送中…';
   renderResultRows();
   updateProg();
   var ctl = new AbortController();
@@ -1029,7 +1036,13 @@ async function processOne(it) {
     if (!d.ok || !d.data) { it.st = 'failed'; it.reason = (d && d.error) || '服务端异常'; }
     else {
       it.st = normSt(d.data.status) || 'failed';
-      it.reason = d.data.reason || '';
+      // 成功时追加直传/代理标识
+      if (it.st === 'ok') {
+        var mode = d.data.direct ? '白名单直传' : 'Worker代理';
+        it.reason = (d.data.reason || '#' + (d.data.id || '')) + ' [' + mode + ']';
+      } else {
+        it.reason = d.data.reason || '';
+      }
       it.id = d.data.id;
       if (it.st === 'failed' && !it.reason) it.reason = '未知错误';
     }
@@ -1040,6 +1053,7 @@ async function processOne(it) {
     clearTimeout(timer);
     if (run.ctl === ctl) run.ctl = null;
     it.busy = false;
+    it.msg = '';
   }
   renderResultRows();
   persistJob();
