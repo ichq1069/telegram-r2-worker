@@ -69,6 +69,19 @@ class SyncService {
     );
     if (_inited) return;
     _inited = true;
+    // Android 13+ 需要运行时请求通知权限，前台服务才能正常显示通知
+    try {
+      final notifPerm = await FlutterForegroundTask.checkNotificationPermission();
+      if (notifPerm != NotificationPermission.granted) {
+        await FlutterForegroundTask.requestNotificationPermission();
+      }
+    } catch (_) {}
+    // Android 12+ 前台服务启动限制，需要电池优化白名单
+    try {
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+    } catch (_) {}
     await Workmanager().initialize(syncWorkDispatcher);
   }
 

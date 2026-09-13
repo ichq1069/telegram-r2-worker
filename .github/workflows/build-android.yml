@@ -72,6 +72,7 @@ jobs:
               '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n'
               '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>\n'
               '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\n'
+              '    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>\n'
           )
           if 'READ_MEDIA_IMAGES' not in s:
               s = re.sub(r'(<application\b)', perms + r'\1', s, count=1)
