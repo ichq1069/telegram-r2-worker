@@ -2937,11 +2937,12 @@ export async function handleAdminScrapeGrabOne(request, env) {
       try { const seg = decodeURIComponent(new URL(url).pathname.split('/').pop() || ''); ext = seg.indexOf('.') >= 0 ? seg.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g, '') : ''; } catch (e) {}
       if (ext && ignoreExts.indexOf(ext) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '已忽略格式 .' + ext } });
       const dcookie = String(b.cookie || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
-      // i.postimg.cc 直链多为压缩展示图：自动解析详情页升级为 ?dl=1 原图（失败则回退原链）
-      const fetchUrl = await resolvePostimgOriginal(url);
+      // 先判断是否直链白名单：直链跳过 resolvePostimgOriginal（省 1-3s），非直链正常解析 postimg 原图
+      const isDirect = isDirectDownloadUrl(url);
 
       // ── 直链白名单路径：Worker 不下载，直接传 URL 给 Telegram（省内存、避 OOM） ──
-      if (isDirectDownloadUrl(fetchUrl)) {
+      if (isDirect) {
+        const fetchUrl = url;
         const PHOTO_MAX = 10 * 1024 * 1024;
         // HEAD 取元数据（content-type / content-size），失败则跳过校验让 Telegram 自行判断
         let ct = '', cl = 0, ctExt = '';
@@ -2989,6 +2990,8 @@ export async function handleAdminScrapeGrabOne(request, env) {
       }
 
       // ── Worker 代理路径：下载 → 上传到 Telegram（防盗链站点、直传失败回退） ──
+      // i.postimg.cc 直链多为压缩展示图：自动解析详情页升级为 ?dl=1 原图（失败则回退原链）
+      const fetchUrl = await resolvePostimgOriginal(url);
       // 多级请求头重试：带原 Referer / 图床 Hint / 浏览器 UA 逐档尝试，规避小红书等 403
       const dl = await fetchImageWithFallbacks(fetchUrl, referer, dcookie);
       const res = dl.res;
