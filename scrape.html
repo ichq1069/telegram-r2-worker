@@ -1064,14 +1064,28 @@ async function runLoop() {
   run.paused = false;
   setBusyUI(true);
   updateProg();
-  var BATCH = parseInt(document.getElementById('scConc').value, 10) || 3;
-  if (BATCH < 1) BATCH = 1; if (BATCH > 4) BATCH = 4;
-  while (run.running && !run.paused) {
-    var batch = [];
-    for (var i = 0; i < job.items.length && batch.length < BATCH; i++) { if (job.items[i].st === 'pend') batch.push(job.items[i]); }
-    if (!batch.length) break;
-    await Promise.all(batch.map(function(it) { return processOne(it); }));
+  var POOL = parseInt(document.getElementById('scConc').value, 10) || 3;
+  if (POOL < 1) POOL = 1; if (POOL > 4) POOL = 4;
+  // 并发池：始终保持 POOL 个在跑，一完成就替补下一个
+  var active = 0;
+  var nextResolve = null;
+  function dec() { active--; if (nextResolve) { var r = nextResolve; nextResolve = null; r(); } }
+  function waitSlot() {
+    if (active < POOL) return Promise.resolve();
+    return new Promise(function(r) { nextResolve = r; });
   }
+  while (run.running && !run.paused) {
+    // 找下一个 pend 项
+    var it = null;
+    for (var i = 0; i < job.items.length; i++) { if (job.items[i].st === 'pend') { it = job.items[i]; break; } }
+    if (!it) break;
+    await waitSlot();
+    if (!run.running || run.paused) break;
+    active++;
+    processOne(it).then(dec, dec);
+  }
+  // 等待所有活跃任务完成
+  while (active > 0) { await new Promise(function(r) { nextResolve = r; }); }
   run.running = false;
   if (pendCount() > 0) run.paused = true;
   else run.paused = false;
