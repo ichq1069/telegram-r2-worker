@@ -6,7 +6,6 @@ import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/format.dart';
 import '../../data/repositories/gallery_repository.dart';
 import '../../services/providers.dart';
 import 'level_picker.dart';
@@ -39,6 +38,7 @@ class _LibraryTabState extends ConsumerState<LibraryTab> {
   String _keyword = '';
 
   // 多选（LinkedHashSet 保持选中顺序）
+  // ignore: prefer_collection_literals
   final Set<String> _sel = LinkedHashSet<String>();
   bool _acting = false;
   String _poolFilter = '';

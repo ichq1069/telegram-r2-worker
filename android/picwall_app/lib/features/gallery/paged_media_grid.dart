@@ -206,7 +206,7 @@ class _PagedMediaGridState extends ConsumerState<PagedMediaGrid> {
           autoplay: _feed,
           autoplayIndex: i,
           baseUrl: ref.read(settingsControllerProvider).settings.apiBase,
-          heroTag: 'gallery_${_items[i].key}',
+          heroTag: 'gallery_${_items[i].id}',
         ),
       ),
     );

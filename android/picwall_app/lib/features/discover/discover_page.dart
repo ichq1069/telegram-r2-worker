@@ -211,7 +211,7 @@ class _DiscoverPageState extends ConsumerState<DiscoverPage> {
           autoplay: _feed,
           autoplayIndex: i,
           baseUrl: _base,
-          heroTag: 'discover_${_items[i].key}',
+          heroTag: 'discover_${_items[i].id}',
         ),
       ),
     );

@@ -233,7 +233,7 @@ class _LibraryGridViewState extends State<LibraryGridView> {
                               ),
                             ),
                           )
-                        : Icon(
+                        : const Icon(
                             Icons.circle_outlined,
                             size: 22,
                             color: Colors.white70,

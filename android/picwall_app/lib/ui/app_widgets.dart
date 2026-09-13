@@ -141,7 +141,7 @@ class _AppSkeletonGridState extends State<AppSkeletonGrid>
         return LayoutBuilder(
           builder: (context, constraints) {
             final w = constraints.maxWidth;
-            final gap = 10.0;
+            const gap = 10.0;
             final cellW = (w - 10 * 2 - gap) / 2;
             // 交错宽高比，模拟真实瀑布流
             final aspects = [0.75, 1.0, 0.65, 0.85, 0.9, 0.7, 1.1, 0.8];

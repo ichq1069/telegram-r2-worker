@@ -75,7 +75,7 @@ class _DetailPageState extends ConsumerState<DetailPage>
             itemBuilder: (context, i) {
               final item = widget.items[i];
               final heroTag = widget.heroTagPrefix != null
-                  ? '${widget.heroTagPrefix}_${item.key}'
+                  ? '${widget.heroTagPrefix}_${item.id}'
                   : null;
               return _MediaViewer(
                 item: item,
