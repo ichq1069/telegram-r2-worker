@@ -2830,8 +2830,19 @@ export async function handleAdminScrapeGrab(request, env) {
     const results = [];
     let added = 0;
     let ignored = 0;
-    async function processUrl(url) {
-      const row = { url: url, ok: false, ignored: false, error: '' };
+    // 先做服务端去重：批量查所有 URL 的 original_url，过滤掉已存在的
+    const dupIds = {};
+    if (env.D1_DB && urls.length > 0) {
+      try {
+        const placeholders = urls.map(function() { return '?'; }).join(',');
+        const dupRows = await env.D1_DB.prepare('SELECT original_url, id FROM files WHERE original_url IN (' + placeholders + ')').bind(...urls).all();
+        (dupRows.results || []).forEach(function(r) { dupIds[r.original_url] = r.id; });
+      } catch (e) {}
+    }
+    async function processUrl(url, seq) {
+      const row = { url: url, ok: false, ignored: false, error: '', status: 'pend', id: null, direct: isDirectDownloadUrl(url) };
+      // 已在库里 → exists
+      if (dupIds[url]) { row.status = 'exists'; row.id = dupIds[url]; row.ignored = true; row.error = '已存在（files #' + dupIds[url] + '）'; return row; }
       try {
         const low = url.toLowerCase();
         let ignoreReason = '';
@@ -2848,34 +2859,62 @@ export async function handleAdminScrapeGrab(request, env) {
           for (const kw of mustKws) { if (low.indexOf(kw) >= 0) { hit = true; break; } }
           if (!hit) ignoreReason = '链接不含必带内容';
         }
-        if (ignoreReason) { row.ignored = true; row.error = ignoreReason; return row; }
+        if (ignoreReason) { row.ignored = true; row.error = ignoreReason; row.status = 'ignored'; return row; }
+        // 优先走中转服务器
+        const relayResult = await grabViaRelay(env, { url: url, caption: b.caption || title, asPhoto: true, referer: referer });
+        if (relayResult && relayResult.ok) {
+          const now = cnNowISO();
+          const sent = relayResult;
+          const name = scrapeImageName(url, MIME_EXT[sent.ct] || '', title);
+          const r2 = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at, page_url, original_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?, ?, ?)')
+            .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(name).slice(0, 255), sent.fileSize || 0, sent.fileType, sent.ct || 'image/jpeg', String(title || '').slice(0, 200), tags, level, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now, referer, url).run();
+          const dbId = r2.meta.last_row_id;
+          await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind('/file/tg/' + dbId, dbId).run();
+          row.ok = true; row.id = dbId; row.status = 'added'; row.private = !!isPrivate;
+          added++;
+          return row;
+        }
+        // 直链白名单：直接传 URL 给 Telegram
+        if (isDirectDownloadUrl(url)) {
+          const sent = await tgSendUrlToGroup(env, groupId, url, b.caption || title || undefined, true);
+          if (!sent.ok) { row.error = sent.error || '直传失败'; row.status = 'failed'; return row; }
+          const now = cnNowISO();
+          const r2 = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at, page_url, original_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?, ?, ?)')
+            .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(scrapeImageName(url, '', title)).slice(0, 255), sent.fileSize || 0, sent.fileType || 'photo', sent.ct || 'image/jpeg', String(title || '').slice(0, 200), tags, level, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now, referer, url).run();
+          const dbId = r2.meta.last_row_id;
+          await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind('/file/tg/' + dbId, dbId).run();
+          row.ok = true; row.id = dbId; row.status = 'added'; row.direct = true; row.private = !!isPrivate;
+          added++;
+          return row;
+        }
+        // 兜底：Worker 代理下载 + 上传
         const dl = await fetchImageWithFallbacks(url, referer, '');
         const res = dl.res;
-        if (!res.ok) { row.error = '下载失败（HTTP ' + res.status + '）'; return row; }
+        if (!res.ok) { row.error = '下载失败（HTTP ' + res.status + '）'; row.status = 'failed'; return row; }
         const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
         const cl = parseInt(res.headers.get('content-length') || '0', 10);
-        if (cl > maxBytes) { row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; return row; }
+        if (cl > maxBytes) { row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; row.status = 'ignored'; return row; }
         const ctExt = MIME_EXT[ct] || '';
-        if (!/^image\//.test(ct)) { row.ignored = true; row.error = '非图片格式（' + (ct || '未知') + '）'; return row; }
-        if (ignoreExts.indexOf(ctExt) >= 0) { row.ignored = true; row.error = '已忽略格式 .' + (ctExt || ct); return row; }
+        if (!/^image\//.test(ct)) { row.ignored = true; row.error = '非图片格式（' + (ct || '未知') + '）'; row.status = 'ignored'; return row; }
+        if (ignoreExts.indexOf(ctExt) >= 0) { row.ignored = true; row.error = '已忽略格式 .' + (ctExt || ct); row.status = 'ignored'; return row; }
         const buf = await res.arrayBuffer();
-        if (!buf || !buf.byteLength) { row.error = '空响应'; return row; }
-        if (buf.byteLength > maxBytes) { row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; return row; }
+        if (!buf || !buf.byteLength) { row.error = '空响应'; row.status = 'failed'; return row; }
+        if (buf.byteLength > maxBytes) { row.ignored = true; row.error = '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB'; row.status = 'ignored'; return row; }
         const bytes = new Uint8Array(buf);
-        const name = scrapeImageName(url, MIME_EXT[ct] || '', title);
-        const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer || '', originalUrl: url });
-        if (!res2.ok) { row.error = res2.error; }
-        else { row.ok = true; row.id = res2.id; row.proxy_url = res2.url; row.file_id = res2.fileId; row.private = !!isPrivate; }
-      } catch (e) { row.error = e.message; }
+        const name = scrapeImageName(url, ctExt || '', title);
+        const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: b.caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer, originalUrl: url });
+        if (!res2.ok) { row.error = res2.error; row.status = 'failed'; }
+        else { row.ok = true; row.id = res2.id; row.status = 'added'; row.private = !!isPrivate; added++; }
+      } catch (e) { row.error = e.message; row.status = 'failed'; }
       return row;
     }
-    // 并行批次处理：每批 5 张，显著提速
-    const BATCH = 5;
+    // 并发批次处理：每批 SCRAPE_CONCURRENCY 张，显著提速
+    const BATCH = SCRAPE_CONCURRENCY;
     for (let i = 0; i < urls.length; i += BATCH) {
       const batch = urls.slice(i, i + BATCH);
-      const batchResults = await Promise.allSettled(batch.map(function(u) { return processUrl(u); }));
+      const batchResults = await Promise.allSettled(batch.map(function(u, idx) { return processUrl(u, i + idx + 1); }));
       for (const r of batchResults) {
-        const row = r.status === 'fulfilled' ? r.value : { url: '', ok: false, ignored: false, error: r.reason && r.reason.message || '异常' };
+        const row = r.status === 'fulfilled' ? r.value : { url: '', ok: false, ignored: false, error: r.reason && r.reason.message || '异常', status: 'failed' };
         results.push(row);
         if (row.ok) added++; else if (row.ignored) ignored++;
       }

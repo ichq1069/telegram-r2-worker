@@ -1037,80 +1037,105 @@ function setBusyUI(on) {
   document.getElementById('scGrabBtn').disabled = on || selectedUrls().length === 0;
 }
 async function processOne(it) {
-  it.busy = true;
-  it.msg = '发送中…';
-  renderResultRows();
-  updateProg();
-  var ctl = new AbortController();
-  run.ctl = ctl;
-  var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 240000);
-  var body = { url: it.u, title: job.title, tags: job.tags, level: job.level, ref: job.pageUrl, ignore_kw: job.kw, ignore_ext: job.ext, max_mb: job.mb, must: job.must || '', seq: it.seq || 0 };
-  var gc = cookieForGrab(it.u, job.pageUrl, ckVal());
-  if (gc) body.cookie = gc;
-  try {
-    var d = await api('POST', '/admin/api/scrape/grab_one', body, 0, ctl.signal);
-    if (!d.ok || !d.data) { it.st = 'failed'; it.reason = (d && d.error) || '服务端异常'; }
-    else {
-      it.st = normSt(d.data.status) || 'failed';
-      if (it.st === 'ok') {
-        var mode = d.data.direct ? '白名单直传' : 'Worker代理';
-        it.reason = (d.data.reason || '#' + (d.data.id || '')) + ' [' + mode + ']';
-      } else if (it.st === 'exists') {
-        var mode2 = d.data.direct ? '白名单直传' : 'Worker代理';
-        it.reason = (d.data.reason || '#files ' + (d.data.id || '')) + ' [' + mode2 + ']';
-      } else {
-        it.reason = d.data.reason || '';
-      }
-      it.id = d.data.id;
-      if (it.st === 'failed' && !it.reason) it.reason = '未知错误';
-    }
-  } catch (e) {
-    if (run.paused) { it.st = 'pend'; it.reason = '已中断，可续传'; }
-    else { it.st = 'failed'; it.reason = (e && e.name === 'AbortError') ? '请求超时（单张超过 4 分钟）' : ((e && e.message) || '请求异常'); }
-  } finally {
-    clearTimeout(timer);
-    if (run.ctl === ctl) run.ctl = null;
-    it.busy = false;
-    it.msg = '';
-  }
-  renderResultRows();
-  persistJob();
-  updateProg();
+  // 批量模式：不再逐个请求，由 beginBatch 统一提交
+  // 此函数保留用于兼容，实际走 runBatch
 }
-async function runLoop() {
+async function runBatch() {
   run.running = true;
   run.paused = false;
   setBusyUI(true);
   updateProg();
-  var POOL = parseInt(document.getElementById('scConc').value, 10) || 3;
-  if (POOL < 1) POOL = 1; if (POOL > 4) POOL = 4;
-  // 并发池：始终保持 POOL 个在跑，一完成就替补下一个
-  var active = 0;
-  var nextResolve = null;
-  function dec() { active--; if (nextResolve) { var r = nextResolve; nextResolve = null; r(); } }
-  function waitSlot() {
-    if (active < POOL) return Promise.resolve();
-    return new Promise(function(r) { nextResolve = r; });
+  var urls = selectedUrls();
+  if (!urls.length) { setStatus('scGrabStatus', '未勾选任何图片', 0); return; }
+  // 构建批量请求体
+  var body = {
+    urls: urls.map(function(u, i) { return { url: u, seq: i + 1 }; }),
+    title: job ? job.title : document.getElementById('scTitle').value.trim(),
+    tags: job ? job.tags : document.getElementById('scTags').value.trim(),
+    level: job ? job.level : document.getElementById('scLevel').value,
+    is_private: (job ? job.level : document.getElementById('scLevel').value) === 'vvip',
+    ref: job ? job.pageUrl : document.getElementById('scUrl').value.trim(),
+    ignore_kw: job ? job.kw : document.getElementById('scIgKw').value.trim(),
+    ignore_ext: job ? job.ext : document.getElementById('scIgExt').value.trim(),
+    max_mb: job ? job.mb : (parseInt(document.getElementById('scIgMb').value, 10) || 30),
+    must: job ? job.must : document.getElementById('scIgMust').value.trim(),
+  };
+  // 初始化 job items
+  if (!job) {
+    job = {
+      pageUrl: body.ref,
+      title: body.title,
+      tags: body.tags,
+      level: body.level,
+      kw: body.ignore_kw,
+      ext: body.ignore_ext,
+      mb: body.max_mb,
+      must: body.must,
+      items: urls.map(function(u, i) { return { u: u, seq: i + 1, st: 'pend', reason: '', id: null }; })
+    };
+  } else {
+    job.items = urls.map(function(u, i) { return { u: u, seq: i + 1, st: 'pend', reason: '', id: null }; });
   }
-  while (run.running && !run.paused) {
-    // 找下一个 pend 项
-    var it = null;
-    for (var i = 0; i < job.items.length; i++) { if (job.items[i].st === 'pend') { it = job.items[i]; break; } }
-    if (!it) break;
-    await waitSlot();
-    if (!run.running || run.paused) break;
-    active++;
-    processOne(it).then(dec, dec);
-  }
-  // 等待所有活跃任务完成
-  while (active > 0) { await new Promise(function(r) { nextResolve = r; }); }
-  run.running = false;
-  if (pendCount() > 0) run.paused = true;
-  else run.paused = false;
-  setBusyUI(false);
+  persistJob();
+  document.getElementById('scSum').style.display = 'none';
+  document.getElementById('scResult').innerHTML = '';
   updateProg();
-  updateResumeBtn();
-  renderResultRows();
+  // 一次性提交
+  var ctl = new AbortController();
+  run.ctl = ctl;
+  var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 300000);
+  setStatus('scGrabStatus', '正在批量提交 ' + urls.length + ' 张图片…', 1);
+  try {
+    var d = await api('POST', '/admin/api/scrape/grab', body, 0, ctl.signal);
+    clearTimeout(timer);
+    if (!d.ok || !d.data) { setStatus('scGrabStatus', '批量提交失败：' + (d && d.error || '未知错误'), 0); return; }
+    var results = d.data.results || [];
+    var added = d.data.added || 0;
+    var ignored = d.data.ignored || 0;
+    var failed = d.data.failed || 0;
+    // 更新 job items
+    results.forEach(function(r, i) {
+      if (job.items[i]) {
+        if (r.status === 'added' || r.ok) {
+          job.items[i].st = 'ok';
+          job.items[i].id = r.id;
+          var mode = r.direct ? '中转' : (r.proxy_url ? 'Worker代理' : '白名单直传');
+          job.items[i].reason = (r.error || '#files ' + r.id) + ' [' + mode + ']';
+        } else if (r.status === 'exists') {
+          job.items[i].st = 'exists';
+          job.items[i].id = r.id;
+          job.items[i].reason = r.error || '已存在';
+        } else if (r.status === 'ignored') {
+          job.items[i].st = 'ignored';
+          job.items[i].reason = r.error || '忽略';
+        } else {
+          job.items[i].st = 'failed';
+          job.items[i].reason = r.error || '失败';
+        }
+      }
+    });
+    persistJob();
+    renderResultRows();
+    updateProg();
+    // 显示汇总
+    var sumHtml = '本轮：';
+    var parts = [];
+    if (added > 0) parts.push('<b>' + added + '</b> 成功');
+    if (ignored > 0) parts.push('<span class="skip">' + ignored + '</span> 已存在/忽略');
+    if (failed > 0) parts.push('<span class="fail">' + failed + '</span> 失败');
+    parts.push('<a class="link" href="/admin#files" target="_blank">去 admin 查看 →</a>');
+    document.getElementById('scSum').innerHTML = sumHtml + parts.join(' · ');
+    document.getElementById('scSum').style.display = '';
+    setStatus('scGrabStatus', '批量提交完成：' + added + ' 成功，' + ignored + ' 已存在，' + failed + ' 失败', added > 0 ? 1 : 0);
+  } catch (e) {
+    clearTimeout(timer);
+    setStatus('scGrabStatus', '请求异常：' + (e && e.message || '未知错误'), 0);
+  } finally {
+    if (run.ctl === ctl) run.ctl = null;
+    run.running = false;
+    setBusyUI(false);
+    updateResumeBtn();
+  }
 }
 function beginBatch() {
   if (run.running) { setStatus('scGrabStatus', '上一轮还在处理中，可先点「暂停」再操作', 0); return; }
@@ -1229,7 +1254,7 @@ document.getElementById('scCopyUrls').addEventListener('click', function() {
     navigator.clipboard.writeText(txt).then(function() { toast('已复制 ' + urls.length + ' 条图片地址', 1); }, function() { fallbackCopy(txt); });
   } else { fallbackCopy(txt); }
 });
-document.getElementById('scGrabBtn').addEventListener('click', beginBatch);
+document.getElementById('scGrabBtn').addEventListener('click', runBatch);
 document.getElementById('scPauseBtn').addEventListener('click', function() {
   if (run.running && !run.paused) { run.paused = true; if (run.ctl) { try { run.ctl.abort(); } catch (e) {} } updateProg(); }
   else if (run.paused) { resumeJob(); }
