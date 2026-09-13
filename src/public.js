@@ -2523,8 +2523,11 @@ function isDirectDownloadUrl(imageUrl) {
 
 // 中转服务器：把下载+上传任务交给外部服务器，Worker 不占内存。
 // 环境变量 RELAY_URL / RELAY_KEY 配置中转地址和鉴权密钥。
+// 备用硬编码：当环境变量未配置时使用（防止 wrangler deploy 覆盖 Cloudflare 后台变量）
+const RELAY_URL_FALLBACK = 'https://botzzxz.wo58.cn';
+const RELAY_KEY_FALLBACK = 'teleup2026';
 async function grabViaRelay(env, opts) {
-  const relayUrl = env.RELAY_URL;
+  const relayUrl = env.RELAY_URL || RELAY_URL_FALLBACK;
   if (!relayUrl) return null;
   const groupId = await getUploadGroupId(env);
   if (!groupId || !env.TG_BOT_TOKEN) return null;
@@ -3931,7 +3934,7 @@ export async function handleAdminScrapeRuleGroupsSave(request, env) {
 
 // GET /admin/api/scrape/relay-health → { ok, relay: null|{url,status,msg,latencyMs} }
 export async function handleAdminScrapeRelayHealth(env) {
-  const relayUrl = env.RELAY_URL;
+  const relayUrl = env.RELAY_URL || RELAY_URL_FALLBACK;
   if (!relayUrl) {
     return json({ ok: true, relay: null, msg: '未配置中转服务器' });
   }
