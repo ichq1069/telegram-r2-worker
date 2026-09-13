@@ -85,6 +85,23 @@ class SyncService {
     await Workmanager().initialize(syncWorkDispatcher);
   }
 
+  /// 确保前台服务所需权限已授予；未授予则向系统申请。
+  static Future<bool> _ensurePermissions() async {
+    try {
+      final notif = await FlutterForegroundTask.checkNotificationPermission();
+      if (notif != NotificationPermission.granted) {
+        final result = await FlutterForegroundTask.requestNotificationPermission();
+        if (result != NotificationPermission.granted) return false;
+      }
+    } catch (_) {}
+    try {
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+    } catch (_) {}
+    return true;
+  }
+
   /// 读取当前用户配置并起一个前台同步服务实例（幂等：锁有效且服务存活则跳过，
   /// 陈旧锁会自动清除，避免上次进程被杀后无法再次同步）。
   static Future<bool> startPass() async {
@@ -93,6 +110,7 @@ class SyncService {
     if (await SyncLock.activeOrHeal(db)) return false;
     final enabled = await db.getEnabledAlbum();
     if (enabled == null) return false;
+    if (!await _ensurePermissions()) return false;
     await db.setSyncRunning(true);
     final res = await FlutterForegroundTask.startService(
       notificationTitle: 'PicWall 相册同步',

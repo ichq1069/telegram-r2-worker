@@ -254,8 +254,26 @@ class ScrapeService {
     } catch (_) {}
   }
 
+  /// 确保前台服务所需权限已授予；未授予则向系统申请。
+  static Future<bool> _ensurePermissions() async {
+    try {
+      final notif = await FlutterForegroundTask.checkNotificationPermission();
+      if (notif != NotificationPermission.granted) {
+        final result = await FlutterForegroundTask.requestNotificationPermission();
+        if (result != NotificationPermission.granted) return false;
+      }
+    } catch (_) {}
+    try {
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+    } catch (_) {}
+    return true;
+  }
+
   /// 启动前台服务；并发重复启动抛出的异常按失败处理，避免中断调用方流程。
   static Future<bool> _startService(String text) async {
+    if (!await _ensurePermissions()) return false;
     try {
       final res = await FlutterForegroundTask.startService(
         notificationTitle: _title,
