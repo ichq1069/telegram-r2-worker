@@ -3635,7 +3635,10 @@ function cleanRuleGroupList(list) {
       kw: String(g.kw || '').trim().slice(0, 4000),
       ext: String(g.ext != null ? g.ext : 'svg').trim().slice(0, 500),
       mb: clampInt(g.mb, 10, 1, 30),
-      must: String(g.must || '').trim().slice(0, 4000)
+      must: String(g.must || '').trim().slice(0, 4000),
+      defaultLevel: String(g.defaultLevel || '').trim().slice(0, 20),
+      defaultTags: String(g.defaultTags || '').trim().slice(0, 4000),
+      tagRegex: String(g.tagRegex || '').trim().slice(0, 4000)
     });
   }
   return out;
@@ -3661,7 +3664,7 @@ export async function handleAdminScrapeRuleGroupsSave(request, env) {
     if (!env.D1_DB) return json({ ok: false, error: 'D1 不可用' }, 500);
     // 确保至少存在默认组兜底
     if (!groups.some(function(g) { return g.key === '*'; })) {
-      groups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' });
+      groups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '', defaultLevel: '', defaultTags: '', tagRegex: '' });
     }
     await env.D1_DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
       .bind(SCRAPE_RULE_GROUPS_KEY, JSON.stringify(groups)).run();

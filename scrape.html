@@ -122,6 +122,19 @@ a.link { color: #00d4ff; text-decoration: none; }
       <input type="text" id="scIgMust" placeholder="链接必须含以下内容才保留（逗号分隔，如 xhscdn；留空 = 不限）">
       <span style="font-size:11px;color:#8a8aa8">与「忽略内容」互逆：未命中任一必带内容的链接会被过滤掉。留空则全部放行。</span>
     </div>
+    <div class="ign">
+      <span class="ig-label">默认入库</span>
+      <select id="scIgDefaultLevel" title="规则组绑定的默认入库级别，拾取时自动填入">
+        <option value="">不设置</option>
+        <option value="pt">pt</option><option value="vip">vip</option><option value="svip">svip</option><option value="vvip">vvip</option>
+      </select>
+      <input type="text" id="scIgDefaultTags" placeholder="默认标签（逗号分隔，拾取时自动填入）" style="flex:2">
+    </div>
+    <div class="ign">
+      <span class="ig-label">标题提词</span>
+      <input type="text" id="scIgTagRegex" placeholder="正则：从页面标题提取关键词追加到标签（如 ([\\u4e00-\\u9fa5]{2,6}) 匹配中文词组）" style="flex:3">
+      <span style="font-size:11px;color:#8a8aa8">留空不启用。填正则后拾取页面时自动从标题提取匹配词作为额外标签，与默认标签合并去重。</span>
+    </div>
     <div style="font-size:11px;color:#8a8aa8;margin-top:2px">忽略规则按「规则组」管理，不同网页可以各用各的组合：输入后自动保存到<b>当前生效的组</b>（顶部下拉可看到是哪个组、也能切换编辑别的组）；同一域名再次打开自动沿用，匹配不到时用「默认」规则组。忽略规则对「拾取解析」和「直传」同时生效：命中忽略关键词/格式即不解析/不入库；填了必带内容则只保留包含其中任一关键词的链接。规则组<b>存到云端数据库</b>：本页保存自动同步，任何浏览器/设备打开同一 API Key 都会拉到同一套规则组；离线或网络失败时自动回退用本机缓存。</div>
     <div class="ign">
       <span class="ig-label">站点Cookie</span>
@@ -360,7 +373,10 @@ function runPageAnalyze(url) {
       setLoading(btn, false, '拾取图片');
       if (!d.ok) { setStatus('scStatus', d.error || '拾取失败', 0); return; }
       cands = dedupCands((d.data && d.data.images) || []);
-      document.getElementById('scTitle').value = decodeEnt(d.data && d.data.title);
+      var pageTitle = decodeEnt(d.data && d.data.title);
+      document.getElementById('scTitle').value = pageTitle;
+      // 标题提词：从页面标题提取关键词追加到标签
+      extractTagsFromTitle(pageTitle);
       var card = document.getElementById('candCard');
       card.style.display = '';
       renderGrid(true);
@@ -435,7 +451,10 @@ function readRules() {
     kw: document.getElementById('scIgKw').value.trim(),
     ext: document.getElementById('scIgExt').value.trim(),
     mb: parseInt(document.getElementById('scIgMb').value, 10) || 30,
-    must: document.getElementById('scIgMust').value.trim()
+    must: document.getElementById('scIgMust').value.trim(),
+    defaultLevel: document.getElementById('scIgDefaultLevel').value || '',
+    defaultTags: document.getElementById('scIgDefaultTags').value.trim(),
+    tagRegex: document.getElementById('scIgTagRegex').value.trim()
   };
 }
 function applyRules(r) {
@@ -444,10 +463,40 @@ function applyRules(r) {
   if (r.ext != null) document.getElementById('scIgExt').value = r.ext;
   if (r.mb > 0) document.getElementById('scIgMb').value = r.mb;
   document.getElementById('scIgMust').value = r.must || '';
+  document.getElementById('scIgDefaultLevel').value = r.defaultLevel || '';
+  document.getElementById('scIgDefaultTags').value = r.defaultTags || '';
+  document.getElementById('scIgTagRegex').value = r.tagRegex || '';
+  // 切换规则组时自动填入默认入库级别和标签
+  if (r.defaultLevel) document.getElementById('scLevel').value = r.defaultLevel;
+  if (r.defaultTags) document.getElementById('scTags').value = r.defaultTags;
+}
+// 从页面标题提取关键词追加到标签（基于规则组的 tagRegex 正则）
+function extractTagsFromTitle(title) {
+  var g = selectedGroup();
+  var pattern = g && g.tagRegex ? g.tagRegex.trim() : '';
+  if (!pattern || !title) return;
+  try {
+    var re = new RegExp(pattern, 'g');
+    var matches = [];
+    var m;
+    while ((m = re.exec(title))) { if (m[1] && matches.indexOf(m[1]) < 0) matches.push(m[1]); }
+    if (!matches.length) return;
+    var cur = document.getElementById('scTags').value.trim();
+    var existTags = cur ? cur.split(/[,，]/).map(function(s) { return s.trim(); }).filter(Boolean) : [];
+    var merged = existTags.concat(matches);
+    // 去重（大小写不敏感）
+    var seen = {};
+    var deduped = [];
+    merged.forEach(function(t) {
+      var k = t.toLowerCase();
+      if (!seen[k]) { seen[k] = true; deduped.push(t); }
+    });
+    document.getElementById('scTags').value = deduped.join(', ');
+  } catch (e) { /* 正则语法错误静默忽略 */ }
 }
 function groupNameOf(key) { return key === '*' ? '默认（所有页面）' : key; }
 function defaultGroupObj(key) {
-  return { key: key || '*', name: groupNameOf(key || '*'), kw: '', ext: 'svg', mb: 10, must: '' };
+  return { key: key || '*', name: groupNameOf(key || '*'), kw: '', ext: 'svg', mb: 10, must: '', defaultLevel: '', defaultTags: '', tagRegex: '' };
 }
 // 云端上传（防抖）：把当前全量规则组保存到后端 D1 settings，跨设备共享
 function scheduleGroupCloudSync() {
@@ -479,7 +528,7 @@ function saveGroups() {
 }
 function defaultGroup() {
   for (var i = 0; i < ruleGroups.length; i++) { if (ruleGroups[i].key === '*') return ruleGroups[i]; }
-  var g = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' };
+  var g = defaultGroupObj('*');
   ruleGroups.unshift(g);
   return g;
 }
@@ -492,17 +541,24 @@ function loadGroups() {
     var s = localStorage.getItem(GROUPS_KEY);
     if (s) { ruleGroups = JSON.parse(s); if (!Array.isArray(ruleGroups)) ruleGroups = []; }
   } catch (e) { ruleGroups = []; }
-  ruleGroups.forEach(function(g) { if (g && typeof g === 'object' && g.must == null) g.must = ''; });
+  ruleGroups.forEach(function(g) {
+    if (g && typeof g === 'object') {
+      if (g.must == null) g.must = '';
+      if (g.defaultLevel == null) g.defaultLevel = '';
+      if (g.defaultTags == null) g.defaultTags = '';
+      if (g.tagRegex == null) g.tagRegex = '';
+    }
+  });
   if (!ruleGroups.length) {
     // 迁移旧的单条规则到「默认」组
-    var def = { key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' };
+    var def = defaultGroupObj('*');
     try {
       var o = JSON.parse(localStorage.getItem('scrapeRules') || 'null');
       if (o) { def.kw = o.kw || ''; if (o.ext != null) def.ext = o.ext; if (o.mb > 0) def.mb = o.mb; if (o.must != null) def.must = o.must; }
     } catch (e) {}
     ruleGroups.push(def);
   }
-  if (!groupByKey('*')) ruleGroups.unshift({ key: '*', name: '默认（所有页面）', kw: '', ext: 'svg', mb: 10, must: '' });
+  if (!groupByKey('*')) ruleGroups.unshift(defaultGroupObj('*'));
 }
 function firstHttpOf(str) {
   var parts = String(str || '').split(/[\r\n,，;；]+/);
@@ -562,6 +618,9 @@ function flashRulesHint() {
   g.ext = document.getElementById('scIgExt').value.trim();
   g.mb = parseInt(document.getElementById('scIgMb').value, 10) || 30;
   g.must = document.getElementById('scIgMust').value.trim();
+  g.defaultLevel = document.getElementById('scIgDefaultLevel').value || '';
+  g.defaultTags = document.getElementById('scIgDefaultTags').value.trim();
+  g.tagRegex = document.getElementById('scIgTagRegex').value.trim();
   saveGroups();
   var h = document.getElementById('scRulesHint');
   if (!h) return;
@@ -577,8 +636,9 @@ function bindCurrentDomain() {
   if (!h) { alert('请先在输入框填入网页或图片链接，才能确定要绑定的域名'); return; }
   var src = selectedGroup();
   var g = groupByKey(h);
-  if (!g) { g = { key: h, name: h, kw: '', ext: 'svg', mb: 10, must: '' }; ruleGroups.push(g); }
+  if (!g) { g = defaultGroupObj(h); ruleGroups.push(g); }
   g.kw = src.kw; g.ext = src.ext; g.mb = src.mb; g.must = src.must || '';
+  g.defaultLevel = src.defaultLevel || ''; g.defaultTags = src.defaultTags || ''; g.tagRegex = src.tagRegex || '';
   saveGroups();
   refreshGroupSelect(h);
   applyRules(g);
@@ -591,8 +651,9 @@ function createGroup() {
   var key = String(input || '').trim().replace(/^https?:\/\//i, '').replace(/^www\./, '').split('/')[0].split(/[:?#]/)[0].toLowerCase() || '*';
   var src = selectedGroup();
   var g = groupByKey(key);
-  if (!g) { g = { key: key, name: key === '*' ? '默认（所有页面）' : key, kw: '', ext: 'svg', mb: 10, must: '' }; ruleGroups.push(g); }
+  if (!g) { g = defaultGroupObj(key); ruleGroups.push(g); }
   g.kw = src.kw; g.ext = src.ext; g.mb = src.mb; g.must = src.must || '';
+  g.defaultLevel = src.defaultLevel || ''; g.defaultTags = src.defaultTags || ''; g.tagRegex = src.tagRegex || '';
   saveGroups();
   refreshGroupSelect(key);
   applyRules(g);
@@ -1154,6 +1215,9 @@ document.getElementById('scIgKw').addEventListener('input', flashRulesHint);
 document.getElementById('scIgExt').addEventListener('input', flashRulesHint);
 document.getElementById('scIgMb').addEventListener('input', flashRulesHint);
 document.getElementById('scIgMust').addEventListener('input', flashRulesHint);
+document.getElementById('scIgDefaultLevel').addEventListener('change', flashRulesHint);
+document.getElementById('scIgDefaultTags').addEventListener('input', flashRulesHint);
+document.getElementById('scIgTagRegex').addEventListener('input', flashRulesHint);
 document.getElementById('scRuleGroup').addEventListener('change', function() {
   applyRules(selectedGroup());
 });
