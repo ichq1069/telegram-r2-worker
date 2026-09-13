@@ -3909,4 +3909,3 @@ export async function handleAdminScrapeRelayHealth(env) {
     return json({ ok: true, relay: { url: relayUrl, status: 'error', msg: e.message, latencyMs: 0 } });
   }
 }
-}
