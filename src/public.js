@@ -2521,6 +2521,49 @@ function isDirectDownloadUrl(imageUrl) {
   return false;
 }
 
+// 中转服务器：把下载+上传任务交给外部服务器，Worker 不占内存。
+// 环境变量 RELAY_URL / RELAY_KEY 配置中转地址和鉴权密钥。
+async function grabViaRelay(env, opts) {
+  const relayUrl = env.RELAY_URL;
+  if (!relayUrl) return null;
+  const groupId = await getUploadGroupId(env);
+  if (!groupId || !env.TG_BOT_TOKEN) return null;
+  const body = {
+    url: opts.url,
+    chat_id: String(groupId),
+    bot_token: env.TG_BOT_TOKEN,
+    caption: opts.caption || '',
+    as_photo: opts.asPhoto !== false,
+    referer: opts.referer || '',
+    cookie: opts.cookie || '',
+  };
+  const headers = { 'Content-Type': 'application/json' };
+  if (env.RELAY_KEY) headers['Authorization'] = 'Bearer ' + env.RELAY_KEY;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(function() { try { ac.abort(); } catch (e) {} }, 180000);
+    const resp = await fetch(relayUrl.replace(/\/$/, '') + '/relay/grab', {
+      method: 'POST', headers: headers, body: JSON.stringify(body), signal: ac.signal,
+    });
+    clearTimeout(timer);
+    const j = await resp.json().catch(() => null);
+    if (!j) return null;
+    if (!j.ok) return { ok: false, error: j.error || '中转失败' };
+    return {
+      ok: true,
+      fileId: j.file_id || '',
+      messageId: j.message_id || 0,
+      fileSize: j.file_size || 0,
+      fileType: opts.asPhoto !== false ? 'photo' : 'document',
+      ct: j.mime_type || 'image/jpeg',
+      chatId: j.chat_id || String(groupId),
+    };
+  } catch (e) {
+    log('中转请求异常: ' + e.message);
+    return null;
+  }
+}
+
 // 下载图片：多级重试规避源站 403/反爬（小红书/微博等常拦 bot UA 或校验 Referer）。
 // 依次尝试：①当前 UA+原 Referer → ②浏览器 UA+图床 Hint Referer → ③纯浏览器 UA → ④TG UA（兜底）。
 // 仅对 !ok 且状态 403/404/4xx 或抛错时进入下一档；返回 { res, tried }（res 为最后一次响应）。
@@ -2939,6 +2982,38 @@ export async function handleAdminScrapeGrabOne(request, env) {
       const dcookie = String(b.cookie || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
       // 先判断是否直链白名单：直链跳过 resolvePostimgOriginal（省 1-3s），非直链正常解析 postimg 原图
       const isDirect = isDirectDownloadUrl(url);
+
+      // ── 中转服务器路径（最高优先级）：下载+上传交给外部服务器，Worker 不占内存 ──
+      const PHOTO_MAX = 10 * 1024 * 1024;
+      let guessAsPhoto = true; // 中转默认用 sendPhoto，Telegram 会自动判断
+      const relayResult = await grabViaRelay(env, {
+        url: url, caption: caption || undefined, asPhoto: guessAsPhoto,
+        referer: referer, cookie: dcookie,
+      });
+      if (relayResult) {
+        if (!relayResult.ok) return fail(relayResult.error);
+        // 中转成功：用返回的元数据入库
+        const now = cnNowISO();
+        const sent = relayResult;
+        const asPhoto = sent.fileType === 'photo';
+        const ctExt = (MIME_EXT[sent.ct] || '');
+        let name = scrapeImageName(url, ctExt || '', title);
+        if (seq > 0) name = ('000' + seq).slice(-3) + '_' + name;
+        const r2 = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at, page_url, original_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?, ?, ?)')
+          .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(name).slice(0, 255), sent.fileSize || 0, sent.fileType, sent.ct || 'image/jpeg', String(title || '').slice(0, 200), tags, level, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now, referer, url).run();
+        const dbId = r2.meta.last_row_id;
+        await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind('/file/tg/' + dbId, dbId).run();
+        if (toPool) {
+          try {
+            const tok = await fileTok(dbId, env);
+            const ext2 = fileExtOf(name, sent.fileType);
+            const signed = uOrigin + '/file/tg/' + tok + '/' + dbId + '.' + ext2;
+            await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
+              .bind(signed, signed, String(title || name).slice(0, 200), tags, level, isPrivate, sent.fileType, sent.fileSize || 0, dbId, now).run();
+          } catch (e) {}
+        }
+        return json({ ok: true, data: { url: url, status: 'added', id: dbId, reason: '#files ' + dbId + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate, direct: true } });
+      }
 
       // ── 直链白名单路径：Worker 不下载，直接传 URL 给 Telegram（省内存、避 OOM） ──
       if (isDirect) {
