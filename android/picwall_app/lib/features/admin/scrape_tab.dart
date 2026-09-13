@@ -554,6 +554,17 @@ class _ScrapeTabState extends ConsumerState<ScrapeTab> {
               ),
               TextButton(onPressed: () => _toggleAll(true), child: const Text('全选')),
               TextButton(onPressed: () => _toggleAll(false), child: const Text('全不选')),
+              TextButton(
+                onPressed: () {
+                  final urls = _cands.where((c) => c.sel).map((c) => c.url).toList();
+                  if (urls.isEmpty) return;
+                  Clipboard.setData(ClipboardData(text: urls.join('\n')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('已复制 ${urls.length} 条图片地址')),
+                  );
+                },
+                child: const Text('复制地址'),
+              ),
             ],
           ),
         ),

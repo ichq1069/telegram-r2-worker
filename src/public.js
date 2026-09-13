@@ -2260,6 +2260,56 @@ async function tgSendMediaToGroup(env, groupId, bytes, name, ct, caption, asPhot
   } finally { tgRelease(); }
 }
 
+// 直传 URL 到 Telegram（Worker 不下载，Telegram 服务器自行抓取）。省内存、避 OOM。
+// 仅用于无防盗链的直链白名单（isDirectDownloadUrl 为 true）。
+async function tgSendUrlToGroup(env, groupId, url, caption, asPhoto) {
+  const endpoint = asPhoto ? 'sendPhoto' : 'sendDocument';
+  const field = asPhoto ? 'photo' : 'document';
+  await tgAcquire();
+  try {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      const fd = new FormData();
+      fd.append('chat_id', String(groupId));
+      fd.append(field, url); // URL string，Telegram 服务器自行下载
+      if (caption) fd.append('caption', String(caption).slice(0, 1024));
+      const resp = await fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/' + endpoint, { method: 'POST', body: fd });
+      const j = await resp.json().catch(() => ({ ok: false, description: 'Telegram response not JSON' }));
+      if (j.ok && j.result) {
+        const med = asPhoto ? j.result.photo : j.result.document;
+        let fid = '';
+        if (asPhoto && Array.isArray(med) && med.length) fid = med[med.length - 1].file_id || '';
+        else if (med && med.file_id) fid = med.file_id;
+        // 从 Telegram 返回的文件元数据提取 size/type（比 HEAD 更准确）
+        let fileSize = 0, fileType = asPhoto ? 'photo' : 'document', ct = '';
+        if (med) {
+          if (asPhoto && Array.isArray(med) && med.length) {
+            const last = med[med.length - 1];
+            fileSize = last.file_size || 0;
+            ct = 'image/jpeg';
+          } else if (med.file_size) {
+            fileSize = med.file_size;
+            ct = med.mime_type || '';
+          }
+        }
+        return { ok: true, fileId: fid || '', messageId: j.result.message_id || 0, chatId: j.result.chat && j.result.chat.id ? j.result.chat.id : String(groupId), fileSize: fileSize, fileType: fileType, ct: ct };
+      }
+      // 429 Too Many Requests → 等待 Retry-After 后重试
+      if (resp.status === 429) {
+        const retryAfter = parseInt(resp.headers.get('Retry-After') || '1', 10);
+        await new Promise(function(r) { setTimeout(r, Math.min(retryAfter, 10) * 1000); });
+        continue;
+      }
+      // 400 Bad Request 且含 "failed to get HTTP URL content" 说明 Telegram 也访问不了该 URL → 告知调用方回退 Worker 代理
+      const desc = j.description || '';
+      if (resp.status === 400 && /failed to get HTTP/i.test(desc)) {
+        return { ok: false, error: desc, tgDownloadFailed: true };
+      }
+      return { ok: false, error: desc || ('Telegram ' + endpoint + ' failed') };
+    }
+    return { ok: false, error: 'Telegram ' + endpoint + ' 重试耗尽' };
+  } finally { tgRelease(); }
+}
+
 // 核心：直传群 + 落库 files（proxy 代理行）。返回 { ok, id, url, fileType, fileId, messageId, error }
 // opts: { name, bytes, size, tags, title, caption, level, isPrivate, toPool, origin, pageUrl, originalUrl }
 async function tgProxySave(env, opts) {
@@ -2451,6 +2501,26 @@ function refererHintForImage(imageUrl) {
   }
   return '';
 }
+// 直链白名单：这些域名无需 Worker 代理下载，可直接传 URL 给 Telegram Bot API（省内存、避 OOM）。
+// 匹配逻辑：hostname 完全相等 或 以 '.<key>' 结尾。不在白名单内的域名走 Worker 代理下载。
+const DIRECT_HOSTNAMES = [
+  'r2.cloudflarestorage.com',
+  'wo58.cn',
+  'i.postimg.cc',
+  'sns-webpic-qc.xhscdn.com',
+  'pbs.twimg.com',
+  'byteimg.com',
+  'hdslb.com'
+];
+function isDirectDownloadUrl(imageUrl) {
+  let h = '';
+  try { h = String(new URL(imageUrl).hostname).toLowerCase(); } catch (e) { return false; }
+  for (const k of DIRECT_HOSTNAMES) {
+    if (h === k || h.endsWith('.' + k)) return true;
+  }
+  return false;
+}
+
 // 下载图片：多级重试规避源站 403/反爬（小红书/微博等常拦 bot UA 或校验 Referer）。
 // 依次尝试：①当前 UA+原 Referer → ②浏览器 UA+图床 Hint Referer → ③纯浏览器 UA → ④TG UA（兜底）。
 // 仅对 !ok 且状态 403/404/4xx 或抛错时进入下一档；返回 { res, tried }（res 为最后一次响应）。
@@ -2869,26 +2939,76 @@ export async function handleAdminScrapeGrabOne(request, env) {
       const dcookie = String(b.cookie || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
       // i.postimg.cc 直链多为压缩展示图：自动解析详情页升级为 ?dl=1 原图（失败则回退原链）
       const fetchUrl = await resolvePostimgOriginal(url);
+
+      // ── 直链白名单路径：Worker 不下载，直接传 URL 给 Telegram（省内存、避 OOM） ──
+      if (isDirectDownloadUrl(fetchUrl)) {
+        const PHOTO_MAX = 10 * 1024 * 1024;
+        // HEAD 取元数据（content-type / content-size），失败则跳过校验让 Telegram 自行判断
+        let ct = '', cl = 0, ctExt = '';
+        try {
+          const headH = { 'User-Agent': BROWSER_UA };
+          if (dcookie) headH['Cookie'] = dcookie;
+          const headRes = await fetch(fetchUrl, { method: 'HEAD', headers: headH, redirect: 'follow' });
+          if (headRes.ok) {
+            ct = String(headRes.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+            cl = parseInt(headRes.headers.get('content-length') || '0', 10);
+            ctExt = MIME_EXT[ct] || '';
+          }
+        } catch (e) { /* HEAD 失败不影响后续，Telegram 会自行校验 */ }
+        if (cl > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
+        if (ct && !/^image\//.test(ct)) return json({ ok: true, data: { url: url, status: 'ignored', reason: '非图片格式（' + (ct || '未知') + '）' } });
+        if (ctExt && ignoreExts.indexOf(ctExt) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '已忽略格式 .' + ctExt } });
+        // 批量直传时前端传 seq（1 起），拼成 3 位序号前缀入库文件名
+        let name = scrapeImageName(url, ctExt || '', title);
+        if (seq > 0) name = ('000' + seq).slice(-3) + '_' + name;
+        const asPhoto = ['jpg', 'jpeg', 'png', 'webp'].indexOf(ctExt) !== -1 && cl > 0 && cl <= PHOTO_MAX;
+        const sent = await tgSendUrlToGroup(env, groupId, fetchUrl, caption || undefined, asPhoto);
+        if (!sent.ok) {
+          // Telegram 也访问不了该 URL → 回退 Worker 代理下载
+          if (sent.tgDownloadFailed) { /* fall through to Worker proxy below */ }
+          else return fail(sent.error);
+        } else {
+          // 直传成功：用 Telegram 返回的元数据入库
+          const now = cnNowISO();
+          const r2 = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at, page_url, original_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?, ?, ?)')
+            .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(name).slice(0, 255), sent.fileSize || cl || 0, sent.fileType || (asPhoto ? 'photo' : 'document'), sent.ct || ct || 'image/jpeg', String(title || '').slice(0, 200), tags, level, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now, referer, url).run();
+          const dbId = r2.meta.last_row_id;
+          await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind('/file/tg/' + dbId, dbId).run();
+          // 共享库/私密库直传群：同时进 random_pool
+          if (toPool) {
+            try {
+              const tok = await fileTok(dbId, env);
+              const ext = fileExtOf(name, sent.fileType || (asPhoto ? 'photo' : 'document'));
+              const signed = uOrigin + '/file/tg/' + tok + '/' + dbId + '.' + ext;
+              await env.D1_DB.prepare('INSERT INTO random_pool (url, thumb_url, title, tags, level, is_private, file_type, file_size, source, tg_file_id, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, \'tg\', ?, 1, ?)')
+                .bind(signed, signed, String(title || name).slice(0, 200), tags, level, isPrivate, sent.fileType || (asPhoto ? 'photo' : 'document'), sent.fileSize || cl || 0, dbId, now).run();
+            } catch (e) { /* pool 写入失败不阻断 */ }
+          }
+          return json({ ok: true, data: { url: url, status: 'added', id: dbId, reason: '#files ' + dbId + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate, direct: true } });
+        }
+      }
+
+      // ── Worker 代理路径：下载 → 上传到 Telegram（防盗链站点、直传失败回退） ──
       // 多级请求头重试：带原 Referer / 图床 Hint / 浏览器 UA 逐档尝试，规避小红书等 403
       const dl = await fetchImageWithFallbacks(fetchUrl, referer, dcookie);
       const res = dl.res;
       if (!res.ok) return fail('下载失败（HTTP ' + res.status + '）');
-      const ct = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
-      const cl = parseInt(res.headers.get('content-length') || '0', 10);
-      if (cl > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
-      const ctExt = MIME_EXT[ct] || '';
-      if (!/^image\//.test(ct)) return json({ ok: true, data: { url: url, status: 'ignored', reason: '非图片格式（' + (ct || '未知') + '）' } });
-      if (ignoreExts.indexOf(ctExt) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '已忽略格式 .' + (ctExt || ct) } });
+      const ct2 = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+      const cl2 = parseInt(res.headers.get('content-length') || '0', 10);
+      if (cl2 > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
+      const ctExt2 = MIME_EXT[ct2] || '';
+      if (!/^image\//.test(ct2)) return json({ ok: true, data: { url: url, status: 'ignored', reason: '非图片格式（' + (ct2 || '未知') + '）' } });
+      if (ignoreExts.indexOf(ctExt2) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '已忽略格式 .' + (ctExt2 || ct2) } });
       const buf = await res.arrayBuffer();
       if (!buf || !buf.byteLength) return fail('空响应');
       if (buf.byteLength > maxBytes) return json({ ok: true, data: { url: url, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' } });
       const bytes = new Uint8Array(buf);
       // 批量直传时前端传 seq（1 起），拼成 3 位序号前缀入库文件名，避免同源多图重名互相覆盖/难辨识
-      let name = scrapeImageName(url, ctExt || '', title);
-      if (seq > 0) name = ('000' + seq).slice(-3) + '_' + name;
-      const res2 = await tgProxySave(env, { name: name, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer, originalUrl: url });
+      let name2 = scrapeImageName(url, ctExt2 || '', title);
+      if (seq > 0) name2 = ('000' + seq).slice(-3) + '_' + name2;
+      const res2 = await tgProxySave(env, { name: name2, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer, originalUrl: url });
       if (!res2.ok) return fail(res2.error);
-      return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate } });
+      return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id + (isPrivate ? ' → 私密库' : ''), name: name2, private: !!isPrivate } });
     } catch (e) { return fail(e.message); }
     finally { scrapeRelease(); }
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
