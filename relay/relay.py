@@ -32,7 +32,7 @@ from aiohttp import web
 
 # ========== 配置 ==========
 PORT = int(os.environ.get('PORT', '18088'))
-API_KEY = os.environ.get('API_KEY', '')
+API_KEY = os.environ.get('API_KEY', 'teleup2026')
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB 上限
 DOWNLOAD_TIMEOUT = 120  # 下载超时（秒）
 TELEGRAM_TIMEOUT = 120  # Telegram 上传超时（秒）

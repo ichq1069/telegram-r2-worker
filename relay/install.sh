@@ -6,7 +6,7 @@
 set -e
 
 PORT="${PORT:-18088}"
-API_KEY="${API_KEY:-}"
+API_KEY="${API_KEY:-teleup2026}"
 INSTALL_DIR="/opt/picwall-relay"
 
 # 解析参数
@@ -70,7 +70,7 @@ echo ""
 echo "=== 安装完成 ==="
 echo "服务状态: systemctl status picwall-relay"
 echo "健康检查: curl http://localhost:$PORT/relay/health"
-echo "API Key: ${API_KEY:-(未设置)}"
+echo "API Key: ${API_KEY:-teleup2026 (默认)})"
 echo ""
 echo "Worker 环境变量配置:"
 echo "  RELAY_URL=http://你的服务器IP:$PORT"
