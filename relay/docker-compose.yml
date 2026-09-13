@@ -1,0 +1,11 @@
+version: '3'
+services:
+  relay:
+    build: .
+    container_name: picwall-relay
+    restart: unless-stopped
+    ports:
+      - "18088:18088"
+    environment:
+      - PORT=18088
+      - API_KEY=teleup2026
