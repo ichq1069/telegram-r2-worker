@@ -843,8 +843,8 @@ var job = null;                       // { pageUrl,title,tags,level,kw,ext,mb, i
 var run = { running: false, paused: false, ctl: null };
 function pendCount() { return job ? job.items.filter(function(i) { return i.st === 'pend'; }).length : 0; }
 
-// 服务端成功态返回 status:'added'（历史曾用 'ok'），统一规范为前端内部成功态 'ok'
-function normSt(st) { return (st === 'added' || st === 'ok') ? 'ok' : st; }
+// 服务端成功态返回 status:'added'（历史曾用 'ok'），统一规范为前端内部成功态 'ok'；'exists'/'ignored' 保持原样
+function normSt(st) { return st === 'added' || st === 'ok' ? 'ok' : st; }
 
 function persistJob() {
   try {
@@ -883,7 +883,9 @@ function renderResultRows() {
   var rows = job.items.map(function(it, i) {
     var r = rowClsOf(it);
     var extra = it.st === 'failed' ? ' title="双击重试该张"' : '';
-    return '<div class="result-item" data-i="' + i + '"' + extra + '>' +
+    // exists/ignored 不显示为 success，用独立样式区分
+    var isExists = it.st === 'exists' || it.st === 'ignored';
+    return '<div class="result-item' + (isExists ? ' result-exists' : '') + '" data-i="' + i + '"' + extra + '>' +
       '<span class="rk">' + (i + 1) + '</span>' +
       '<span class="' + r.cls + '">' + r.ico + '</span>' +
       '<span class="u">' + escStr(it.u) + '</span>' +
@@ -1050,10 +1052,12 @@ async function processOne(it) {
     if (!d.ok || !d.data) { it.st = 'failed'; it.reason = (d && d.error) || '服务端异常'; }
     else {
       it.st = normSt(d.data.status) || 'failed';
-      // 成功/已存在时追加直传/代理标识
-      if (it.st === 'ok' || it.st === 'exists') {
+      if (it.st === 'ok') {
         var mode = d.data.direct ? '白名单直传' : 'Worker代理';
         it.reason = (d.data.reason || '#' + (d.data.id || '')) + ' [' + mode + ']';
+      } else if (it.st === 'exists') {
+        var mode2 = d.data.direct ? '白名单直传' : 'Worker代理';
+        it.reason = (d.data.reason || '#files ' + (d.data.id || '')) + ' [' + mode2 + ']';
       } else {
         it.reason = d.data.reason || '';
       }
