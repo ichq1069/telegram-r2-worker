@@ -882,8 +882,8 @@ function batchSummaryHtml() {
   var c = { ok: 0, exists: 0, ignored: 0, failed: 0, direct: 0, proxy: 0 };
   job.items.forEach(function(i) {
     var s = normSt(i.st); if (c[s] != null) c[s]++;
-    if (s === 'ok' && i.reason && i.reason.indexOf('白名单直传') >= 0) c.direct++;
-    else if (s === 'ok' && i.reason && i.reason.indexOf('Worker代理') >= 0) c.proxy++;
+    if ((s === 'ok' || s === 'exists') && i.reason && i.reason.indexOf('白名单直传') >= 0) c.direct++;
+    else if ((s === 'ok' || s === 'exists') && i.reason && i.reason.indexOf('Worker代理') >= 0) c.proxy++;
   });
   var parts = ['<b>' + c.ok + '</b> 成功'];
   if (c.direct) parts.push('<span class="ok">' + c.direct + '</span> 直传');
@@ -1036,8 +1036,8 @@ async function processOne(it) {
     if (!d.ok || !d.data) { it.st = 'failed'; it.reason = (d && d.error) || '服务端异常'; }
     else {
       it.st = normSt(d.data.status) || 'failed';
-      // 成功时追加直传/代理标识
-      if (it.st === 'ok') {
+      // 成功/已存在时追加直传/代理标识
+      if (it.st === 'ok' || it.st === 'exists') {
         var mode = d.data.direct ? '白名单直传' : 'Worker代理';
         it.reason = (d.data.reason || '#' + (d.data.id || '')) + ' [' + mode + ']';
       } else {
