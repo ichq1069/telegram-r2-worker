@@ -2963,10 +2963,11 @@ export async function handleAdminScrapeGrabOne(request, env) {
     if (b.max_mb) { const mb = Number(b.max_mb); if (mb > 0 && mb <= 30) maxBytes = Math.round(mb * 1024 * 1024); }
     const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/x-icon': 'ico', 'image/tiff': 'tiff' };
     try {
-      // 已入库去重：同一 original_url 不再重复发送（必须在 acquire 之前检查，避免浪费并发槽）
-      const dup = await env.D1_DB.prepare('SELECT id FROM files WHERE original_url = ? LIMIT 1').bind(url).first();
-      if (dup) return json({ ok: true, data: { url: url, status: 'exists', reason: '已存在（files #' + dup.id + '）', id: dup.id, direct: isDirectDownloadUrl(url) } });
+      // 先 acquire 拿到并发槽位（确保查重和入库是串行的，避免 race condition）
       await scrapeAcquire();
+      // 已入库去重：同一 original_url 不再重复发送
+      const dup = await env.D1_DB.prepare('SELECT id FROM files WHERE original_url = ? LIMIT 1').bind(url).first();
+      if (dup) { scrapeRelease(); return json({ ok: true, data: { url: url, status: 'exists', reason: '已存在（files #' + dup.id + '）', id: dup.id, direct: isDirectDownloadUrl(url) } }); }
       const low = url.toLowerCase();
       for (const kw of ignoreKws) {
         if (low.indexOf(kw) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '链接含「' + kw + '」' } });
