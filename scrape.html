@@ -135,6 +135,8 @@ a.link { color: #00d4ff; text-decoration: none; }
       <button class="btn ghost" id="scSelAll">全选</button>
       <button class="btn ghost" id="scSelNone">全不选</button>
       <button class="btn ghost" id="scSelSmall" title="只勾选前 20 张">只选前 20 张</button>
+      <button class="btn ghost" id="scCopyUrls" title="复制已选图片地址到剪贴板（一行一个）">复制图片地址</button>
+      <span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:#8a8aa8">并发 <input type="number" id="scConc" value="5" min="1" max="10" style="width:48px;background:#0f1020;color:#e8e8f8;border:1px solid #3a3c5a;border-radius:6px;padding:4px 6px;font-size:12px;text-align:center" title="同时上传张数（1-10），越大越快但可能触发限流"> 张</span>
       <button class="btn primary" id="scGrabBtn" disabled title="vvip 级别将直传并自动进入私密库">直传选中（vvip 自动入私密库）</button>
       <button class="btn ghost" id="scResumeBtn" style="display:none" title="继续处理上次未完成的图片">续传剩余 <span id="scResumeN">0</span> 张</button>
       <button class="btn ghost" id="scAbandonBtn" style="display:none" title="放弃上次未完成的批量任务，重新开始">放弃旧任务</button>
@@ -987,7 +989,8 @@ async function runLoop() {
   run.paused = false;
   setBusyUI(true);
   updateProg();
-  var BATCH = 3;
+  var BATCH = parseInt(document.getElementById('scConc').value, 10) || 5;
+  if (BATCH < 1) BATCH = 1; if (BATCH > 10) BATCH = 10;
   while (run.running && !run.paused) {
     var batch = [];
     for (var i = 0; i < job.items.length && batch.length < BATCH; i++) { if (job.items[i].st === 'pend') batch.push(job.items[i]); }
@@ -1111,6 +1114,14 @@ document.getElementById('scSelSmall').addEventListener('click', function() {
   }
   updateSelCount();
 });
+document.getElementById('scCopyUrls').addEventListener('click', function() {
+  var urls = selectedUrls();
+  if (!urls.length) { toast('请先勾选图片', 0); return; }
+  var txt = urls.join('\n');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(function() { toast('已复制 ' + urls.length + ' 条图片地址', 1); }, function() { fallbackCopy(txt); });
+  } else { fallbackCopy(txt); }
+});
 document.getElementById('scGrabBtn').addEventListener('click', beginBatch);
 document.getElementById('scPauseBtn').addEventListener('click', function() {
   if (run.running && !run.paused) { run.paused = true; if (run.ctl) { try { run.ctl.abort(); } catch (e) {} } updateProg(); }
@@ -1161,6 +1172,22 @@ document.getElementById('scCkClearBtn').addEventListener('click', function() {
 });
 initRuleGroups();
 syncCookieField();
+function toast(msg, ok) {
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:10px;color:#fff;font-size:13px;font-weight:500;z-index:300;box-shadow:0 4px 20px rgba(0,0,0,.4);background:' + (ok ? '#00c48f' : '#ff6666');
+  d.textContent = msg;
+  document.body.appendChild(d);
+  setTimeout(function() { d.remove(); }, 3000);
+}
+function fallbackCopy(txt) {
+  var ta = document.createElement('textarea');
+  ta.value = txt;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); toast('已复制', 1); } catch (e) { toast('复制失败，请手动复制', 0); }
+  document.body.removeChild(ta);
+}
 </script>
 </body>
 </html>

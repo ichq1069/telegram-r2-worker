@@ -176,51 +176,23 @@ class ScrapeService {
       var added = snap.items.where((i) => i.status == 'added').length;
       await _notify(_title, '待入库 ${pending.length} 张，共 $total 张');
 
-      for (final it in pending) {
+      // 并发池：同时处理 poolSize 张，加速入库
+      const poolSize = 5;
+      var idx = 0;
+      while (idx < pending.length) {
         if (await db.scrapeStopRequested()) break;
-        var ok = false;
-        Object? lastErr;
-        StackTrace? lastSt;
-        for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
-          try {
-            final r = await repo.adminScrapeGrabOne(
-              adminKey,
-              url: it.url,
-              title: snap.job.title,
-              tags: snap.job.tags,
-              level: snap.job.level,
-              ref: snap.job.ref,
-              ignoreKw: snap.job.ignoreKw,
-              ignoreExt: snap.job.ignoreExt,
-              must: snap.job.must,
-              maxMb: snap.job.maxMb,
-              cookie: snap.job.cookie,
-              seq: it.seq,
-            );
-            await db.updateScrapeItemStatus(it.id!, r.status, r.reason);
-            if (r.status == 'added') added++;
-            ok = true;
-            break;
-          } catch (e, st) {
-            lastErr = e;
-            lastSt = st;
-            final transient = e is! ApiException;
-            if (!transient) break;
-            if (attempt < _maxAttempts && !await db.scrapeStopRequested()) {
-              await _notify(_title,
-                  '第 ${it.seq} 张网络异常，重试 $attempt/${_maxAttempts - 1}…');
-              await Future<void>.delayed(Duration(seconds: attempt * 2));
-            }
-          }
+        final batch = <Future<void>>[];
+        for (var p = 0; p < poolSize && idx < pending.length; p++, idx++) {
+          final it = pending[idx];
+          batch.add(_grabOneWithRetry(
+            repo, db, it, snap, adminKey,
+            onResult: (status) {
+              if (status == 'added') added++;
+              done++;
+            },
+          ));
         }
-        if (!ok) {
-          if (await db.scrapeStopRequested()) break;
-          DebugService.instance.recordError(
-              'ScrapeService.grabOne', lastErr ?? Exception('抓取失败'), lastSt);
-          await db.updateScrapeItemStatus(
-              it.id!, 'failed', lastErr?.toString() ?? '抓取失败');
-        }
-        done++;
+        await Future.wait(batch);
         await _notify(_title, '入库中 $done/$total · 成功 $added');
       }
 
@@ -305,5 +277,47 @@ class ScrapeService {
     try {
       await Workmanager().cancelByUniqueName(kScrapeResumeTask);
     } catch (_) {}
+  }
+
+  /// 带重试的单张入库，供并发池调用。
+  static Future<void> _grabOneWithRetry(
+    GalleryRepository repo,
+    LocalDb db,
+    dynamic it,
+    dynamic snap,
+    String adminKey, {
+    required void Function(String status) onResult,
+  }) async {
+    for (var attempt = 1; attempt <= _maxAttempts; attempt++) {
+      try {
+        final r = await repo.adminScrapeGrabOne(
+          adminKey,
+          url: it.url,
+          title: snap.job.title,
+          tags: snap.job.tags,
+          level: snap.job.level,
+          ref: snap.job.ref,
+          ignoreKw: snap.job.ignoreKw,
+          ignoreExt: snap.job.ignoreExt,
+          must: snap.job.must,
+          maxMb: snap.job.maxMb,
+          cookie: snap.job.cookie,
+          seq: it.seq,
+        );
+        await db.updateScrapeItemStatus(it.id!, r.status, r.reason);
+        onResult(r.status);
+        return;
+      } catch (e) {
+        final transient = e is! ApiException;
+        if (!transient || attempt >= _maxAttempts) {
+          DebugService.instance.recordError('ScrapeService.grabOne', e);
+          await db.updateScrapeItemStatus(
+              it.id!, 'failed', e.toString());
+          onResult('failed');
+          return;
+        }
+        await Future<void>.delayed(Duration(seconds: attempt * 2));
+      }
+    }
   }
 }
