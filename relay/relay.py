@@ -90,7 +90,7 @@ def extract_xhs_note_id(url):
     return None
 
 
-async def resolve_xhs_url(session, url):
+async def resolve_xhs_url(session, url, cookie=''):
     """解析小红书短链，返回笔记页 URL"""
     if not re.search(r'xhslink\.cn|xiaohongshu\.com', url, re.I):
         return url
@@ -100,8 +100,21 @@ async def resolve_xhs_url(session, url):
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'Referer': 'https://www.xiaohongshu.com/',
     }
+    if cookie:
+        headers['Cookie'] = cookie
     try:
-        async with session.get(url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+        async with session.get(url, headers=headers, allow_redirects=False, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            # 处理 302 重定向
+            if resp.status == 302:
+                loc = resp.headers.get('Location', '')
+                if loc and 'xiaohongshu.com' in loc:
+                    # 从重定向 URL 提取 note_id
+                    m = re.search(r'/(?:explore|discovery/item)/([a-f0-9]+)', loc)
+                    if m:
+                        note_id = m.group(1)
+                        return f'https://www.xiaohongshu.com/explore/{note_id}'
+                    return loc
+                return url
             if resp.status != 200:
                 return url
             text = await resp.text()
@@ -110,10 +123,10 @@ async def resolve_xhs_url(session, url):
             if m:
                 note_id = m.group(1)
                 return f'https://www.xiaohongshu.com/explore/{note_id}'
-            # 从 location 头提取
-            loc = resp.headers.get('Location', '')
-            if loc and 'xiaohongshu.com' in loc:
-                return loc
+            # 从 HTML 中提取 xiaohongshu.com URL
+            m = re.search(r'https?://www\.xiaohongshu\.com/(?:explore|discovery/item)/([a-f0-9]+)', text)
+            if m:
+                return f'https://www.xiaohongshu.com/explore/{m.group(1)}'
             return url
     except Exception:
         return url
@@ -198,7 +211,7 @@ async def grab_and_send(url, chat_id, bot_token, caption, as_photo, referer, coo
             # ---- 小红书短链解析 ----
             if re.search(r'xhslink\.cn|xiaohongshu\.com', url, re.I):
                 # 先解析短链
-                note_url = await resolve_xhs_url(session, url)
+                note_url = await resolve_xhs_url(session, url, cookie)
                 # 提取图片列表
                 image_urls = await extract_xhs_images(session, note_url, cookie)
                 if not image_urls:
