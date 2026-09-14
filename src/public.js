@@ -2530,11 +2530,11 @@ async function grabViaRelay(env, opts) {
   const relayUrl = env.RELAY_URL || RELAY_URL_FALLBACK;
   if (!relayUrl) return null;
   const groupId = await getUploadGroupId(env);
-  if (!groupId || !env.TG_BOT_TOKEN) return null;
+  if (!groupId) return null;
   const body = {
     url: opts.url,
     chat_id: String(groupId),
-    bot_token: env.TG_BOT_TOKEN,
+    bot_token: opts.bot_token || '',
     caption: opts.caption || '',
     as_photo: opts.asPhoto !== false,
     referer: opts.referer || '',
@@ -2864,7 +2864,7 @@ export async function handleAdminScrapeGrab(request, env) {
         }
         if (ignoreReason) { row.ignored = true; row.error = ignoreReason; row.status = 'ignored'; return row; }
         // 优先走中转服务器
-        const relayResult = await grabViaRelay(env, { url: url, caption: b.caption || title, asPhoto: true, referer: referer });
+        const relayResult = await grabViaRelay(env, { url: url, caption: b.caption || title, asPhoto: true, referer: referer, bot_token: env.TG_BOT_TOKEN || '' });
         if (relayResult && relayResult.ok) {
           const now = cnNowISO();
           const sent = relayResult;
@@ -3032,6 +3032,7 @@ export async function handleAdminScrapeGrabOne(request, env) {
       const relayResult = await grabViaRelay(env, {
         url: url, caption: caption || undefined, asPhoto: guessAsPhoto,
         referer: referer, cookie: dcookie,
+        bot_token: env.TG_BOT_TOKEN || '',
       });
       if (relayResult) {
         if (!relayResult.ok) return fail(relayResult.error);

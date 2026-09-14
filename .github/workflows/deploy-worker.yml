@@ -57,6 +57,8 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           API_KEY: ${{ secrets.API_KEY }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
+          RELAY_KEY: ${{ secrets.RELAY_KEY }}
         run: |
           echo "$TG_BOT_TOKEN" | npx --yes wrangler secret put TG_BOT_TOKEN
           echo "$API_KEY" | npx --yes wrangler secret put API_KEY
@@ -64,6 +66,9 @@ jobs:
           if [ -n "$CF_API_TOKEN" ]; then echo "$CF_API_TOKEN" | npx --yes wrangler secret put CF_API_TOKEN;
           elif [ -n "$CLOUDFLARE_API_TOKEN" ]; then echo "$CLOUDFLARE_API_TOKEN" | npx --yes wrangler secret put CF_API_TOKEN;
           else echo "CF_API_TOKEN not set, skip (R2 usage falls back to estimate)"; fi
+          # 中转服务器配置
+          if [ -n "$RELAY_URL" ]; then echo "$RELAY_URL" | npx --yes wrangler secret put RELAY_URL; fi
+          if [ -n "$RELAY_KEY" ]; then echo "$RELAY_KEY" | npx --yes wrangler secret put RELAY_KEY; fi
 
       # secrets 写入后再次部署，确保机密随最新版本一起上线。
       # 必须用 wrangler@4（旧 v3 打包 node:net 仍是 unenv stub，nodejs_compat_v2 不生效）。
