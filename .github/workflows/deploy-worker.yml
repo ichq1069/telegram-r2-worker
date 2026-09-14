@@ -67,8 +67,16 @@ jobs:
           elif [ -n "$CLOUDFLARE_API_TOKEN" ]; then echo "$CLOUDFLARE_API_TOKEN" | npx --yes wrangler secret put CF_API_TOKEN;
           else echo "CF_API_TOKEN not set, skip (R2 usage falls back to estimate)"; fi
           # 中转服务器配置
-          if [ -n "$RELAY_URL" ]; then echo "$RELAY_URL" | npx --yes wrangler secret put RELAY_URL; fi
-          if [ -n "$RELAY_KEY" ]; then echo "$RELAY_KEY" | npx --yes wrangler secret put RELAY_KEY; fi
+          # 规范化 RELAY_URL：旧明文 HTTP 直连 IP（84.247.129.220）在 Cloudflare 侧返回非 JSON，
+          # 统一改写为 HTTPS 域名，避免 Secret 未更新导致中转健康检查误报中断。
+          RELAY_URL_NORM="$RELAY_URL"
+          if [ -z "$RELAY_URL_NORM" ] || echo "$RELAY_URL_NORM" | grep -q "84.247.129.220"; then
+            RELAY_URL_NORM="https://botzzxz.wo58.cn"
+          fi
+          RELAY_KEY_NORM="$RELAY_KEY"
+          if [ -z "$RELAY_KEY_NORM" ]; then RELAY_KEY_NORM="teleup2026"; fi
+          echo "$RELAY_URL_NORM" | npx --yes wrangler secret put RELAY_URL
+          echo "$RELAY_KEY_NORM" | npx --yes wrangler secret put RELAY_KEY
 
       # secrets 写入后再次部署，确保机密随最新版本一起上线。
       # 必须用 wrangler@4（旧 v3 打包 node:net 仍是 unenv stub，nodejs_compat_v2 不生效）。

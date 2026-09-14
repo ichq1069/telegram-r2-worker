@@ -2526,8 +2526,22 @@ function isDirectDownloadUrl(imageUrl) {
 // 备用硬编码：当环境变量未配置时使用（防止 wrangler deploy 覆盖 Cloudflare 后台变量）
 const RELAY_URL_FALLBACK = 'https://botzzxz.wo58.cn';
 const RELAY_KEY_FALLBACK = 'teleup2026';
+// 旧地址黑名单：明文 HTTP 直连 IP 在 Cloudflare 侧不稳定（响应非 JSON），统一改走 HTTPS 域名
+const RELAY_URL_BLOCKED = ['84.247.129.220'];
+function resolveRelayUrl(env) {
+  const raw = String((env && env.RELAY_URL) || '').trim().replace(/\/+$/, '');
+  if (raw && /^https:\/\//i.test(raw)) {
+    let blocked = false;
+    for (const b of RELAY_URL_BLOCKED) { if (raw.indexOf(b) >= 0) { blocked = true; break; } }
+    if (!blocked) return raw;
+  }
+  return RELAY_URL_FALLBACK;
+}
+function resolveRelayKey(env) {
+  return String((env && env.RELAY_KEY) || '').trim() || RELAY_KEY_FALLBACK;
+}
 async function grabViaRelay(env, opts) {
-  const relayUrl = env.RELAY_URL || RELAY_URL_FALLBACK;
+  const relayUrl = resolveRelayUrl(env);
   if (!relayUrl) return null;
   const groupId = await getUploadGroupId(env);
   if (!groupId) return null;
@@ -2541,11 +2555,12 @@ async function grabViaRelay(env, opts) {
     cookie: opts.cookie || '',
   };
   const headers = { 'Content-Type': 'application/json' };
-  if (env.RELAY_KEY) headers['Authorization'] = 'Bearer ' + env.RELAY_KEY;
+  const relayKey = resolveRelayKey(env);
+  if (relayKey) headers['Authorization'] = 'Bearer ' + relayKey;
   try {
     const ac = new AbortController();
     const timer = setTimeout(function() { try { ac.abort(); } catch (e) {} }, 180000);
-    const resp = await fetch(relayUrl.replace(/\/$/, '') + '/relay/grab', {
+    const resp = await fetch(relayUrl + '/relay/grab', {
       method: 'POST', headers: headers, body: JSON.stringify(body), signal: ac.signal,
     });
     clearTimeout(timer);
@@ -3935,15 +3950,16 @@ export async function handleAdminScrapeRuleGroupsSave(request, env) {
 
 // GET /admin/api/scrape/relay-health → { ok, relay: null|{url,status,msg,latencyMs} }
 export async function handleAdminScrapeRelayHealth(env) {
-  const relayUrl = env.RELAY_URL || RELAY_URL_FALLBACK;
+  const relayUrl = resolveRelayUrl(env);
   if (!relayUrl) {
     return json({ ok: true, relay: null, msg: '未配置中转服务器' });
   }
   try {
     const t0 = Date.now();
-    const hUrl = relayUrl.replace(/\/$/, '') + '/relay/health';
+    const hUrl = relayUrl + '/relay/health';
     const headers = {};
-    if (env.RELAY_KEY) headers['Authorization'] = 'Bearer ' + env.RELAY_KEY;
+    const relayKey = resolveRelayKey(env);
+    if (relayKey) headers['Authorization'] = 'Bearer ' + relayKey;
     const resp = await fetch(hUrl, { method: 'GET', headers: headers, signal: AbortSignal.timeout(8000) });
     const ms = Date.now() - t0;
     const j = await resp.json().catch(() => null);
