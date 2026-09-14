@@ -3075,7 +3075,7 @@ export async function handleAdminScrapeGrabOne(request, env) {
               .bind(signed, signed, String(title || name).slice(0, 200), tags, level, isPrivate, sent.fileType, sent.fileSize || 0, dbId, now).run();
           } catch (e) {}
         }
-        return json({ ok: true, data: { url: url, status: 'added', id: dbId, reason: '#files ' + dbId + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate, direct: true } });
+        return json({ ok: true, data: { url: url, status: 'added', id: dbId, reason: '#files ' + dbId + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate, direct: true, source: 'relay' } });
       }
 
       // ── 直链白名单路径：Worker 不下载，直接传 URL 给 Telegram（省内存、避 OOM） ──
@@ -3123,7 +3123,7 @@ export async function handleAdminScrapeGrabOne(request, env) {
                 .bind(signed, signed, String(title || name).slice(0, 200), tags, level, isPrivate, sent.fileType || (asPhoto ? 'photo' : 'document'), sent.fileSize || cl || 0, dbId, now).run();
             } catch (e) { /* pool 写入失败不阻断 */ }
           }
-          return json({ ok: true, data: { url: url, status: 'added', id: dbId, reason: '#files ' + dbId + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate, direct: true } });
+          return json({ ok: true, data: { url: url, status: 'added', id: dbId, reason: '#files ' + dbId + (isPrivate ? ' → 私密库' : ''), name: name, private: !!isPrivate, direct: true, source: 'direct' } });
         }
       }
 
@@ -3149,7 +3149,7 @@ export async function handleAdminScrapeGrabOne(request, env) {
       if (seq > 0) name2 = ('000' + seq).slice(-3) + '_' + name2;
       const res2 = await tgProxySave(env, { name: name2, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: level, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer, originalUrl: url });
       if (!res2.ok) return fail(res2.error);
-      return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id + (isPrivate ? ' → 私密库' : ''), name: name2, private: !!isPrivate } });
+      return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id + (isPrivate ? ' → 私密库' : ''), name: name2, private: !!isPrivate, source: 'proxy' } });
     } catch (e) { return fail(e.message); }
     finally { scrapeRelease(); }
   } catch (e) { return json({ ok: false, error: e.message }, 500); }

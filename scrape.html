@@ -61,6 +61,17 @@ a.link { color: #00d4ff; text-decoration: none; }
 .proginfo { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 12px; color: #9a9ab5; }
 .proginfo b { color: #fff; }
 .progurl { flex: 1; word-break: break-all; color: #00d4ff; }
+.relay-detail { margin-top: 8px; border: 1px solid #2a2c4a; border-radius: 8px; background: #0e0f22; padding: 8px 10px; font-size: 12px; max-height: 300px; overflow: auto; }
+.relay-detail .rd-head { display: flex; gap: 14px; flex-wrap: wrap; color: #9a9ab5; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid #232545; }
+.relay-detail .rd-head b { color: #fff; }
+.relay-detail .rd-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px dashed #232545; }
+.relay-detail .rd-row:last-child { border-bottom: none; }
+.relay-detail .rd-row .u { flex: 1; word-break: break-all; color: #aaa; }
+.relay-detail .rd-badge { padding: 1px 7px; border-radius: 8px; font-size: 11px; border: 1px solid #3a3c5a; color: #9a9ab5; white-space: nowrap; }
+.relay-detail .rd-badge.relay { border-color: #00d4ff55; color: #00d4ff; }
+.relay-detail .rd-badge.direct { border-color: #00ff8855; color: #00ff88; }
+.relay-detail .rd-badge.proxy { border-color: #eab30855; color: #eab308; }
+.relay-detail .rd-ms { color: #666; white-space: nowrap; }
 .tpick-mask { position: fixed; inset: 0; background: rgba(6, 8, 18, .72); z-index: 60; align-items: center; justify-content: center; }
 .tpick-panel { width: min(680px, 94vw); max-height: 80vh; display: flex; flex-direction: column; background: #181a30; border: 1px solid #3a3c5a; border-radius: 14px; overflow: hidden; box-shadow: 0 12px 40px rgba(0, 0, 0, .5); }
 .tpick-head { padding: 14px 16px; border-bottom: 1px solid #2a2c4a; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -173,8 +184,10 @@ a.link { color: #00d4ff; text-decoration: none; }
       <div class="proginfo">
         <span id="scProgStats"></span>
         <span class="progurl" id="scProgUrl"></span>
+        <button class="btn ghost" id="scDetailBtn" style="display:none" title="查看每张图片的中转处理详情（来源 / 阶段 / 耗时）">中转进度详情</button>
         <button class="btn ghost" id="scPauseBtn" style="display:none">暂停</button>
       </div>
+      <div id="scRelayDetail" class="relay-detail" style="display:none"></div>
     </div>
     <div class="grid" id="scGrid"></div>
     <div class="sum" id="scSum" style="display:none"></div>
@@ -840,7 +853,10 @@ document.getElementById('tagPickKw').addEventListener('input', renderTagPick);
 // ===== 批量直传任务（单张请求 + 进度条 + 暂停/续传，状态保留在本机可断点重来）=====
 var JOB_KEY = 'scrapeJob';
 var job = null;                       // { pageUrl,title,tags,level,kw,ext,mb, items:[{u,st,reason,id}] }
-var run = { running: false, paused: false, ctl: null };
+var run = { running: false, paused: false, ctl: null, ctls: [] };
+var relayDetailOpen = false;
+var relayDetailTimer = null;
+var relayHealthy = null; // null=未知, true=正常, false=异常
 function pendCount() { return job ? job.items.filter(function(i) { return i.st === 'pend'; }).length : 0; }
 
 // 服务端成功态返回 status:'added'（历史曾用 'ok'），统一规范为前端内部成功态 'ok'；'exists'/'ignored' 保持原样
@@ -1027,6 +1043,8 @@ function updateProg() {
   updateResumeBtn();
 }
 function stopRunning() {
+  (run.ctls || []).forEach(function(c) { try { c.abort(); } catch (e) {} });
+  run.ctls = [];
   if (run.ctl) { try { run.ctl.abort(); } catch (e) {} run.ctl = null; }
   run.running = false;
   run.paused = false;
@@ -1036,115 +1054,142 @@ function setBusyUI(on) {
   list.forEach(function(id) { var el = document.getElementById(id); if (el) el.disabled = on; });
   document.getElementById('scGrabBtn').disabled = on || selectedUrls().length === 0;
 }
+// 单张处理：调用 grab_one，完成后立即刷新进度条与中转详情
 async function processOne(it) {
-  // 批量模式：不再逐个请求，由 beginBatch 统一提交
-  // 此函数保留用于兼容，实际走 runBatch
+  it.busy = true;
+  it.stage = '排队';
+  it.t0 = Date.now();
+  it.dt = 0;
+  renderResultRows();
+  renderRelayDetail();
+  updateProg();
+  var ctl = new AbortController();
+  if (!run.ctls) run.ctls = [];
+  run.ctls.push(ctl);
+  var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 300000);
+  var body = {
+    url: it.u, seq: it.seq, title: job.title, tags: job.tags, level: job.level,
+    is_private: job.level === 'vvip', ref: job.pageUrl,
+    ignore_kw: job.kw, ignore_ext: job.ext, max_mb: job.mb, must: job.must,
+  };
+  var gc = cookieForGrab(it.u, job.pageUrl, ckVal());
+  if (gc) body.cookie = gc;
+  it.stage = '中转处理中';
+  renderRelayDetail();
+  try {
+    var d = await api('POST', '/admin/api/scrape/grab_one', body, 0, ctl.signal);
+    if (!d.ok || !d.data) { it.st = 'failed'; it.reason = (d && d.error) || '服务端异常'; }
+    else {
+      it.st = normSt(d.data.status) || 'failed';
+      it.reason = d.data.reason || '';
+      it.id = d.data.id;
+      it.src = d.data.source || (d.data.direct ? 'direct' : 'proxy');
+      if (it.st === 'failed' && !it.reason) it.reason = '未知错误';
+    }
+  } catch (e) {
+    it.st = 'pend';
+    it.reason = '已中断，可续传';
+  } finally {
+    clearTimeout(timer);
+    var k = run.ctls ? run.ctls.indexOf(ctl) : -1;
+    if (k >= 0) run.ctls.splice(k, 1);
+    it.busy = false;
+    it.stage = '';
+    it.dt = Date.now() - (it.t0 || Date.now());
+  }
+  renderResultRows();
+  persistJob();
+  updateProg();
+  renderRelayDetail();
 }
-async function runBatch() {
+
+// 按并发数从 pend 队列取任务并发处理，实时推进进度
+async function runLoop() {
+  if (run.running) return;
   run.running = true;
   run.paused = false;
+  run.ctls = [];
   setBusyUI(true);
+  startDetailTicker();
   updateProg();
+  var concEl = document.getElementById('scConc');
+  var conc = Math.max(1, Math.min(4, parseInt(concEl && concEl.value, 10) || 3));
+  setStatus('scGrabStatus', '正在处理 ' + job.items.length + ' 张图片（并发 ' + conc + '）…', 1);
+  while (run.running && !run.paused) {
+    var batch = [];
+    for (var i = 0; i < job.items.length && batch.length < conc; i++) {
+      if (job.items[i].st === 'pend') batch.push(job.items[i]);
+    }
+    if (!batch.length) break;
+    await Promise.all(batch.map(processOne));
+  }
+  run.running = false;
+  run.paused = pendCount() > 0;
+  stopDetailTicker();
+  setBusyUI(false);
+  updateProg();
+  updateResumeBtn();
+  renderResultRows();
+  renderRelayDetail();
+}
+
+// ===== 中转进度详情面板 =====
+function srcLabel(s) {
+  if (s === 'relay') return '中转';
+  if (s === 'direct') return '直传';
+  if (s === 'proxy') return 'Worker代理';
+  return '';
+}
+function fmtSec(ms) { return (Math.max(0, ms || 0) / 1000).toFixed(1) + 's'; }
+function renderRelayDetail() {
+  var box = document.getElementById('scRelayDetail');
+  if (!box) return;
+  var btn = document.getElementById('scDetailBtn');
+  if (btn) {
+    btn.style.display = job ? '' : 'none';
+    btn.textContent = relayDetailOpen ? '收起详情' : '中转进度详情';
+  }
+  var show = !!job && (run.running || run.paused || relayDetailOpen);
+  if (!show) { box.style.display = 'none'; return; }
+  box.style.display = '';
+  var total = job.items.length;
+  var pend = pendCount();
+  var done = total - pend;
+  var active = job.items.filter(function(i) { return i.busy; });
+  var concEl = document.getElementById('scConc');
+  var conc = Math.max(1, Math.min(4, parseInt(concEl && concEl.value, 10) || 3));
+  var relayTxt = relayHealthy === true ? '正常' : (relayHealthy === false ? '异常' : '未知');
+  var head = '<div class="rd-head"><span>处理 <b>' + done + '/' + total + '</b></span>' +
+    '<span>并发 <b>' + conc + '</b></span>' +
+    '<span>处理中 <b>' + active.length + '</b></span>' +
+    '<span>中转 <b>' + relayTxt + '</b></span></div>';
+  var rows = [];
+  active.forEach(function(it) {
+    var el = Date.now() - (it.t0 || Date.now());
+    rows.push('<div class="rd-row"><span class="loading"></span><span class="u">' + escStr(it.u) + '</span>' +
+      '<span class="rd-badge relay">' + escStr(it.stage || '处理中') + '</span><span class="rd-ms">' + fmtSec(el) + '</span></div>');
+  });
+  var finished = job.items.filter(function(i) { return !i.busy && i.st !== 'pend'; });
+  finished.slice(-40).reverse().forEach(function(it) {
+    var r = rowClsOf(it);
+    var sl = srcLabel(it.src);
+    rows.push('<div class="rd-row"><span class="' + r.cls + '">' + r.ico + '</span><span class="u">' + escStr(it.u) + '</span>' +
+      (sl ? '<span class="rd-badge ' + it.src + '">' + sl + '</span>' : '') +
+      '<span class="' + r.cls + '">' + escStr(r.why) + '</span><span class="rd-ms">' + fmtSec(it.dt) + '</span></div>');
+  });
+  box.innerHTML = head + (rows.join('') || '<div style="color:#666;padding:4px 0">暂无处理记录</div>');
+}
+function startDetailTicker() {
+  if (relayDetailTimer) return;
+  relayDetailTimer = setInterval(function() { if (run.running) renderRelayDetail(); }, 1000);
+}
+function stopDetailTicker() {
+  if (relayDetailTimer) { clearInterval(relayDetailTimer); relayDetailTimer = null; }
+}
+async function runBatch() {
   var urls = selectedUrls();
   if (!urls.length) { setStatus('scGrabStatus', '未勾选任何图片', 0); return; }
-  // 构建批量请求体
-  var body = {
-    urls: urls.map(function(u, i) { return { url: u, seq: i + 1 }; }),
-    title: job ? job.title : document.getElementById('scTitle').value.trim(),
-    tags: job ? job.tags : document.getElementById('scTags').value.trim(),
-    level: job ? job.level : document.getElementById('scLevel').value,
-    is_private: (job ? job.level : document.getElementById('scLevel').value) === 'vvip',
-    ref: job ? job.pageUrl : document.getElementById('scUrl').value.trim(),
-    ignore_kw: job ? job.kw : document.getElementById('scIgKw').value.trim(),
-    ignore_ext: job ? job.ext : document.getElementById('scIgExt').value.trim(),
-    max_mb: job ? job.mb : (parseInt(document.getElementById('scIgMb').value, 10) || 30),
-    must: job ? job.must : document.getElementById('scIgMust').value.trim(),
-  };
-  // 初始化 job items
-  if (!job) {
-    job = {
-      pageUrl: body.ref,
-      title: body.title,
-      tags: body.tags,
-      level: body.level,
-      kw: body.ignore_kw,
-      ext: body.ignore_ext,
-      mb: body.max_mb,
-      must: body.must,
-      items: urls.map(function(u, i) { return { u: u, seq: i + 1, st: 'pend', reason: '', id: null }; })
-    };
-  } else {
-    job.items = urls.map(function(u, i) { return { u: u, seq: i + 1, st: 'pend', reason: '', id: null }; });
-  }
-  persistJob();
-  document.getElementById('scSum').style.display = 'none';
-  document.getElementById('scResult').innerHTML = '';
-  updateProg();
-  // 一次性提交
-  var ctl = new AbortController();
-  run.ctl = ctl;
-  var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 300000);
-  setStatus('scGrabStatus', '正在批量提交 ' + urls.length + ' 张图片…', 1);
-  try {
-    var d = await api('POST', '/admin/api/scrape/grab', body, 0, ctl.signal);
-    clearTimeout(timer);
-    if (!d.ok || !d.data) { setStatus('scGrabStatus', '批量提交失败：' + (d && d.error || '未知错误'), 0); return; }
-    var results = d.data.results || [];
-    var added = d.data.added || 0;
-    var ignored = d.data.ignored || 0;
-    var failed = d.data.failed || 0;
-    // 更新 job items
-    results.forEach(function(r, i) {
-      if (job.items[i]) {
-        if (r.status === 'added' || r.ok) {
-          job.items[i].st = 'ok';
-          job.items[i].id = r.id;
-          var mode = r.direct ? '中转' : (r.proxy_url ? 'Worker代理' : '白名单直传');
-          job.items[i].reason = (r.error || '#files ' + r.id) + ' [' + mode + ']';
-        } else if (r.status === 'exists') {
-          job.items[i].st = 'exists';
-          job.items[i].id = r.id;
-          job.items[i].reason = r.error || '已存在';
-        } else if (r.status === 'ignored') {
-          job.items[i].st = 'ignored';
-          job.items[i].reason = r.error || '忽略';
-        } else {
-          job.items[i].st = 'failed';
-          job.items[i].reason = r.error || '失败';
-        }
-      }
-    });
-    persistJob();
-    renderResultRows();
-    updateProg();
-    // 显示汇总
-    var sumHtml = '本轮：';
-    var parts = [];
-    if (added > 0) parts.push('<b>' + added + '</b> 成功');
-    if (ignored > 0) parts.push('<span class="skip">' + ignored + '</span> 已存在/忽略');
-    if (failed > 0) parts.push('<span class="fail">' + failed + '</span> 失败');
-    parts.push('<a class="link" href="/admin#files" target="_blank">去 admin 查看 →</a>');
-    document.getElementById('scSum').innerHTML = sumHtml + parts.join(' · ');
-    document.getElementById('scSum').style.display = '';
-    setStatus('scGrabStatus', '批量提交完成：' + added + ' 成功，' + ignored + ' 已存在，' + failed + ' 失败', added > 0 ? 1 : 0);
-  } catch (e) {
-    clearTimeout(timer);
-    setStatus('scGrabStatus', '请求异常：' + (e && e.message || '未知错误'), 0);
-  } finally {
-    if (run.ctl === ctl) run.ctl = null;
-    run.running = false;
-    setBusyUI(false);
-    updateResumeBtn();
-  }
-}
-function beginBatch() {
-  if (run.running) { setStatus('scGrabStatus', '上一轮还在处理中，可先点「暂停」再操作', 0); return; }
-  if (run.paused || pendCount() > 0) { setStatus('scGrabStatus', '存在未完成的直传任务（剩余 ' + pendCount() + ' 张），请先点「续传剩余 ' + pendCount() + ' 张」处理完；如需全部重来请重新「拾取图片」', 0); return; }
-  var urls = selectedUrls();
-  if (!urls.length) {
-    setStatus('scGrabStatus', '未勾选任何图片：请先在全选/候选图上打勾', 0);
-    return;
-  }
+  // 用当前表单参数重建任务（续传请用「续传剩余」按钮）
   job = {
     pageUrl: document.getElementById('scUrl').value.trim(),
     title: document.getElementById('scTitle').value.trim(),
@@ -1160,6 +1205,7 @@ function beginBatch() {
   document.getElementById('scSum').style.display = 'none';
   document.getElementById('scResult').innerHTML = '';
   updateProg();
+  // 逐张并发处理：每张完成后实时刷新进度与中转详情（runLoop 按并发数调度）
   runLoop();
 }
 function resumeJob() {
@@ -1256,11 +1302,21 @@ document.getElementById('scCopyUrls').addEventListener('click', function() {
 });
 document.getElementById('scGrabBtn').addEventListener('click', runBatch);
 document.getElementById('scPauseBtn').addEventListener('click', function() {
-  if (run.running && !run.paused) { run.paused = true; if (run.ctl) { try { run.ctl.abort(); } catch (e) {} } updateProg(); }
-  else if (run.paused) { resumeJob(); }
+  if (run.running && !run.paused) {
+    run.paused = true;
+    (run.ctls || []).forEach(function(c) { try { c.abort(); } catch (e) {} });
+    updateProg();
+    renderRelayDetail();
+  } else if (run.paused) { resumeJob(); }
+});
+document.getElementById('scDetailBtn').addEventListener('click', function() {
+  relayDetailOpen = !relayDetailOpen;
+  renderRelayDetail();
 });
 document.getElementById('scResumeBtn').addEventListener('click', resumeJob);
 document.getElementById('scAbandonBtn').addEventListener('click', function() {
+  (run.ctls || []).forEach(function(c) { try { c.abort(); } catch (e) {} });
+  run.ctls = [];
   if (run.ctl) { try { run.ctl.abort(); } catch (e) {} run.ctl = null; }
   run.running = false;
   run.paused = false;
@@ -1332,13 +1388,16 @@ function checkRelayHealth() {
       if (r.latencyMs > 0) tip += ' · ' + r.latencyMs + 'ms';
       else tip += ' · 未响应';
       if (r.status === 'healthy') {
+        relayHealthy = true;
         badge.className = 'relay-badge healthy';
         label = '中转正常';
       } else if (r.status === 'unhealthy') {
+        relayHealthy = false;
         badge.className = 'relay-badge unhealthy';
         label = '中转异常';
         tip += '：' + (r.msg || '');
       } else {
+        relayHealthy = false;
         badge.className = 'relay-badge error';
         label = '中转故障';
         tip += '：' + (r.msg || '请求失败');
@@ -1348,6 +1407,7 @@ function checkRelayHealth() {
       badge.onclick = function() { checkRelayHealth(); };
     })
     .catch(function(e) {
+      relayHealthy = false;
       badge.className = 'relay-badge error';
       badge.querySelector('.relay-label').textContent = '检查失败';
       badge.title = '中继健康检查失败：' + (e && e.message || '未知错误');
