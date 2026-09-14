@@ -121,6 +121,11 @@ export async function ensureTables(db) {
         await db.exec("ALTER TABLE bot_commands ADD COLUMN menu TEXT DEFAULT ''");
         console.log('migrated: bot_commands.menu column');
       }
+      // original_url 唯一索引：防止并发重复入库（替代 scrapeAcquire 信号量串行化）
+      try {
+        await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_files_original_url ON files(original_url) WHERE original_url != ''");
+        console.log('migrated: files.original_url unique index');
+      } catch (e3) { /* 已存在或有重复数据则跳过 */ }
       if (bcn.indexOf('builtin') === -1) {
         await db.exec("ALTER TABLE bot_commands ADD COLUMN builtin INTEGER DEFAULT 0");
         console.log('migrated: bot_commands.builtin column');

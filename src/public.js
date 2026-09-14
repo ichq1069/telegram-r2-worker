@@ -2976,22 +2976,8 @@ async function resolvePostimgOriginal(url) {
   } catch (e) { return url; }
 }
 
-// 抓取直传并发闸：单张 Downloads→TG 上传会驻留数份大图缓冲（ArrayBuffer/Blob/FormData）。
-// Worker 内存上限仅 256MB，若前端同时发多张，isolate 会 OOM 并返回非 JSON 的 HTTP 500。
-// 在服务端把「耗时且吃内存」的段落限制为最多 SCRAPE_CONCURRENCY 张同时在跑，超出排队等待。
+// 并发批次大小（仅用于 handleAdminScrapeGrab 的旧批量接口）
 const SCRAPE_CONCURRENCY = 3;
-let scrapeActive = 0;
-const scrapeWaitQueue = [];
-function scrapeAcquire() {
-  return new Promise(function(resolve) {
-    if (scrapeActive < SCRAPE_CONCURRENCY) { scrapeActive++; resolve(); }
-    else scrapeWaitQueue.push(resolve);
-  });
-}
-function scrapeRelease() {
-  scrapeActive--;
-  if (scrapeWaitQueue.length) { scrapeActive++; scrapeWaitQueue.shift()(); }
-}
 
 export async function handleAdminScrapeGrabOne(request, env) {
   try {
@@ -3024,11 +3010,9 @@ export async function handleAdminScrapeGrabOne(request, env) {
     if (b.max_mb) { const mb = Number(b.max_mb); if (mb > 0 && mb <= 30) maxBytes = Math.round(mb * 1024 * 1024); }
     const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/x-icon': 'ico', 'image/tiff': 'tiff' };
     try {
-      // 先 acquire 拿到并发槽位（确保查重和入库是串行的，避免 race condition）
-      await scrapeAcquire();
-      // 已入库去重：同一 original_url 不再重复发送
+      // 已入库去重：同一 original_url 不再重复发送（用 UNIQUE 索引兜底，不再依赖 scrapeAcquire 串行）
       const dup = await env.D1_DB.prepare('SELECT id FROM files WHERE original_url = ? LIMIT 1').bind(url).first();
-      if (dup) { scrapeRelease(); return json({ ok: true, data: { url: url, status: 'exists', reason: '已存在（files #' + dup.id + '）', id: dup.id, direct: isDirectDownloadUrl(url) } }); }
+      if (dup) return json({ ok: true, data: { url: url, status: 'exists', reason: '已存在（files #' + dup.id + '）', id: dup.id, direct: isDirectDownloadUrl(url) } }); }
       const low = url.toLowerCase();
       for (const kw of ignoreKws) {
         if (low.indexOf(kw) >= 0) return json({ ok: true, data: { url: url, status: 'ignored', reason: '链接含「' + kw + '」' } });
@@ -3151,7 +3135,6 @@ export async function handleAdminScrapeGrabOne(request, env) {
       if (!res2.ok) return fail(res2.error);
       return json({ ok: true, data: { url: url, status: 'added', id: res2.id, reason: '#files ' + res2.id + (isPrivate ? ' → 私密库' : ''), name: name2, private: !!isPrivate, source: 'proxy' } });
     } catch (e) { return fail(e.message); }
-    finally { scrapeRelease(); }
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
