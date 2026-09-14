@@ -119,37 +119,68 @@ async def resolve_xhs_url(session, url):
         return url
 
 
-async def extract_xhs_images(session, note_url):
+async def extract_xhs_images(session, note_url, cookie=''):
     """从笔记页提取图片 URL 列表"""
     images = []
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+    ua_mobile = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+    ua_desktop = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    base_headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         'Referer': 'https://www.xiaohongshu.com/',
     }
-    try:
-        async with session.get(note_url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            if resp.status != 200:
-                return images
-            text = await resp.text()
-            # 从 __INITIAL_STATE__ 提取图片
-            m = re.search(r'__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*</script>', text)
-            if m:
-                try:
-                    data = json.loads(m[1].replace('undefined', 'null'))
-                    note_data = (data.get('noteData') or {}).get('data') or {}
-                    image_list = note_data.get('noteData', {}).get('imageList', [])
-                    for img in image_list:
-                        if img and img.get('url'):
-                            images.append(img['url'])
-                        if img and img.get('urlSizeLarge'):
-                            images.append(img['urlSizeLarge'])
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return images
+    if cookie:
+        base_headers['Cookie'] = cookie
+
+    # 尝试多种 UA 组合
+    for ua in [ua_mobile, ua_desktop, ua_mobile.replace('iPhone', 'Android')]:
+        headers = {**base_headers, 'User-Agent': ua}
+        try:
+            async with session.get(note_url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status != 200:
+                    continue
+                text = await resp.text()
+                if not text or len(text) < 1000:
+                    continue
+                # 从 __INITIAL_STATE__ 提取图片
+                m = re.search(r'__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*</script>', text)
+                if m:
+                    try:
+                        data = json.loads(m[1].replace('undefined', 'null'))
+                        note_data = (data.get('noteData') or {}).get('data') or {}
+                        image_list = note_data.get('noteData', {}).get('imageList', [])
+                        for img in image_list:
+                            if img and img.get('url'):
+                                images.append(img['url'])
+                            if img and img.get('urlSizeLarge'):
+                                images.append(img['urlSizeLarge'])
+                        if images:
+                            break
+                    except Exception:
+                        pass
+        except Exception:
+            continue
+
+    # 备用：从 HTML 中直接匹配图片 URL
+    if not images:
+        for ua in [ua_mobile, ua_desktop]:
+            headers = {**base_headers, 'User-Agent': ua}
+            try:
+                async with session.get(note_url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status != 200:
+                        continue
+                    text = await resp.text()
+                    # 匹配 sns-webpic-qc.xhscdn.com 或 ci.xiaohongshu.com
+                    urls = re.findall(r'https?://[^"\s<>]+(?:xhscdn\.com|xiaohongshu\.com/[^"\s<>]+(?:image|photo)[^"\s<>]*)', text)
+                    for u in urls:
+                        if u not in images:
+                            images.append(u)
+                    if images:
+                        break
+            except Exception:
+                continue
+
+    return images[:10]  # 最多返回 10 张
 
 # ========== 核心逻辑 ==========
 async def grab_and_send(url, chat_id, bot_token, caption, as_photo, referer, cookie):
@@ -169,12 +200,14 @@ async def grab_and_send(url, chat_id, bot_token, caption, as_photo, referer, coo
                 # 先解析短链
                 note_url = await resolve_xhs_url(session, url)
                 # 提取图片列表
-                image_urls = await extract_xhs_images(session, note_url)
+                image_urls = await extract_xhs_images(session, note_url, cookie)
                 if not image_urls:
-                    return {'ok': False, 'error': '无法从页面提取图片'}
-                # 上传第一张图片（可扩展为多图）
-                url = image_urls[0]
-                log.info(f'小红书笔记解析: {len(image_urls)} 张图片，上传第 1 张: {url[:100]}')
+                    # 无法提取图片，尝试直接访问短链（可能有 cookie）
+                    log.info('无法从小红书页面提取图片，尝试直接下载')
+                    # 不返回错误，继续尝试下载原始 URL
+                else:
+                    url = image_urls[0]
+                    log.info(f'小红书笔记解析: {len(image_urls)} 张图片，上传第 1 张: {url[:100]}')
 
             # ---- 下载 ----
             log.info(f'下载: {url[:120]}')
