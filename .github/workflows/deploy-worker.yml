@@ -11,6 +11,8 @@
 #                          后台 R2 用量显示官方真实数据（GraphQL Analytics）；不配则回退本地估算
 #   TG_SECRET            : Webhook Secret —— 暂不自动部署（webhook 未配 secret_token 时不需要；
 #                          若以后要启用，在 GitHub Secrets 加 TG_SECRET 并在此列表补一行）
+#   RELAY_URL            : 中转服务器地址（如 https://botzzxz.wo58.cn）
+#   RELAY_KEY            : 中转服务器鉴权密钥
 name: Deploy Worker
 
 on:
