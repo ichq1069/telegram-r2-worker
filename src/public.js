@@ -2582,6 +2582,148 @@ async function grabViaRelay(env, opts) {
   }
 }
 
+// ── 群内图片链接直传：用户在 Telegram 群内发送图片链接，自动下载并入库 ──
+// 返回 { ok, status, id, reason, name, source, error }
+// status: 'added' | 'exists' | 'ignored' | 'failed'
+// source: 'relay' | 'direct' | 'proxy'
+const IMAGE_URL_RE = /https?:\/\/[^\s'"<>]+\.(?:jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff)(?:\?[^\s'"<>]*)?/gi;
+const IMAGE_DOMAIN_RE = /https?:\/\/(?:i\.postimg\.cc|sns-webpic-qc\.xhscdn\.com|pbs\.twimg\.com|byteimg\.com|hdslb\.com|r2\.cloudflarestorage\.com|wo58\.cn)[^\s'"<>]*/gi;
+export async function grabImageUrl(env, url, opts) {
+  const title = String(opts.title || '').slice(0, 200);
+  const tags = String(opts.tags || '');
+  const level = sanitizeLevel(opts.level || 'pt');
+  const isPrivate = opts.is_private ? 1 : (level === 'vvip' ? 1 : 0);
+  const finalLevel = isPrivate ? 'vvip' : level;
+  const toPool = isPrivate ? 1 : 0;
+  const referer = String(opts.referer || '').trim();
+  const caption = opts.caption != null ? opts.caption : title;
+  const dcookie = String(opts.cookie || '').replace(/[\r\n]+/g, ' ').trim().slice(0, 8000);
+
+  try { await ensureTablesOnce(env.D1_DB); } catch (e) {}
+  const groupId = await getUploadGroupId(env);
+  if (!groupId) return { ok: false, status: 'failed', error: '尚未配置上传群组' };
+  if (!env.TG_BOT_TOKEN) return { ok: false, status: 'failed', error: 'TG_BOT_TOKEN 未配置' };
+
+  // 去重：同一 original_url 不再重复发送
+  try {
+    const dup = await env.D1_DB.prepare('SELECT id FROM files WHERE original_url = ? LIMIT 1').bind(url).first();
+    if (dup) return { ok: true, status: 'exists', id: dup.id, reason: '已存在（#' + dup.id + '）' };
+  } catch (e) {}
+
+  const MIME_EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/x-icon': 'ico', 'image/tiff': 'tiff' };
+  const PHOTO_MAX = 10 * 1024 * 1024;
+  const maxBytes = SCRAPE_MAX_BYTES;
+  const uOrigin = ''; // 群内发送无需签名 URL
+
+  // ── 中转服务器路径（最高优先级） ──
+  const relayResult = await grabViaRelay(env, {
+    url: url, caption: caption || undefined, asPhoto: true,
+    referer: referer, cookie: dcookie, bot_token: env.TG_BOT_TOKEN || '',
+  });
+  if (relayResult) {
+    if (!relayResult.ok) return { ok: false, status: 'failed', error: relayResult.error };
+    const now = cnNowISO();
+    const sent = relayResult;
+    const ctExt = MIME_EXT[sent.ct] || '';
+    const name = scrapeImageName(url, ctExt || '', title);
+    const r2 = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at, page_url, original_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?, ?, ?)')
+      .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(name).slice(0, 255), sent.fileSize || 0, sent.fileType, sent.ct || 'image/jpeg', String(title || '').slice(0, 200), tags, finalLevel, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now, referer, url).run();
+    const dbId = r2.meta.last_row_id;
+    await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind('/file/tg/' + dbId, dbId).run();
+    return { ok: true, status: 'added', id: dbId, name: name, source: 'relay' };
+  }
+
+  // ── 直链白名单路径 ──
+  if (isDirectDownloadUrl(url)) {
+    let ct = '', cl = 0, ctExt = '';
+    try {
+      const headH = { 'User-Agent': BROWSER_UA };
+      if (dcookie) headH['Cookie'] = dcookie;
+      const headRes = await fetch(url, { method: 'HEAD', headers: headH, redirect: 'follow' });
+      if (headRes.ok) {
+        ct = String(headRes.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+        cl = parseInt(headRes.headers.get('content-length') || '0', 10);
+        ctExt = MIME_EXT[ct] || '';
+      }
+    } catch (e) {}
+    if (cl <= maxBytes && (!ct || /^image\//.test(ct))) {
+      const asPhoto = ['jpg', 'jpeg', 'png', 'webp'].indexOf(ctExt) !== -1 && cl > 0 && cl <= PHOTO_MAX;
+      const sent = await tgSendUrlToGroup(env, groupId, url, caption || undefined, asPhoto);
+      if (sent.ok) {
+        const now = cnNowISO();
+        const name = scrapeImageName(url, ctExt || '', title);
+        const r2 = await env.D1_DB.prepare('INSERT INTO files (storage_key, r2_url, file_name, file_size, file_type, mime_type, caption, tags, level, is_private, group_ref, telegram_file_id, message_id, chat_id, processing_state, created_at, page_url, original_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'completed\', ?, ?, ?)')
+          .bind('tg/' + sent.fileId, '/file/tg/placeholder', String(name).slice(0, 255), sent.fileSize || cl || 0, sent.fileType || (asPhoto ? 'photo' : 'document'), sent.ct || ct || 'image/jpeg', String(title || '').slice(0, 200), tags, finalLevel, isPrivate, String(sent.chatId || groupId), sent.fileId, String(sent.messageId || ''), String(sent.chatId || groupId), now, referer, url).run();
+        const dbId = r2.meta.last_row_id;
+        await env.D1_DB.prepare('UPDATE files SET r2_url = ? WHERE id = ?').bind('/file/tg/' + dbId, dbId).run();
+        return { ok: true, status: 'added', id: dbId, name: name, source: 'direct' };
+      }
+      // 直传失败 → fall through to Worker proxy
+    }
+  }
+
+  // ── Worker 代理路径：下载 → 上传到 Telegram ──
+  const fetchUrl = await resolvePostimgOriginal(url);
+  const dl = await fetchImageWithFallbacks(fetchUrl, referer, dcookie);
+  const res = dl.res;
+  if (!res.ok) return { ok: false, status: 'failed', error: '下载失败（HTTP ' + res.status + '）' };
+  const ct2 = String(res.headers.get('content-type') || '').split(';')[0].toLowerCase().trim();
+  const cl2 = parseInt(res.headers.get('content-length') || '0', 10);
+  if (cl2 > maxBytes) return { ok: true, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' };
+  const ctExt2 = MIME_EXT[ct2] || '';
+  if (!/^image\//.test(ct2)) return { ok: true, status: 'ignored', reason: '非图片格式（' + (ct2 || '未知') + '）' };
+  const buf = await res.arrayBuffer();
+  if (!buf || !buf.byteLength) return { ok: false, status: 'failed', error: '空响应' };
+  if (buf.byteLength > maxBytes) return { ok: true, status: 'ignored', reason: '超过单张上限 ' + Math.round(maxBytes / 1048576) + 'MB' };
+  const bytes = new Uint8Array(buf);
+  const name2 = scrapeImageName(url, ctExt2 || '', title);
+  const res2 = await tgProxySave(env, { name: name2, bytes: bytes, size: bytes.byteLength, tags: tags, title: title || url, caption: caption, level: finalLevel, isPrivate: isPrivate, toPool: toPool, origin: uOrigin, pageUrl: referer, originalUrl: url });
+  if (!res2.ok) return { ok: false, status: 'failed', error: res2.error };
+  return { ok: true, status: 'added', id: res2.id, name: name2, source: 'proxy' };
+}
+
+// 从文本中提取所有 URL（利用 Telegram entities + 正则兜底）
+export function extractUrlsFromText(text, entities) {
+  const urls = [];
+  const seen = new Set();
+  // 1) 从 Telegram entities 提取（最准确）
+  if (entities && Array.isArray(entities)) {
+    for (const e of entities) {
+      if (e.type === 'url' && e.offset !== undefined && e.length !== undefined) {
+        const u = String(text).slice(e.offset, e.offset + e.length);
+        if (!seen.has(u)) { seen.add(u); urls.push(u); }
+      } else if (e.type === 'text_url' && e.url) {
+        if (!seen.has(e.url)) { seen.add(e.url); urls.push(e.url); }
+      }
+    }
+  }
+  // 2) 正则兜底（覆盖 entities 未标注的情况）
+  const re = /https?:\/\/[^\s'"<>\u200b\u200c\u200d]+/gi;
+  let m;
+  while ((m = re.exec(text || ''))) {
+    const u = m[0].replace(/[.,;:!?)\]]+$/, '');
+    if (!seen.has(u)) { seen.add(u); urls.push(u); }
+  }
+  return urls;
+}
+
+// 判断 URL 是否为图片链接（按扩展名或已知图床域名）
+export function looksLikeImageUrl(url) {
+  // 已知图床域名直接通过
+  if (isDirectDownloadUrl(url)) return true;
+  // 按扩展名判断
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    if (/\.(jpg|jpeg|png|gif|webp|avif|bmp|svg|ico|tiff|heic|heif)(\?|$)/i.test(pathname)) return true;
+  } catch (e) {}
+  // 特殊图床路径模式（如 xhscdn、twimg 等无扩展名）
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    if (h.indexOf('xhscdn.com') >= 0 || h.indexOf('twimg.com') >= 0 || h.indexOf('byteimg.com') >= 0 || h.indexOf('hdslb.com') >= 0) return true;
+  } catch (e) {}
+  return false;
+}
+
 // 下载图片：多级重试规避源站 403/反爬（小红书/微博等常拦 bot UA 或校验 Referer）。
 // 依次尝试：①当前 UA+原 Referer → ②浏览器 UA+图床 Hint Referer → ③纯浏览器 UA → ④TG UA（兜底）。
 // 仅对 !ok 且状态 403/404/4xx 或抛错时进入下一档；返回 { res, tried }（res 为最后一次响应）。

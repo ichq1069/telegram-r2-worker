@@ -6,7 +6,7 @@ import { notifyAdmin, genThumb } from "./notify.js";
 import { cnTodayStr, cnNowISO, guessExt, fileExtOf, extractTags } from "./core.js";
 import { OFFICIAL_API, tgApiBases, dlFileStream, dlFileLarger, dlFileStreamLarger, lastUploadError, putR2, putR2Stream, computeMd5, stripExifIfJpeg, countCompleted, replyText, replyTextPlain, getMainMenuCfg, replyTextWithKeyboard, sendQuickReplyKeyboard, COLD_STORAGE_MIN, COLD_STORAGE_CLASS, MAIN_BUTTONS, mimeForStorageKey } from "./telegram.js";
 import { getMenuCtx, execMenuAction, getAIConfig, isAIReplyText, callAIManage, handleBotCommand, handleCountCommand, handlePendingCommand, handleRetryCommand, handleHealthCommand, handleImgCommand, handleInlineQuery, DEFAULT_COMMANDS } from "./commands.js";
-import { recordKnownChat, recordUserInteraction } from "./public.js";
+import { recordKnownChat, recordUserInteraction, grabImageUrl, extractUrlsFromText, looksLikeImageUrl } from "./public.js";
 import { getBotUsername, getProxyMode } from "./api.js";
 import { dualInsertFiles, dualUpdateFiles } from "./mysql.js";
 import { allocTgRef, getFileRef, scheduleBatchRef, refreshGroupReceipt, handleDeletedMsg, isBatchCommand, startManualBatch, isManualBatchActive, finalizeManualBatch, getManualBatchStatus } from "./batch.js";
@@ -427,6 +427,76 @@ export async function processUpdateCore(update, env, waitFn) {
       const p = processShareLinkAsync(rid, shareLink, chatId, msgId, chat, from, date, env).catch(e => log.error('share async:', e.message));
       if (waitFn) waitFn(p); else p;
       return { ok: true, queued: true, fileId: rid };
+    }
+  }
+
+  // ── 图片链接直传：用户在群内发送图片链接（每行一个），自动下载入库 ──
+  if (msg && msg.text && env.D1_DB && env.TG_BOT_TOKEN) {
+    const chatId = String(msg.chat.id);
+    const msgId = String(msg.message_id);
+    const from = msg.from || {};
+    const chat = msg.chat || {};
+    const date = msg.date ? new Date(msg.date * 1000) : new Date();
+    // 按 chat_id+message_id 去重（防 webhook 重投）
+    try {
+      const dup = await env.D1_DB.prepare('SELECT id FROM files WHERE chat_id=? AND message_id=? AND deleted_at IS NULL LIMIT 1').bind(chatId, msgId).first();
+      if (dup) return { ok: true, duplicate: true };
+    } catch (e) {}
+    // 提取消息中的所有 URL
+    const allUrls = extractUrlsFromText(msg.text, msg.entities);
+    // 过滤出图片链接
+    const imageUrls = allUrls.filter(function(u) { return looksLikeImageUrl(u); });
+    if (imageUrls.length > 0) {
+      const userTitle = [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'User';
+      // 提取 #标签
+      const tags = extractTags(msg.text || '');
+      const tagStr = tags.join(',');
+      // 逐张异步处理（不阻塞 webhook 响应）
+      const promises = imageUrls.map(function(url, idx) {
+        return grabImageUrl(env, url, {
+          title: userTitle,
+          tags: tagStr,
+          level: 'pt',
+          is_private: 0,
+          referer: msg.text || '',
+          cookie: '',
+          caption: userTitle + ' 分享',
+        }).then(function(r) {
+          if (r.ok && r.status === 'added' && env.TG_BOT_TOKEN) {
+            // 回复用户：保存成功
+            fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chatId,
+                text: '✅ 图片已保存\n#' + r.id + ' ' + (r.name || url.slice(0, 60)),
+                disable_web_page_preview: true,
+              }),
+            }).catch(function() {});
+          } else if (r.ok && r.status === 'exists') {
+            // 已存在：静默跳过（不回复，避免刷屏）
+          } else if (r.status === 'ignored') {
+            // 非图片或超限：静默跳过
+          } else {
+            // 失败：回复用户
+            fetch('https://api.telegram.org/bot' + env.TG_BOT_TOKEN + '/sendMessage', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chatId,
+                text: '❌ 图片保存失败\n' + url.slice(0, 60) + '\n原因：' + (r.error || r.reason || '未知'),
+                disable_web_page_preview: true,
+              }),
+            }).catch(function() {});
+          }
+        }).catch(function(e) {
+          log.error('grabImageUrl error:', e.message);
+        });
+      });
+      // fire-and-forget：不阻塞 webhook 响应
+      const allP = Promise.all(promises);
+      if (waitFn) waitFn(allP); else allP;
+      return { ok: true, queued: true, imageLinks: true, count: imageUrls.length };
     }
   }
 
