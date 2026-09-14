@@ -1066,7 +1066,7 @@ async function processOne(it) {
   var ctl = new AbortController();
   if (!run.ctls) run.ctls = [];
   run.ctls.push(ctl);
-  var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 300000);
+  var timer = setTimeout(function() { try { ctl.abort(); } catch (e) {} }, 200000);
   var body = {
     url: it.u, seq: it.seq, title: job.title, tags: job.tags, level: job.level,
     is_private: job.level === 'vvip', ref: job.pageUrl,
@@ -1115,14 +1115,24 @@ async function runLoop() {
   var concEl = document.getElementById('scConc');
   var conc = Math.max(1, Math.min(4, parseInt(concEl && concEl.value, 10) || 3));
   setStatus('scGrabStatus', '正在处理 ' + job.items.length + ' 张图片（并发 ' + conc + '）…', 1);
-  while (run.running && !run.paused) {
-    var batch = [];
-    for (var i = 0; i < job.items.length && batch.length < conc; i++) {
-      if (job.items[i].st === 'pend') batch.push(job.items[i]);
+  // worker pool：每个 worker 完成一张后立即取下一张，避免某张卡住时其余槽位空转
+  function takeNext() {
+    for (var i = 0; i < job.items.length; i++) {
+      var it = job.items[i];
+      if (it.st === 'pend' && !it.busy) { it.busy = true; return it; }
     }
-    if (!batch.length) break;
-    await Promise.all(batch.map(processOne));
+    return null;
   }
+  async function worker() {
+    while (run.running && !run.paused) {
+      var it = takeNext();
+      if (!it) return;
+      await processOne(it);
+    }
+  }
+  var workers = [];
+  for (var w = 0; w < conc; w++) workers.push(worker());
+  await Promise.all(workers);
   run.running = false;
   run.paused = pendCount() > 0;
   stopDetailTicker();
