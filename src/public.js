@@ -2821,7 +2821,11 @@ export async function handleAdminScrapeGrab(request, env) {
   try {
     const b = await request.json().catch(() => null);
     if (!b || !Array.isArray(b.urls) || !b.urls.length) return json({ ok: false, error: 'urls required' }, 400);
-    const urls = b.urls.map(function(x) { return String(x).trim(); }).filter(function(x) { return /^https?:\/\//i.test(x); }).slice(0, 40);
+    // 兼容两种格式：字符串数组 ["http..."] 或对象数组 [{ url, seq }]（前端批量提交用后者）
+    const urls = b.urls.map(function(x) {
+      if (x && typeof x === 'object') return String(x.url || '');
+      return String(x);
+    }).map(function(x) { return x.trim(); }).filter(function(x) { return /^https?:\/\//i.test(x); }).slice(0, 40);
     if (!urls.length) return json({ ok: false, error: 'url must be http(s)' }, 400);
     if (env.D1_DB) { try { await ensureTablesOnce(env.D1_DB); } catch (e) {} }
     const groupId = await getUploadGroupId(env);
