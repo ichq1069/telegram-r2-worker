@@ -2683,7 +2683,7 @@ export async function handleAdminScrapeAnalyze(request, env) {
       title = tiebaWap.title;
       rawUrls = tiebaWap.urls;
     } else {
-      const isXhsLink = /xhslink\.cn/i.test(raw);
+      const isXhsLink = /xhslink\.cn/i.test(raw) || /xiaohongshu\.com/i.test(raw);
       try {
         const fh = {
           'User-Agent': BROWSER_UA,
@@ -2693,8 +2693,8 @@ export async function handleAdminScrapeAnalyze(request, env) {
         if (cookie) fh['Cookie'] = cookie;
         try { fh['Referer'] = new URL(raw).origin + '/'; } catch (e) {}
         let res = await fetch(raw, { headers: fh, redirect: 'follow' });
-        // xhslink.cn 短链需要手机 UA 才能解析重定向；桌面 UA 返回 404 时自动重试
-        if (isXhsLink && !res.ok) {
+        // 小红书需要手机 UA；桌面 UA 返回 404 或空内容时自动重试
+        if (isXhsLink && (!res.ok || !html)) {
           const mh = Object.assign({}, fh, { 'User-Agent': TIEBA_WAP_UA });
           res = await fetch(raw, { headers: mh, redirect: 'follow' });
         }
