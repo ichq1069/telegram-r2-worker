@@ -24,6 +24,7 @@ import json
 import asyncio
 import logging
 import mimetypes
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -72,6 +73,84 @@ def is_image_or_video(ct):
     """判断是否为图片或视频类型"""
     return ct and (ct.startswith('image/') or ct.startswith('video/'))
 
+
+def extract_xhs_note_id(url):
+    """从小红书短链或笔记页 URL 中提取 note ID"""
+    try:
+        # xhslink.cn/o/xxx
+        m = re.search(r'xhslink\.cn/[a-z]/{1}([^/?]+)', url)
+        if m:
+            return m.group(1)
+        # xiaohongshu.com/explore/xxx 或 discovery/item/xxx
+        m = re.search(r'xiaohongshu\.com/(?:explore|discovery/item)/([a-f0-9]+)', url)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+async def resolve_xhs_url(session, url):
+    """解析小红书短链，返回笔记页 URL"""
+    if not re.search(r'xhslink\.cn|xiaohongshu\.com', url, re.I):
+        return url
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Referer': 'https://www.xiaohongshu.com/',
+    }
+    try:
+        async with session.get(url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status != 200:
+                return url
+            text = await resp.text()
+            # 从 __INITIAL_STATE__ 中提取最终 URL
+            m = re.search(r'"noteDetailCard":\{"noteId":"([^"]+)"', text)
+            if m:
+                note_id = m.group(1)
+                return f'https://www.xiaohongshu.com/explore/{note_id}'
+            # 从 location 头提取
+            loc = resp.headers.get('Location', '')
+            if loc and 'xiaohongshu.com' in loc:
+                return loc
+            return url
+    except Exception:
+        return url
+
+
+async def extract_xhs_images(session, note_url):
+    """从笔记页提取图片 URL 列表"""
+    images = []
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'Referer': 'https://www.xiaohongshu.com/',
+    }
+    try:
+        async with session.get(note_url, headers=headers, allow_redirects=True, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            if resp.status != 200:
+                return images
+            text = await resp.text()
+            # 从 __INITIAL_STATE__ 提取图片
+            m = re.search(r'__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*</script>', text)
+            if m:
+                try:
+                    data = json.loads(m[1].replace('undefined', 'null'))
+                    note_data = (data.get('noteData') or {}).get('data') or {}
+                    image_list = note_data.get('noteData', {}).get('imageList', [])
+                    for img in image_list:
+                        if img and img.get('url'):
+                            images.append(img['url'])
+                        if img and img.get('urlSizeLarge'):
+                            images.append(img['urlSizeLarge'])
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return images
+
 # ========== 核心逻辑 ==========
 async def grab_and_send(url, chat_id, bot_token, caption, as_photo, referer, cookie):
     """下载图片 + 上传到 Telegram，返回 { ok, file_id, message_id, file_size, mime_type }"""
@@ -85,6 +164,18 @@ async def grab_and_send(url, chat_id, bot_token, caption, as_photo, referer, coo
 
     async with semaphore:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=DOWNLOAD_TIMEOUT)) as session:
+            # ---- 小红书短链解析 ----
+            if re.search(r'xhslink\.cn|xiaohongshu\.com', url, re.I):
+                # 先解析短链
+                note_url = await resolve_xhs_url(session, url)
+                # 提取图片列表
+                image_urls = await extract_xhs_images(session, note_url)
+                if not image_urls:
+                    return {'ok': False, 'error': '无法从页面提取图片'}
+                # 上传第一张图片（可扩展为多图）
+                url = image_urls[0]
+                log.info(f'小红书笔记解析: {len(image_urls)} 张图片，上传第 1 张: {url[:100]}')
+
             # ---- 下载 ----
             log.info(f'下载: {url[:120]}')
             try:
