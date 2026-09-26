@@ -32,7 +32,7 @@ function handleDocs() {
 <div class="sec"><h2>接口列表</h2>
 
 <div class="ac"><div class="ah"><span class="m get">GET</span><span class="pp">/health</span><span class="tg tp">公开</span></div><div class="ad">健康检查，无需认证</div>
-<div class="cd g">{"ok":true,"time":"2026-08-23T...","version":"v5"}</div></div>
+<div class="cd g">{"ok":true,"time":"2026-08-23T...","version":"v8"}</div></div>
 
 <div class="ac"><div class="ah"><span class="m get">GET</span><span class="pp">/api/files</span><span class="tg ta">需认证</span></div><div class="ad">文件列表 - 支持分页和多条件筛选</div>
 <div class="pt"><table><tr><th>参数</th><th>类型</th><th>必填</th><th>说明</th></tr>

@@ -533,7 +533,7 @@ POST /api/v1/upload?api_key=密钥&pool=1&tags=风景&title=标题&level=pt</pre
       </ul>
       <h3>验证部署</h3>
       <pre>curl https://&lt;worker域名&gt;/health
-# {"ok":true,"time":"...","version":"v7"}</pre>
+# {"ok":true,"time":"...","version":"v8"}</pre>
       <p>打开后台确认右上角版本号已变为新的 <code>v1.0.&lt;run#&gt;</code>，即可确认本次部署生效。</p>
       <div class="note red"><b>重要</b>：后台 <code>admin.html</code>、<code>admin-guide.html</code>、<code>scrape.html</code> 等静态页均从 R2 读取。部署工作流会自动上传最新版；若本地手改过这些文件，必须 commit + push 才会随部署更新。</div>
     </div>

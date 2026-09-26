@@ -1,6 +1,6 @@
 # Telegram R2 Bot Worker API 文档
 
-**版本**: v7  
+**版本**: v8  
 **基础 URL**: `https://telegram-r2-bot.wo58.cn`
 
 ## 目录
@@ -29,7 +29,7 @@ GET /health
 {
   "ok": true,
   "time": "2026-08-31T10:00:00.000Z",
-  "version": "v7"
+  "version": "v8"
 }
 ```
 

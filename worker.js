@@ -1,5 +1,5 @@
 /**
- * Telegram Bot → R2 + D1 Worker v7
+ * Telegram Bot → R2 + D1 Worker v8
  * Features: Bot commands, Custom API, Webhook, Dashboard, Large file support
  * 拆模块：工具/db/告警/备份/限流在 src/ 目录，主体逻辑仍在本文件
  */
@@ -48,7 +48,7 @@ export default {
     const url = new URL(request.url);
     const p = url.pathname;
     const m = request.method;
-    if (m === 'GET' && p === '/health') return json({ ok: true, time: cnNowISO(), version: 'v7' });
+    if (m === 'GET' && p === '/health') return json({ ok: true, time: cnNowISO(), version: 'v8' });
     if (m === 'POST' && p === '/webhook') return handleWebhook(request, env, ctx);
     if (m === 'GET' && p === '/dashboard') return handleDashboard(env);
     if (m === 'GET' && p === '/docs') return handleDocs();
