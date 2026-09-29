@@ -2,16 +2,19 @@
 
 ## 1. 技术栈
 
-- Cloudflare Workers(ESM,`worker.js` 为唯一入口)
-- R2 存储(`bot-telegram`,smart_tiered_cache)
-- D1 SQLite(`telegram-url`)
-- Cloudflare Queues(后台长任务)
-- 纯静态管理后台 `admin.html`(原生 JS,无框架)
-- GitHub Actions 自动部署(wrangler-action v3)
+- Cloudflare Workers（ESM，`worker.js` 为唯一入口，业务在 `src/`）
+- R2（`bot-telegram`）
+- D1 SQLite（`telegram-url`），schema 版本 `14`
+- Hyperdrive + mysql2（VPS MySQL 备库）
+- Cloudflare Queues（后台长任务）
+- 纯静态管理后台 `admin.html`
+- Flutter 3.x（PicWall，`android/picwall_app`）
+- Python aiohttp（`relay/`）
+- GitHub Actions：`wrangler-action@v4` + wrangler `4.128.0`
 
 ## 2. 本地开发
 
-环境要求:Node.js ≥ 18、`npx wrangler` 可用。
+环境要求：Node.js ≥ 18、`npx wrangler`。Android 改动在沙箱里没有 Flutter，只能 push `main` 走 `build-android.yml` 验证。
 
 ### 2.1 语法校验
 
@@ -20,90 +23,111 @@ node --check worker.js
 for f in src/*.js; do node --check "$f"; done
 ```
 
-管理后台 JS 校验:把 `admin.html` 中 `<script>` 内容抽出后用 `node --new-function` 语法检查(无 DOM 环境,用 `new Function` 包一层)。
+流水线同样跑这两步。`src/public.js` 曾因多余 `}` 导致 wrangler 打包失败（`Expected "finally" but found "const"`），改完务必本地 `--check`。
 
-### 2.2 本地预览(需要本机 Cloudflare 登录与 secrets)
+### 2.2 本地预览
 
 ```bash
 npx wrangler dev
 ```
 
-需本机已配置 `CLOUDFLARE_API_TOKEN`(含 Worker/R2/D1 权限),且 `TG_BOT_TOKEN`/`API_KEY` 等 secret 已在 Dashboard 或 `.dev.vars` 存在。
+需要本机 `CLOUDFLARE_API_TOKEN`，以及 `TG_BOT_TOKEN` / `API_KEY` 等（Dashboard 或 `.dev.vars`）。不要把真实密钥写进仓库。
 
-## 3. 部署(推荐 GitOps)
+## 3. 部署（推荐 GitOps）
 
-push `main` 分支即自动部署,无需本机 wrangler。流水线见 [模块/部署流水线](./模块/部署流水线.md)。
+push `main` 且变更不只在 `android/**` 时自动部署 Worker。流水线见 [模块/部署流水线](./模块/部署流水线.md)。
 
-### 3.1 需要的 GitHub Secrets
+线上验收：`GET https://telegram-r2-bot.wo58.cn/health` 的 `version` 应变为仓库里 `worker.js` 写的版本（当前 `v8`）；`admin.html` 右上角 `APP_VERSION` 变为 `v1.0.<run#>`。
 
-| Secret | 权限要求 | 用途 |
-|---|---|---|
-| `CLOUDFLARE_API_TOKEN` | Worker Scripts:Edit、D1:Edit、R2 Storage:Edit、Workers R2 Storage:Edit、Account Settings:Read | 部署 |
-| `CLOUDFLARE_ACCOUNT_ID` | — | 账号 ID |
-| `TG_BOT_TOKEN` | — | 每次部署写入 Worker secret |
-| `API_KEY` | — | 管理员 API Key(写入 secret) |
-| `CF_API_TOKEN`(可选) | R2 Storage:Read | R2 官方用量查询;缺省复用 `CLOUDFLARE_API_TOKEN` |
+### 3.1 GitHub Secrets
 
-### 3.2 手动部署(备选)
+| Secret | 用途 |
+|---|---|
+| `CLOUDFLARE_API_TOKEN` | 部署（Worker/D1/R2 编辑 + Account Settings:Read） |
+| `CLOUDFLARE_ACCOUNT_ID` | 账号 ID |
+| `TG_BOT_TOKEN` | 写入 Worker secret |
+| `API_KEY` | 管理员 Key |
+| `CF_API_TOKEN`（可选） | R2 官方用量；缺省复用部署 token |
+| `RELAY_URL` / `RELAY_KEY` | 抓取中转；未配时流水线回退 `https://botzzxz.wo58.cn` |
+| `ANDROID_DEBUG_KEYSTORE_B64` | PicWall 固定签名（从 +62 起） |
+
+### 3.2 手动部署
 
 ```bash
+npm ci
 npx wrangler deploy
 echo "$TG_BOT_TOKEN" | npx wrangler secret put TG_BOT_TOKEN
 echo "$API_KEY" | npx wrangler secret put API_KEY
 npx wrangler deploy
+node .github/scripts/bump-version.js
 npx wrangler r2 object put bot-telegram/admin.html --file=admin.html \
-  --content-type text/html --cache-control "public, max-age=300"
+  --content-type text/html --cache-control "public, max-age=300" --remote
 ```
 
-注意:先 deploy 再 `secret put` 再 deploy —— Cloudflare 版本管理不允许「最新版本未部署」时写 secret。
+先 deploy 再 `secret put` 再 deploy。wrangler 4 的 `r2 object put` 必须加 `--remote`，否则只写本地假成功。
 
-## 4. 数据模型变更规范
+## 4. 数据模型变更
 
-新列/新表必须走 `src/db.js` 的双路径:
+新列/新表必须走 `src/db.js` 双路径，并递增 `SCHEMA_VERSION`（当前 `'14'`）：
 
-1. 同步加入 `CREATE TABLE IF NOT EXISTS` 的列定义(新库生效)
-2. 在 `wantCols` 或对应表的 PRAGMA 迁移块补一条 `ALTER TABLE`(旧库生效)
+1. 加入 `CREATE TABLE IF NOT EXISTS`
+2. 在 `wantCols` 或对应 PRAGMA 块补 `ALTER TABLE`
+3. 改 `SCHEMA_VERSION`，否则旧 isolate 命中旧标记会跳过迁移
 
-迁移是幂等的:先 `PRAGMA table_info` 检查,已存在则跳过;关键列迁移失败会抛错,下一请求重试。参考 `src/db.js:38-123` 中 `files.level`、`random_pool.is_private`、`api_keys.level` 的写法。
+迁移幂等：先 `PRAGMA table_info`。关键列仍缺失会抛错，下一请求重试。
 
 ## 5. 测试
 
-项目无自动化测试框架,验证方式:
+Worker 无自动化测试框架：
 
-- 语法:`node --check`(见 2.1)
-- 集成:本地 `wrangler dev` + 真实 Telegram 消息/webhook 手测
-- 部署冒烟:`/health` 返回 200、`/admin` 可打开、`/api/v1/files` 用测试密钥返回数据
+- 语法：`node --check`
+- 集成：`wrangler dev` + 真实 Telegram / webhook
+- 冒烟：`/health` 200、`/admin` 可开、`/api/v1/files` 用测试密钥返回数据
+
+PicWall：`android/picwall_app/test/` 下 Dart 单测。CI 跑 `flutter analyze`（info 级也会失败）+ `flutter test`。纯逻辑改动应带单测，避免只靠 10 分钟 APK 构建。
 
 ## 6. 常见任务
 
-### 6.1 修改管理后台
+### 6.1 改管理后台
 
-直接编辑 `admin.html`,推 main 后流水线自动上传到 R2(`GET /admin` 读取的是 R2 上的文件)。版本号由 `bump-version.js` 注入 `APP_VERSION`,改版后需 `Cmd+Shift+R` 强刷缓存(缓存 `max-age=300`)。
+编辑 `admin.html`，push `main` 后上传到 R2。`GET /admin` 读的是 R2 文件。版本由 `bump-version.js` 注入。缓存 `max-age=300`，改完需强刷。
 
-### 6.2 修改 Bot 命令
+### 6.2 改 Bot 命令
 
-内置命令在 `worker.js` 中定义,`syncBuiltinCommands` 每次调度用 `INSERT OR IGNORE` 登记,不覆盖用户在后台的修改。用户自建命令存 `bot_commands` 表,后台「命令」tab 管理。
+内置命令在 `src/commands.js`，`syncBuiltinCommands` 每次调度 `INSERT OR IGNORE`，不覆盖后台改过的行。用户命令在 `bot_commands` 表。
 
 ### 6.3 新增公开 API
 
-- 认证走 `api_keys` 表:`checkApiKey(request, env)` 拿 `{rec, limited}`,失败返回 401/429
-- 分级过滤:`levelFilter(keyLevel)` 生成 SQL 片段;公共内容恒加 `is_private=0`(非 vvip)
-- 在 `worker.js` fetch 的 v1 分支(`worker.js:173-180`)加路由
+- 认证：`checkApiKey(request, env)`，失败 401/429
+- 分级：`levelFilter(keyLevel)`；非 vvip 加 `is_private=0`
+- 写权限用 `hasScope(rec, 'files:write')`
+- 在 `worker.js` 的 `fetch` 里按现有顺序加路由
+
+### 6.4 改 Android
+
+仓库只保留 Dart 源码。CI `flutter create --platforms=android` 脚手架后再注入权限与签名。本地无 Flutter 时不要声称已 analyze。
 
 ## 7. 排障速查
 
 | 现象 | 排查方向 |
 |---|---|
-| webhook 失效 | 后台「运维」tab → webhook 状态/一键修复;或 `/admin/api/webhook-fix` |
-| 文件未转存 | 后台「未转存」tab 查看列表并批量重试;检查 R2 权限与 Queue 是否正常 |
-| 公开 API 401/429 | `api_keys` 表密钥是否启用/过期;`rate_limits` 是否触发;级别配置 |
-| 看不到某内容 | 密钥级别 < 内容级别,或内容 `is_private=1` 而非 vvip 密钥 |
-| 冷启动慢 | `ensureTablesOnce` 已做 isolate 级幂等;仍慢时检查 D1 查询索引是否命中 |
-| 用量超预期 | 后台「用量预测」;R2 smart_tiered_cache 已降冷数据成本 |
+| webhook 失效 | 运维 tab → webhook 状态 / `/admin/api/webhook-fix` |
+| webhook 500 | 构造空 update / 文本 / 命令样本，看返回 `error`（常见 ReferenceError） |
+| 文件未转存 | 未转存 tab；R2 权限；Queue |
+| 视频一直加载 | `/file/tg` 代理：Range 也要触发懒转存；上游 200 全量时要自行切 206。见 `src/api.js` `handleTgFileRedirect` |
+| 公开 API 401/429 | 密钥启用/过期；`rate_limits`；级别 |
+| 看不到某内容 | 密钥级别低于内容，或 `is_private=1` 而非 vvip |
+| 冷启动 30s+ | 免费版 Worker 跨节点排队；不要在 Worker 内再 `caches.default`；用 `Cache-Control s-maxage` |
+| Deploy 失败 `Expected finally` | `src/*.js` 括号不配，先 `node --check` |
+| APK 无法覆盖安装 | +62 之前是随机 debug 签名，需卸载后装固定签名包 |
+| 抓取 OOM | 走 relay，不要让 Worker 下载大图 |
+
+验证真实回源耗时用带 `cb=` 时间戳的 URL，避免 CDN HIT 掩盖慢请求。
 
 ## 8. 约定
 
-- 所有响应统一 `{ok, data}` / `{ok, error}` 结构
-- 表名/路由名稳定优先:更名只改 UI 文案,保留 API 路径与表名(如 shared pool 更名未改 `/admin/api/pool`)
-- 机密永不写入 `wrangler.toml` 或仓库;文档中的 Key 一律用 `<API_KEY>` 占位
-- 新增后台 tab:在 `admin.html` 增加 tab 按钮 + 面板 + 对应 `/admin/api/*` handler
+- 响应统一 `{ok, data}` / `{ok, error}`
+- 表名/路由稳定：更名只改 UI（共享库仍是 `random_pool` / `/admin/api/pool`）
+- 机密不进 `wrangler.toml` 和仓库
+- 东八区统计用 `src/core.js` 的 `cnTodayStr` / `cnDayIso`
+- 新增后台 tab：`admin.html` 的 `tabGroups` + panel + `/admin/api/*`

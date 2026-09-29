@@ -1,50 +1,92 @@
 # src/ 辅助模块
 
-`src/` 是被 `worker.js` 引用的纯辅助模块(与废弃的 `handlers/ services/ utils/` 无关)。它们只做一件事,无框架依赖。
+被 `worker.js` import。与废弃的 `handlers/` `services/` `utils/` 无关。
 
-## src/db.js — D1 初始化与迁移
-
-| 导出 | 说明 |
-|---|---|
-| `ensureTablesOnce(db)` | isolate 级幂等建表(每次请求调用,仅首次执行) |
-| `ensureTables(db)` | 建表 + 列迁移的完整逻辑 |
-
-- 单次 `db.exec` 建全部 `CREATE TABLE IF NOT EXISTS` 与索引(替代原先 10+ 次串行 D1 调用,消除冷启动秒级延迟)
-- 列迁移:`PRAGMA table_info` 检查后逐个 `ALTER TABLE`,幂等;关键列迁移失败会抛错(不置 once 标记)让下个请求重试
-- 迁移覆盖:`files`(md5/processing_state/tg_file_url/error_msg/进度/缩略图/quick_hash/tags/pool_status/group_ref/deleted_at/view_count/**level**/**is_private**)、`bot_commands.menu/builtin`、`api_keys.expires_at/**level**`、`show_groups.mode/daily_count/updated_at`、`random_pool.**level**/**is_private**`
-
-## src/util.js — 纯函数工具
+## db.js — D1 初始化
 
 | 导出 | 说明 |
 |---|---|
-| `json(d, s)` | JSON 响应(带 CORS) |
-| `cors(d, s)` | CORS 空响应(预检) |
-| `fmtSize(b)` | 字节 → 人类可读(B/KB/MB/GB/TB) |
-| `genHash()` | 32 位 hex 随机哈希(基于 `crypto.getRandomValues`) |
+| `ensureTablesOnce(db)` | isolate 级幂等建表 |
+| `ensureTables(db)` | 建表 + 列迁移 |
 
-## src/notify.js — 失败告警 + 缩略图
+- `SCHEMA_VERSION = '14'`：settings 命中则跳过全部 CREATE/ALTER
+- 单次 `db.exec` 建全部表和索引
+- `files.original_url` 条件唯一索引防抓取重复入库
 
-| 导出 | 说明 |
-|---|---|
-| `notifyAdmin(env, text)` | 转存失败时向管理员 chat 发 Telegram 消息;同一错误 5 分钟节流去重;目标 chat 取 `settings.admin_chat_id` 或 `env.ADMIN_CHAT_ID` |
-| `genThumb(env, r2Url, key)` | 用 Cloudflare Image Resizing 生成 480w WebP 缩略图写入 `thumbs/`,失败静默跳过 |
+表：`files`、`bot_config`、`bot_commands`、`settings`、`api_keys`、`random_pool`、`show_groups`、`rate_limits`、`worker_stats`、`user_stats`、`known_chats`、`redeem_codes`、`api_call_logs`、`tags`、`folders`、`user_uploads`、`app_installs`。
 
-## src/ratelimit.js — 公开 API 限流
+## core.js — 纯工具
 
-| 导出 | 说明 |
-|---|---|
-| `applyRateLimit(env, key)` | 按 `api_key + 分钟窗口` 在 `rate_limits` 表计数,超过 `settings.api_rate_limit.limit_per_min` 返回 true(应拒绝 429);配置 `enabled=false` 时不限流 |
+东八区时间（`cnShift` / `cnTodayStr` / `cnDayIso` / `cnNowISO`）、`LEVEL_RANK` / `LEVEL_ORDER` / `sanitizeLevel` / `levelFilter`（支持逗号多级别与 `*`）、`genApiKey` / `genRedeemCode` / `hashKeyPass`。
 
-配置项来自 `settings` 表 `api_rate_limit` 的 JSON:`{enabled, limit_per_min}`。
+## util.js
 
-## src/backup.js — D1 备份
+`json`、`cors`、`fmtSize`、`genHash`、isolate 内存 `cacheGet/cacheSet`。
+
+## ratelimit.js
 
 | 导出 | 说明 |
 |---|---|
-| `dumpAllTables(env)` | 导出全部用户表为 JSON(跳过 `sqlite_%`/`_cf_%` 内部表) |
-| `handleAdminBackup(env)` | 立即导出返回给调用方 |
-| `handleAdminBackupSave(env)` | 导出并写入 R2 `backups/db-*.json`,自动保留最近 20 份 |
-| `handleAdminBackupList(env)` | 备份列表 |
-| `handleAdminBackupDelete(request, env)` | 删除指定备份(严格校验 `backups/db-` 前缀与路径穿越) |
+| `applyRateLimit` | 按 api_key 分钟窗口 |
+| `applyIPRateLimit` | 公开端点按 IP（`CF-Connecting-IP`） |
+| `applyAdminRateLimit` | 管理 API |
+| `applyUserRateLimit` | 用户门户 |
+| `hasScope` / `hasLevel` | 权限 |
 
-对应后台「运维」tab 的备份功能与 `/admin/api/backup*` 端点。
+配置来自 `settings.api_rate_limit` JSON，isolate 缓存 30s。管理员/用户限流默认开启。
+
+## notify.js
+
+`notifyAdmin`（5 分钟节流）、`genThumb`（Image Resizing → `thumbs/`）、告警配置 handler。
+
+## backup.js
+
+`dumpAllTables` 跳过 `sqlite_%` / `_cf_%`。R2 `backups/db-*.json` 保留 20 份。删除校验 `backups/db-` 前缀。
+
+## telegram.js
+
+Bot API 基址、流式/大文件下载、`putR2` / `putR2Stream`、`fileTok` 签名、快捷键盘、`/bot/*` 代理。
+
+## api.js
+
+`handleTgFileRedirect`：签名校验、R2 302、Telegram 代理、Range→206、懒转存 `scheduleLazyTransfer`（含 ranged 请求）。`handleFiles` / `handleStats` 等旧式列表。代理模式开关。
+
+## webhook.js
+
+`handleWebhook`、`ensureWebhook`、`handlePollUpdates`、`processFileAsync`、`processShareLinkAsync`、webhook 投递日志。
+
+## commands.js
+
+内置命令、数字菜单、AI 调用、用量 GraphQL、`syncBuiltinCommands`。
+
+## public.js
+
+公开 v1 API、密钥/兑换码/用户注册、共享库 CRUD、文件夹、网页抓取（`grabViaRelay`）、用户上传。体积最大的业务文件。
+
+## admin.js
+
+未转存、去重、WebP 压缩 Cron、日报、存储维护、命令 CRUD。
+
+## events.js
+
+事件回调 `fireWebhook`、回收站、R2 检视/清理、多 Bot、`handleSetFilePoolStatus`。
+
+## pages.js
+
+从 R2 读 `admin.html` / `user.html` 等。`/admin` 不再把 API Key 嵌进 HTML。
+
+## batch.js
+
+`allocTgRef`（5 分钟新批次）、`scheduleBatchRef`、`refreshGroupReceipt`、`#开始`/`#结束` 手动批次、`handleDeletedMsg`。
+
+## parser.js
+
+cobalt：Instagram / X / YouTube / TikTok。配置在 `/admin/api/settings/cobalt`。
+
+## mysql.js / dbaccess.js / migrate.js
+
+Hyperdrive 绑定 `telequnphoto`，`mysql2/promise` + `disableEval: true`。D1 为主，auto 模式命中限额/故障特征后 30s 降级窗口。`GET /admin/api/migrate` 幂等 `INSERT IGNORE`。
+
+## app_stats.js
+
+`app_installs` UPSERT、心跳、后台统计、`/api/app/update` 读 R2 `latest.json`。必须用 `env.D1_DB`，不要写 `env.DB`。
